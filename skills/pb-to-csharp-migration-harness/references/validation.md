@@ -1,11 +1,11 @@
-# 분석과 이관 결과 검증
+# Validating analysis and migration results
 
-상세 계획 요청에는 화면·이벤트·DW·DB·필드·입출력·저장 순서·불명확점·구현 순서를 연결해 다른 구현자가 작업할 수 있게 한다. 단순 쿼리 추출에는 이 문서를 강제하지 않는다.
+For detailed-plan requests, connect screens, events, DWs, DBs, fields, inputs/outputs, save order, ambiguities, and implementation order so another implementer can proceed. Do not require this document for simple query extraction.
 
-실제 원본과 대상에서 조회·수정 보호·신규/수정/삭제·XML·SP·재조회/복원·보고서까지 요청 범위의 흐름을 비교한다. 누락된 이벤트, 필드, 간접 호출은 미확인으로 기록한다. 사용자 예시의 반대 해석을 fixture로 고정하지 않는다.
+Compare the requested flow in actual source and target: query, edit protection, new/edit/delete, XML, SP, requery/restoration, and reports. Record missing events, fields, and indirect calls as unverified. Do not encode an interpretation opposite to the user's example as a fixture expectation.
 
-정적 PB 입력 분석은 `python <plugin-root>/scripts/kh_check.py pb <absolute-export>`로 시작할 수 있다. 이 출력은 전체 PBL이나 실행 결과를 대신하지 않는다. 값·행 수·쿼리 수·성능 동등성을 주장하려면 실제 비교 조건과 결과가 필요하다.
+You may start static PB input analysis with `python <plugin-root>/scripts/kh_check.py pb <absolute-export>`. Its output does not replace a complete PBL or execution results. Claims of equivalent values, row counts, query counts, or performance require actual comparison conditions and results.
 
-`src.pb.equivalence.compare_observations`에는 JSON 객체 두 개를 제공한다. `parameters`는 문자열 키 객체, `database`는 비어 있지 않은 문자열, `schema`는 순서 있는 JSON 배열, `ordered`는 실제 boolean, `rows`는 행 값의 JSON 배열이다. 중첩 값의 타입도 비교하며 `true`와 `1`은 다르다. 키 순서는 무관하고, 행 중복은 보존하며 `ordered=true`이면 행 순서도 비교한다. 깊이 100 초과·비문자열 키·비유한 수·잘못된 필드 타입은 `incomplete`다.
+Supply two JSON objects to `src.pb.equivalence.compare_observations`. `parameters` is an object with string keys; `database` is a nonempty string; `schema` is an ordered JSON array; `ordered` is an actual boolean; `rows` is a JSON array of row values. Nested value types are compared too, and `true` differs from `1`. Key order is irrelevant; row duplicates are preserved, and row order is compared when `ordered=true`. Depth over 100, non-string keys, non-finite numbers, or incorrect field types produce `incomplete`.
 
-`elapsed_ms`는 0 이상 유한 숫자의 비어 있지 않은 배열이며 boolean은 표본이 아니다. 실제 실행 출처는 자동 인증하지 않는다. 선택적인 `query_count`, `logical_reads`는 0 이상 정수로 비교 보고한다. 유효한 시간이 없으면 성능은 미확인이고, 문맥/결과가 다르면 속도 비율이 좋아도 동등한 최적화로 평가하지 않는다.
+`elapsed_ms` is a nonempty array of finite nonnegative numbers; booleans are not samples. Actual execution provenance is not automatically authenticated. Optional `query_count` and `logical_reads` are compared/reported as nonnegative integers. Without valid timing, performance is unverified. If context/results differ, a favorable speed ratio does not establish an equivalent optimization.

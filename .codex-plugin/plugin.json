@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "3.0.8",
+  "version": "3.0.9",
   "description": "KH skills for Codex: scoped SQL, C#/Designer and PowerBuilder work, practical review and optional local checks.",
   "author": {
     "name": "KH UAF",

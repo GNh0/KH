@@ -1,0 +1,387 @@
+{
+  "baseline_commit": "8c267707cbe47bd06d36cd71ed7fb0e96181269b",
+  "baseline_version": "3.0.8",
+  "candidate_version": "3.0.9",
+  "encoding": "o200k_base",
+  "tiktoken_version": "0.14.0",
+  "method": "Sum full-file token counts over the same 32 Markdown paths; UTF-8 text, normalized LF, including frontmatter and code examples. Excludes unchanged files and release metadata/reports. This is a static document comparison, not an Astra billing or runtime-performance measurement.",
+  "file_count": 32,
+  "before_tokens": 23379,
+  "after_tokens": 17972,
+  "saved_tokens": 5407,
+  "reduction_percent": 23.13,
+  "groups": {
+    "artifact-checks": {
+      "files": 1,
+      "before_tokens": 214,
+      "after_tokens": 172,
+      "saved_tokens": 42,
+      "reduction_percent": 19.63
+    },
+    "code-review": {
+      "files": 1,
+      "before_tokens": 261,
+      "after_tokens": 198,
+      "saved_tokens": 63,
+      "reduction_percent": 24.14
+    },
+    "context-handoff": {
+      "files": 1,
+      "before_tokens": 273,
+      "after_tokens": 215,
+      "saved_tokens": 58,
+      "reduction_percent": 21.25
+    },
+    "csharp-designer-style-harness": {
+      "files": 8,
+      "before_tokens": 14687,
+      "after_tokens": 11112,
+      "saved_tokens": 3575,
+      "reduction_percent": 24.34
+    },
+    "kh-maintenance": {
+      "files": 4,
+      "before_tokens": 847,
+      "after_tokens": 663,
+      "saved_tokens": 184,
+      "reduction_percent": 21.72
+    },
+    "pb-to-csharp-migration-harness": {
+      "files": 6,
+      "before_tokens": 2788,
+      "after_tokens": 2179,
+      "saved_tokens": 609,
+      "reduction_percent": 21.84
+    },
+    "sql-formatting": {
+      "files": 3,
+      "before_tokens": 2248,
+      "after_tokens": 1822,
+      "saved_tokens": 426,
+      "reduction_percent": 18.95
+    },
+    "systematic-debugging": {
+      "files": 1,
+      "before_tokens": 229,
+      "after_tokens": 191,
+      "saved_tokens": 38,
+      "reduction_percent": 16.59
+    },
+    "work-execution": {
+      "files": 5,
+      "before_tokens": 1107,
+      "after_tokens": 842,
+      "saved_tokens": 265,
+      "reduction_percent": 23.94
+    },
+    "work-planning": {
+      "files": 1,
+      "before_tokens": 284,
+      "after_tokens": 227,
+      "saved_tokens": 57,
+      "reduction_percent": 20.07
+    },
+    "development": {
+      "files": 1,
+      "before_tokens": 441,
+      "after_tokens": 351,
+      "saved_tokens": 90,
+      "reduction_percent": 20.41
+    }
+  },
+  "files": [
+    {
+      "path": "skills/artifact-checks/SKILL.md",
+      "before_tokens": 214,
+      "after_tokens": 172,
+      "saved_tokens": 42,
+      "reduction_percent": 19.63,
+      "before_sha256": "9a0dc53b43987aa2fb479525cfeabf76f4a720ba0afc6c83a19a5d55c49cebfd",
+      "after_sha256": "410f5db00c87ca774c34ff88054997d23fbd51902922055b5540e789b9631f05"
+    },
+    {
+      "path": "skills/code-review/SKILL.md",
+      "before_tokens": 261,
+      "after_tokens": 198,
+      "saved_tokens": 63,
+      "reduction_percent": 24.14,
+      "before_sha256": "b7e86c5f66c2c4c1a7c7743f8f30543fe94def87a54cceb18b45371368e9680e",
+      "after_sha256": "da963e5848866a0d13cd3f11bb4e25fd096667fff3729ef71f59e53f2e1b2b6d"
+    },
+    {
+      "path": "skills/context-handoff/SKILL.md",
+      "before_tokens": 273,
+      "after_tokens": 215,
+      "saved_tokens": 58,
+      "reduction_percent": 21.25,
+      "before_sha256": "582ea22bc2f661f098ae7d6a0d23b62173123fd69360a8aaeb0f22a57127a82d",
+      "after_sha256": "3f58407f63debf7867708f8c3e57dfc9b55e0541e7dab152487248d82d34be83"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/SKILL.md",
+      "before_tokens": 1426,
+      "after_tokens": 1086,
+      "saved_tokens": 340,
+      "reduction_percent": 23.84,
+      "before_sha256": "d5ecd66edb784cdc70809dacd4a7c9d83fedb1c0394dc8a20b00b221feb1e369",
+      "after_sha256": "df8c5ec7278ea3af89ca38577ddbd01be8d26c4b4df46ec97dd9d1142ac54f01"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/references/checks.md",
+      "before_tokens": 3219,
+      "after_tokens": 2371,
+      "saved_tokens": 848,
+      "reduction_percent": 26.34,
+      "before_sha256": "a2f91ae15737c9cc31d9b96d8ba3a7b34d6588ad670b7f3f665497cccd89fe85",
+      "after_sha256": "3c84094eb2b57c61948fdf6ff96419374eb06e8690218787ff238e68fb6a9ea6"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/references/coding-style.md",
+      "before_tokens": 2407,
+      "after_tokens": 1872,
+      "saved_tokens": 535,
+      "reduction_percent": 22.23,
+      "before_sha256": "59965e390ba86f73bcfc552c553f532ecb154733454ce3d1d68e236d3ef08fa7",
+      "after_sha256": "699d8d556fb476482ca0e755e1ebd04bb1d86d8e7ef4b11bcc2a835c1555c136"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/references/data-flow.md",
+      "before_tokens": 1558,
+      "after_tokens": 1206,
+      "saved_tokens": 352,
+      "reduction_percent": 22.59,
+      "before_sha256": "919e60f576094b8c4e1cfee10bfa0d661710b63355e479a8501891c48a87613a",
+      "after_sha256": "e4dd83c0c5e8e246dfd50feb341670ffda7783512d1def22de0b97e5ac7fff01"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/references/designer.md",
+      "before_tokens": 989,
+      "after_tokens": 724,
+      "saved_tokens": 265,
+      "reduction_percent": 26.79,
+      "before_sha256": "2d559d5b889613da95269fea2a418875bc025ccea324aeabe30ed1ece151e8be",
+      "after_sha256": "74e43ec874fdd07e3152fd306cd97b376121fa2fcdb2361e5bd3776cbc682bc5"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/references/grid-layout.md",
+      "before_tokens": 1410,
+      "after_tokens": 1125,
+      "saved_tokens": 285,
+      "reduction_percent": 20.21,
+      "before_sha256": "320fb9c2ed68c6b60666518c0b09820da1fd2432a800454f9c832eae82be6f85",
+      "after_sha256": "f8675b1f4f48a88b634dbd76002423c839b0c4be2658a7bdb76cad92dcf9a91b"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/references/screen-behavior.md",
+      "before_tokens": 1891,
+      "after_tokens": 1397,
+      "saved_tokens": 494,
+      "reduction_percent": 26.12,
+      "before_sha256": "a1d96e6dd5169f2f839973a2c39e014935483b1f8f99d525dbd376e67b68d0d4",
+      "after_sha256": "0523fa5f3be9daf57ff5b77a7e2d8b78ad2b83497787d53f10e616cd72b6cc83"
+    },
+    {
+      "path": "skills/csharp-designer-style-harness/references/user-controls.md",
+      "before_tokens": 1787,
+      "after_tokens": 1331,
+      "saved_tokens": 456,
+      "reduction_percent": 25.52,
+      "before_sha256": "db5295612278b8b76c3dbcf35b484dba0fb4ddfc2d057e6fa2f90155a9ffe9bc",
+      "after_sha256": "92e1bb16b880806b6eb3f0ef5192b6c2b28e4b532abb6e39f079bf3e01d57a88"
+    },
+    {
+      "path": "skills/kh-maintenance/SKILL.md",
+      "before_tokens": 305,
+      "after_tokens": 259,
+      "saved_tokens": 46,
+      "reduction_percent": 15.08,
+      "before_sha256": "10373d16d311f4c33eeec363d5e3f6a9678c18d91bca393a9349a424f0f7fcd2",
+      "after_sha256": "39c6c245a225f5dd6e3607056a76d26e7fa99a41715dd4cefce68d82e3ead587"
+    },
+    {
+      "path": "skills/kh-maintenance/references/pb-profile-maintenance.md",
+      "before_tokens": 164,
+      "after_tokens": 119,
+      "saved_tokens": 45,
+      "reduction_percent": 27.44,
+      "before_sha256": "eddc41b4eaea1473524d24a13f3e0dc5d855118a2cbe8d4d5b5f49d40c1620f3",
+      "after_sha256": "eed3f0a014a4c41f33cd1840bf5834190ee505cf25ceaf12685a7a9f9d6ead33"
+    },
+    {
+      "path": "skills/kh-maintenance/references/scenario-evaluation.md",
+      "before_tokens": 148,
+      "after_tokens": 112,
+      "saved_tokens": 36,
+      "reduction_percent": 24.32,
+      "before_sha256": "e07070f246ef9760bfa4c93c43d7d8bfa7b3725311867934030282cad18e3a66",
+      "after_sha256": "6d6f2103464cd13a38504dc98a27aba1f8b9f07262a1db4ad4543632bbe60d3e"
+    },
+    {
+      "path": "skills/kh-maintenance/references/session-audit.md",
+      "before_tokens": 230,
+      "after_tokens": 173,
+      "saved_tokens": 57,
+      "reduction_percent": 24.78,
+      "before_sha256": "b6af8d9c67586eff24092714f493ec3a3a0549ef87ef74d9ca50c09d4ba34b66",
+      "after_sha256": "20198a3c8d913ad9bc72ad0624960e1dc82cf634c264101462639e534ff4a327"
+    },
+    {
+      "path": "skills/pb-to-csharp-migration-harness/SKILL.md",
+      "before_tokens": 551,
+      "after_tokens": 434,
+      "saved_tokens": 117,
+      "reduction_percent": 21.23,
+      "before_sha256": "135140e7589dc061c447090e65f154a6b7a8f0b6f03c3771b4f934ef17716f24",
+      "after_sha256": "05ebfc2218c74411660a7e97a21f6bbab6a745736a9cca66382497b13ed2dd9b"
+    },
+    {
+      "path": "skills/pb-to-csharp-migration-harness/references/datawindow.md",
+      "before_tokens": 731,
+      "after_tokens": 577,
+      "saved_tokens": 154,
+      "reduction_percent": 21.07,
+      "before_sha256": "f0a70f533ba304fd851b5bee55631215a34e663c401c8579f80363a30b1c8dfe",
+      "after_sha256": "d69e24af511a3003699a4a1ab451ba15f707230e6d54732bd5bb894df178ea32"
+    },
+    {
+      "path": "skills/pb-to-csharp-migration-harness/references/default-profile.md",
+      "before_tokens": 190,
+      "after_tokens": 146,
+      "saved_tokens": 44,
+      "reduction_percent": 23.16,
+      "before_sha256": "9907e57c4e8d1786d3a6713ec3e16699844b76239626ce40f27e66d27b623405",
+      "after_sha256": "d160b7f6085f4f47c0a0c6f1ac90d78d837c99ff30d17f28f9b6c9626b7dbfe5"
+    },
+    {
+      "path": "skills/pb-to-csharp-migration-harness/references/orca.md",
+      "before_tokens": 440,
+      "after_tokens": 334,
+      "saved_tokens": 106,
+      "reduction_percent": 24.09,
+      "before_sha256": "3b76199b81a354b634e7ec09b83550489395c5b0206c47e68e036eddbf41ba0f",
+      "after_sha256": "9aeedd237a8d56767c16e1408dd859200ef90da27141fd838956b5241ea4c808"
+    },
+    {
+      "path": "skills/pb-to-csharp-migration-harness/references/sql.md",
+      "before_tokens": 414,
+      "after_tokens": 319,
+      "saved_tokens": 95,
+      "reduction_percent": 22.95,
+      "before_sha256": "8592b924106ab00ba20e5739490c5eeb3cad487b16702b3da8c33bbbaa084625",
+      "after_sha256": "a16f7e22b17efe5078f1e050340f3bb71fcfe8de2e27bd27dd68abae08a90130"
+    },
+    {
+      "path": "skills/pb-to-csharp-migration-harness/references/validation.md",
+      "before_tokens": 462,
+      "after_tokens": 369,
+      "saved_tokens": 93,
+      "reduction_percent": 20.13,
+      "before_sha256": "230b6b9031e729630b3f6f6b31dbdbafde88ec7d12ef5ed2c4913534331781c8",
+      "after_sha256": "b7a6f9823a0696704dcb957fa6132d7d0331a58a3e576304bd8ec78824096d14"
+    },
+    {
+      "path": "skills/sql-formatting/SKILL.md",
+      "before_tokens": 409,
+      "after_tokens": 344,
+      "saved_tokens": 65,
+      "reduction_percent": 15.89,
+      "before_sha256": "c7aca8254ee5e0a771a519941d112f7c34c7331a1a871f69fa5b415f41208cf8",
+      "after_sha256": "3b12eeef80d7acd02c52b94448b19a1a8181428970fa0f786b73308674d0fe91"
+    },
+    {
+      "path": "skills/sql-formatting/references/checks.md",
+      "before_tokens": 444,
+      "after_tokens": 331,
+      "saved_tokens": 113,
+      "reduction_percent": 25.45,
+      "before_sha256": "3fdfa81fedc44664f53777a130d16cb00871a766a8bd85e2f7e05771f0b6ddea",
+      "after_sha256": "d392ae4f3d075811f4d0579cbb79f99c127f55370a14c5a563ef0130deed1b80"
+    },
+    {
+      "path": "skills/sql-formatting/references/style.md",
+      "before_tokens": 1395,
+      "after_tokens": 1147,
+      "saved_tokens": 248,
+      "reduction_percent": 17.78,
+      "before_sha256": "081d0fa5bff8ad0b738a6d204063ffb7d0ca7ce930d48517fb129719785f1d71",
+      "after_sha256": "cde1e70a4a8e66921c23635864cf1e5df00306a6b555d66bb7c35cc2b8b8fa43"
+    },
+    {
+      "path": "skills/systematic-debugging/SKILL.md",
+      "before_tokens": 229,
+      "after_tokens": 191,
+      "saved_tokens": 38,
+      "reduction_percent": 16.59,
+      "before_sha256": "58aa512b351f03945cb3daea7b7822997bed2ca805aba799831c27e0cf8dd717",
+      "after_sha256": "bc35ce3f5b772cd81ae4006b013e79b3af810fe684c31e34a346c09149a3bf42"
+    },
+    {
+      "path": "skills/work-execution/SKILL.md",
+      "before_tokens": 462,
+      "after_tokens": 366,
+      "saved_tokens": 96,
+      "reduction_percent": 20.78,
+      "before_sha256": "90b38f4e5ad917e6be87e058f6b41aa0cbd9a365cf1ca41acfb8328120299d00",
+      "after_sha256": "d8cedb2c795122d2ba5bb4a85e1b80b7ec51a0375b4d3aa46ec29d3dbee2819d"
+    },
+    {
+      "path": "skills/work-execution/references/delegation.md",
+      "before_tokens": 142,
+      "after_tokens": 105,
+      "saved_tokens": 37,
+      "reduction_percent": 26.06,
+      "before_sha256": "f72c6af05641635badc35b73f8dc1ef4e5841326b65e31666e67397e2f250743",
+      "after_sha256": "5e17ed19bbb98c2d233c0ff851598d11a522926029b735e6c49ed49def62facd"
+    },
+    {
+      "path": "skills/work-execution/references/preferences.md",
+      "before_tokens": 229,
+      "after_tokens": 167,
+      "saved_tokens": 62,
+      "reduction_percent": 27.07,
+      "before_sha256": "062e9e5f584b59576999a628d953a752189a3d367076932f0b8bc4fe87ae54f3",
+      "after_sha256": "ade2b47500292ce9fa1b0102d3661144bb9b99ec3ee27e0675eacc1e289d3caf"
+    },
+    {
+      "path": "skills/work-execution/references/secret-handling.md",
+      "before_tokens": 143,
+      "after_tokens": 103,
+      "saved_tokens": 40,
+      "reduction_percent": 27.97,
+      "before_sha256": "18d10f372f165efa9d81b7dc4fc47c4a2bafb3f9f7efe7a4315ffb72d16525ff",
+      "after_sha256": "32b09a3c1ef1d4e2ffc55fbaa032bf898f89eb0b40b73b45714302c4f1954b12"
+    },
+    {
+      "path": "skills/work-execution/references/windows-commands.md",
+      "before_tokens": 131,
+      "after_tokens": 101,
+      "saved_tokens": 30,
+      "reduction_percent": 22.9,
+      "before_sha256": "fcb75ac122c00746f1d96b38894f81224123a7c2472f4cf24f3e9373dc48f76e",
+      "after_sha256": "ad9e61d278b6f56a04a86a9b33603fff7160549a0311b0664d04c67444073ef0"
+    },
+    {
+      "path": "skills/work-planning/SKILL.md",
+      "before_tokens": 284,
+      "after_tokens": 227,
+      "saved_tokens": 57,
+      "reduction_percent": 20.07,
+      "before_sha256": "e01339df2c284146c2e90a0692024d83623a1da36da786d5ad0f5f647dcf3b29",
+      "after_sha256": "a830d09934a52b25c4e56f710e84be5c194815b0f6b42ee82f48f1f849d4d7df"
+    },
+    {
+      "path": "docs/development.md",
+      "before_tokens": 441,
+      "after_tokens": 351,
+      "saved_tokens": 90,
+      "reduction_percent": 20.41,
+      "before_sha256": "0c1a1a16135771e2d9462c7f3f7222b2af0194b1299fe99827868768a19bee38",
+      "after_sha256": "37ce896cd470013e33d0687183e6ab52134a65f7ecc2f4426ebe41410e54fce8"
+    }
+  ],
+  "preservation_checks": {
+    "frontmatter_files": 10,
+    "fenced_blocks": 11,
+    "issues": []
+  }
+}

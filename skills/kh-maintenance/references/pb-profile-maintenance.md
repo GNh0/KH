@@ -1,5 +1,5 @@
-# 범위별 스타일 프로필 유지보수
+# Maintaining scoped style profiles
 
-프로필 갱신을 요청했을 때 승인된 작성자/프로젝트의 실제 C#·Designer·SP 예시를 읽어 규칙·적용 범위·근거 파일을 기록한다. 표본 이름이나 작성자 문자열만으로 승인되지 않은 소스를 선택하지 않는다.
+When a profile update is requested, read actual C#/Designer/SP examples from approved authors/projects and record the rules, scope, and evidence files. Do not select unapproved source based solely on a sample name or author string.
 
-현재 동작/API·사용자 수정과 스타일 예시는 역할이 다르다. 업무 작업에서는 검증된 프로필과 지정 비교 화면을 사용하며 작성자 탐색을 반복하지 않는다. 한 사례의 키·폰트·컨트롤 크기·경로를 전역 상수로 만들지 않는다. 서명/HMAC나 특별한 영수증을 규칙 적용의 권위로 사용하지 않는다.
+Current behavior/APIs, user corrections, and style examples serve different roles. In ordinary work, use validated profiles and the specified comparison screen instead of repeating author discovery. Do not turn one example's keys, fonts, control sizes, or paths into global constants. Do not use signatures/HMACs or special receipts as authority for applying rules.

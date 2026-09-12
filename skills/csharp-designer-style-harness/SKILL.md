@@ -5,36 +5,36 @@ description: Generate, modify, or review WinForms/DevExpress/KoneLib C# and Desi
 
 # C# and Designer
 
-현재 파일, 사용자 수정, 지정한 비교 화면과 실제 프레임워크 호출 경로를 읽는다. 이 스킬의 WinForms 규칙을 MAUI/PDA나 다른 C# 프로젝트에 일괄 적용하지 않는다.
+Read the current files, user edits, specified comparison screen, and actual framework call paths. Do not apply this skill's WinForms rules wholesale to MAUI/PDA or other C# projects.
 
-이관·미완성 화면 작업에서는 먼저 수정 범위를 구분한다. 사용자가 원본 화면을 기반으로 일부 삭제·이름·바인딩 변경을 요청했다면 원본 C#/Designer/resx를 출발점으로 수정한다. 남기는 컨트롤의 기존 속성과 요청 밖 동작을 새로 설계하지 않는다. 현재 명시한 원본 유지 범위가 새 화면의 기본값 지침보다 우선한다. [원본 보존 이관](references/designer.md)을 따른다.
+For migrations and unfinished screens, first identify the modification scope. If the user requests selected deletions, renames, or binding changes based on an original screen, start from its C#/Designer/resx. Do not redesign retained controls' properties or behavior outside the request. The currently specified preservation scope overrides defaults for new screens. Follow [migration with source preservation](references/designer.md).
 
-이관 원본은 업무 동작, 대상 프로젝트는 필요한 API·이벤트·DB 호출 방식의 근거다. 이미 만든 화면·조회·이벤트 흐름에 빠진 기능을 연결한다. 작성 전에 해당 이벤트의 현재 상태와 실제 helper를 확인하고 [데이터와 이벤트 계약](references/data-flow.md)에 따라 새 검증·재조회·wrapper·행 키 대입의 필요성을 판단한다. 대상 스타일을 맞춘다는 이유로 전체 코드를 새로 작성하지 않는다.
+The migration source defines business behavior; the target project defines required APIs, events, and DB call patterns. Connect missing functionality to the existing screen, query, and event flow. Before writing, check the event's current state and actual helpers; use [data and event contracts](references/data-flow.md) to determine whether new validation, requerying, wrappers, or row-key assignments are necessary. Do not rewrite all code merely to match target style.
 
-컨트롤 작업에서는 현재 프로젝트에 사용 가능한 적절한 사용자 컨트롤을 우선 선택한다. KoneLib에 한정하지 않는다. [사용자 컨트롤 기준](references/user-controls.md)에 따라 생성자·초기화 helper·상속의 기본 속성을 읽고 유지하며, 화면의 요청 동작에 필요한 속성만 추가한다. 모델이 임의로 기본 속성을 보충하거나 덮어쓰지 않는다. 날짜 컨트롤 이름은 ymd와 실제 필드명을 따른다.
+For control work, prefer appropriate user controls available in the current project, not just KoneLib. Follow [user-control rules](references/user-controls.md): read and preserve constructor, initialization-helper, and inherited defaults; add only properties needed for the screen's requested behavior. Do not invent or overwrite defaults. Name date controls with ymd and the actual field name.
 
-- C# 코드 작성·수정은 [사용자 작성 방식](references/coding-style.md)을 읽는다. 이미 합의한 규칙과 다른 참조 소스는 놓친 부분일 수 있으므로 그 차이로 기존 규칙을 완화하지 않는다.
-- UI·Designer 작업은 [화면 스타일](references/designer.md)을 읽는다. 그리드 작업은 [HTML 기본 속성](references/grid-layout.md)도 읽는다.
-- 조회/저장/업로드/행 선택 작업은 [데이터와 이벤트 계약](references/data-flow.md)을 읽는다.
-- 모니터링·여러 UserControl·반복 조회·그리드 재바인딩은 [화면 동작 계약](references/screen-behavior.md)을 읽는다. 사용자 수정값을 다시 덮는 이벤트와 실제 조회 시점을 확인한다.
-- 프로젝트 스타일을 확인할 때 [범위별 기본 프로필](references/default-profile.json)을 사용한다. 작성자를 매 작업마다 다시 검색하지 않는다.
-- 자동 정적 비교가 필요하면 [검사기](references/checks.md)를 사용한다.
+- For writing/editing C#, read the [user's coding style](references/coding-style.md). Reference source that differs from agreed rules may contain an oversight; do not use the difference to relax those rules.
+- For UI/Designer work, read [screen style](references/designer.md). For grids, also read [HTML defaults](references/grid-layout.md).
+- For queries, saves, uploads, or row selection, read [data and event contracts](references/data-flow.md).
+- For monitoring, multiple UserControls, repeated queries, or grid rebinding, read [screen behavior contracts](references/screen-behavior.md). Check events that overwrite user edits and the actual query timing.
+- Use the [scoped default profile](references/default-profile.json) when checking project style. Do not repeat author discovery for every task.
+- Use the [checker](references/checks.md) when automated static comparison is needed.
 
-관련 참조와 소스는 필요한 부분을 읽는다. 여러 파일의 일괄 출력이 잘렸으면 생략된 필요한 부분을 다시 읽으며, 명령에 경로를 넣었다는 이유로 내용을 확인했다고 간주하지 않는다.
+Read only the needed parts of relevant references and source. If a batch output is truncated, retrieve the omitted parts that matter. Including a path in a command does not establish that its contents were inspected.
 
-정적 컨트롤과 배치는 Designer, 바인딩·업무 동작은 실제 code-behind 패턴을 따른다. 이벤트 구독은 기존 생성자의 이름 있는 핸들러 연결 방식을 따르고 중복 연결하지 않는다. 해당 프로젝트의 DevExpress 버전/API와 csproj 등록을 확인한다. 기존 helper를 활용하고 새 추상화·LINQ·중간 테이블·불필요한 빌드는 [필요성 기준](../work-execution/references/preferences.md)으로 판단한다.
+Keep static controls/layout in Designer and follow actual code-behind patterns for binding/business behavior. Follow the existing constructor's named-handler subscription pattern without duplicate subscriptions. Check the project's DevExpress version/APIs and csproj registration. Reuse existing helpers; assess new abstractions, LINQ, intermediate tables, and unnecessary builds against the [necessity criteria](../work-execution/references/preferences.md).
 
-그리드 기본값은 사용자가 제공한 DataWindowToXml.html의 Load Layout 속성을 따른다. 기본으로 셀 TextOptions, SpinEdit EditMask, DisplayFormat(FormatType 포함), OptionsBehavior를 덧붙이지 않는다. 편집 차단 컬럼은 AllowEdit=false와 ReadOnly=true, 동작을 남길 버튼 등의 컬럼은 ReadOnly=true만, 편집 가능 컬럼은 둘 다 생략한다. 기존 화면의 속성을 일괄 초기화하지 않고, 별도 동작에 필요한 변경만 현재 요구와 실제 소스로 판단한다.
+Use the Load Layout properties from the user's DataWindowToXml.html as grid defaults. Do not add cell TextOptions, SpinEdit EditMask, DisplayFormat (including FormatType), or OptionsBehavior by default. For blocked editing, set AllowEdit=false and ReadOnly=true; for button-like columns whose actions must remain available, set only ReadOnly=true; for editable columns, omit both. Do not reset existing screen properties wholesale. Determine changes needed for specific behavior from current requirements and actual source.
 
-숫자 형식이 필요한 합계·문자열 표시는 [사용자 지정 숫자 형식](references/coding-style.md)을 따른다. N0·N2보다 #,##0·#,##0.## 등을 우선한다. 합계 형식이나 Spin 연결 확인 요청을 셀·Repository DisplayFormat 추가 근거로 확장하지 않는다.
+For summaries or string output that need numeric formatting, follow [custom numeric formats](references/coding-style.md). Prefer #,##0, #,##0.##, and similar formats over N0/N2. Do not expand a summary-format or Spin-connection check into permission to add cell/Repository DisplayFormat.
 
-기본값은 사용자 컨트롤 생성자뿐 아니라 실제 호출되는 공통 폼 초기화·helper까지 추적한다. 그 경로가 없는 대상에 같은 표시를 적용하라는 현재 명시적 요청이 있으면, 확인한 형식과 소수 정밀도를 그대로 적용할 수 있다. 이전 미사용 지시만으로 이후의 구체적인 요청을 차단하지 않는다.
+Trace defaults through actual shared-form initialization/helpers as well as user-control constructors. If the current user explicitly requests the same display on a target without that initialization path, you may apply the verified format and decimal precision exactly. An older instruction to avoid a setting must not block a later specific request.
 
-검사 경고를 없애기 위해 변경 속성을 임의로 --allow-property-change에 넣지 않는다. 예외로 제외한 검사는 통과 근거가 아니며 실제 요구·필요성은 별도로 확인한다.
+Do not arbitrarily add changed properties to --allow-property-change to suppress warnings. Excluded checks are not passing evidence; verify the actual requirement and necessity separately.
 
-전체 화면 요청은 전체 생명주기를 확인하고 국소 수정은 그 범위로 제한한다. 최종 확인은 실제 요구 동작으로 하며 빌드 결과로 UI나 저장 동작을 보증하지 않는다.
+Check the full lifecycle for a full-screen request; keep a local edit scoped. Validate the actual requested behavior at completion. Build results do not guarantee UI or save behavior.
 
-검사의 `status=passed`는 실행한 정적 검사에 오류가 없다는 뜻이다. `comparison_baselines`, `review_status`, `issues`, `not_checked`를 함께 읽는다. 원본 보존을 확인할 때는 변경 전 원본을 제공하고, 남긴 Designer 속성을 이름 대응까지 포함해 비교한다. 원본을 생략하거나 수정본을 원본으로 다시 넣은 검사는 보존 증거가 아니다. 스킬 읽기·검사 통과만으로 프로젝트 스타일 준수를 보고하지 않는다.
-# 제공 조각의 한계
+The checker's `status=passed` means the executed static checks found no errors. Also read `comparison_baselines`, `review_status`, `issues`, and `not_checked`. To verify source preservation, supply the pre-change original and compare retained Designer properties, including rename mappings. Omitting the original or resubmitting the edited version as the original does not establish preservation. Reading the skill or passing the checker alone does not establish project-style compliance.
+# Limits of supplied snippets
 
-프로젝트 없이 코드 조각·fixture만 주어졌다면 그 범위에서 가능한 수정을 진행한다. DevExpress 버전·csproj·상속 구현은 미확인으로 남기고, 그 정보가 없는 것만으로 명확한 국소 수정을 차단하거나 다른 프로젝트를 대신 읽지 않는다. API 차이가 실제 해결을 좌우할 때 필요한 정보만 확인한다.
+If only snippets/fixtures are supplied without a project, perform the edits possible within that scope. Mark the DevExpress version, csproj, and inherited implementations as unverified. Their absence alone must not block a clear local edit or trigger reading a substitute project. Seek only the missing information needed when an API difference actually determines the solution.

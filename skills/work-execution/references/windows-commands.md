@@ -1,5 +1,5 @@
-# Windows 실행
+# Windows execution
 
-실제 PowerShell/프로세스 환경과 정확한 절대 경로를 사용한다. 파일 이동/삭제는 한 셸의 native 명령으로 수행하고 대상이 작업 범위 안인지 확인한다. 다른 셸에 계산한 경로를 넘겨 삭제하지 않는다.
+Use the actual PowerShell/process environment and exact absolute paths. Move/delete files with native commands in one shell, verifying that targets are within the task's scope. Do not pass computed paths to another shell for deletion.
 
-사용자 화면이 필요 없는 백그라운드 helper는 숨김 창으로 시작한다. 종료 코드와 stderr를 유지하고 실제 산출물을 확인한다. 자식 PATH·bitness·의존 DLL이 현재 셸과 다를 수 있다. 변화 없는 폴링이나 전체 로그 출력은 줄인다.
+Start background helpers in hidden windows when the user does not need to see them. Preserve exit codes and stderr, and inspect actual outputs. Child-process PATH, bitness, and dependent DLLs may differ from the current shell. Minimize unchanged polling and full-log output.
