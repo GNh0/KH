@@ -1,29 +1,29 @@
 # WinForms / Designer
 
-## 원본 보존 이관
+## Migration with source preservation
 
-원본을 가져와 이름·컨트롤 삭제·일부 화면만 수정하는 요청에서는 기존 Designer와 resx를 복사한 뒤 필요한 부분을 고친다. 스크린샷은 삭제·변경 범위를 확인하는 근거이며, 보이는 컨트롤을 새 Designer로 재작성할 근거가 아니다. 남기는 컨트롤의 Font·Size·AutoHeight·정렬·버튼·마스크·표시 속성 등을 새 기본값으로 치환하지 않는다. 현재 사용자가 보존을 명시한 기존 속성은 이전의 일반적인 미사용 선호와 달라도 유지한다.
+When importing an original screen for renames, control deletion, or partial edits, copy its existing Designer and resx, then change only what is needed. Screenshots establish deletion/change scope; they do not justify recreating visible controls in a new Designer. Do not replace retained controls' Font, Size, AutoHeight, alignment, buttons, masks, display properties, or other settings with new defaults. Preserve existing properties the current user explicitly requests, even when they differ from an older general preference to avoid them.
 
-새로 추가하는 컨트롤에는 아래의 사용자 컨트롤·기본값 기준을 적용한다. 대상 API 차이로 기존 컨트롤 교체가 필요하면 그 차이에 필요한 수정만 한다. 이름 변경은 선언·Name·참조·이벤트·resx 키를 함께 맞추며, 삭제는 해당 필드·초기화·등록·이벤트·자원 참조까지 확인한다. 남긴 속성과 동작의 보존 여부는 실제 원본 diff로 확인한다.
+Apply the user-control/default rules below to newly added controls. If target API differences require replacing an existing control, limit edits to those differences. For renames, align declarations, Name, references, events, and resx keys. For deletion, check fields, initialization, registration, events, and resource references. Verify preservation of retained properties and behavior against the actual original diff.
 
-원본 C#/Designer/resx 사본은 수정 전에 보존한다. 이름 변경은 비교 시 명시적인 대응으로 처리하며, 통과시키려고 원본의 속성·조건을 수정본과 같게 고치지 않는다. [검사기](checks.md)의 `--preserve-existing`과 `--member-rename`으로 남긴 Designer의 명시적 대입을 대조할 수 있다. 삭제·새 컨트롤·간접 초기화와 자원 본문은 실제 요청 및 diff로 따로 확인한다.
+Preserve copies of the original C#/Designer/resx before editing. Use explicit rename mappings for comparison; do not alter the original's properties or conditions to match the candidate just to pass. The [checker](checks.md) can compare explicit assignments in retained Designer members with `--preserve-existing` and `--member-rename`. Separately check deletions, new controls, indirect initialization, and resource contents against the actual request and diff.
 
-## 새 컨트롤과 일반 구조 검토
+## New controls and general structural review
 
-새 컨트롤은 [사용자 컨트롤 선택·기본 초기화](user-controls.md)를 적용한다. 현재 프로젝트의 적절한 사용자 컨트롤을 우선 사용하고, 별도 요구가 없는 속성은 그 생성자·초기화·상속 기본값을 유지한다. 이 기준은 모든 사용자 컨트롤에 적용한다.
+For new controls, follow [user-control selection and initialization](user-controls.md). Prefer appropriate user controls from the current project and retain their constructor, initialization, and inherited defaults unless a property has a specific requirement. This applies to all user controls.
 
-정적 필드·컨트롤·컬럼·Repository 생성과 배치·속성은 Designer에 둔다. Visual Studio Designer가 읽지 못하는 helper 생성 구문은 호환성 문제다. 업무·동적 바인딩은 현재 프레임워크의 code-behind에 둔다.
+Keep static fields and control/column/Repository creation, layout, and properties in Designer. Helper-based construction that Visual Studio Designer cannot read is a compatibility defect. Keep business logic and dynamic binding in the current framework's code-behind.
 
-이벤트 구독까지 모두 Designer에 옮기는 규칙은 아니다. 기존 화면은 생성자의 InitializeComponent 다음에 이름 있는 핸들러를 연결하는 [작성 방식](coding-style.md)을 따르며, 이미 연결된 이벤트는 중복 구독하지 않는다.
+This does not move all event subscriptions into Designer. Follow the existing screen's [coding style](coding-style.md): connect named handlers after InitializeComponent in the constructor, without duplicating existing subscriptions.
 
-현재 UserControl 기본 폭·높이·AutoHeight·버튼·정렬을 읽고 덮어쓰지 않는다. 모든 컨트롤에 100x25나 특정 font를 고정하지 않는다. 사용자가 바꾼 font·Visible 값을 보존한다. TabIndex는 지정한 입력 순서와 컨테이너 순서까지 맞춘다.
+Read and retain current UserControl defaults for width, height, AutoHeight, buttons, and alignment. Do not hardcode 100x25 or a particular font for all controls. Preserve user-edited font and Visible values. Align TabIndex with the specified input order, including container order.
 
-그리드의 기본 속성·Appearance·편집 구분은 [DataWindowToXml 기준](grid-layout.md)을 따른다. 헤더 가운데 정렬을 셀 정렬로 확대하지 않는다. 숫자는 실제 Spin Repository, 코드/표시는 lookup 바인딩, 버튼은 실제 기능을 연결한다. Spin Repository를 쓰라는 요구만으로 EditMask를 붙이지 않는다. DisplayFormat은 FormatString과 FormatType 모두 기본으로 지정하지 않는다. 보고서의 허용된 표현 서식까지 금지하지 않는다.
+Follow [DataWindowToXml rules](grid-layout.md) for grid defaults, Appearance, and editing modes. Do not extend centered headers to cell alignment. Connect numbers to the actual Spin Repository, codes/display values to lookup binding, and buttons to real actions. A request for a Spin Repository alone does not justify EditMask. Do not set either DisplayFormat.FormatString or DisplayFormat.FormatType by default. Do not extend these restrictions to permitted report expression formats.
 
-기본 건수·합계·group footer/merge/EvenRow와 지정된 표시 위치를 확인한다. colList_/colDetail_/colTABLE_FIELD 등 현재 프로젝트 명명을 사용한다. 이름만 맞고 바인딩이 없는 상태는 완료가 아니다.
+Check default counts, summaries, group footer/merge/EvenRow, and requested display locations. Use current project naming such as colList_, colDetail_, or colTABLE_FIELD. Correct names without bindings are incomplete.
 
-실제 DevExpress 참조 버전과 API, csproj/.resx 등록을 확인한다. MAUI/PDA에는 이 UI 계약을 일괄 적용하지 않는다.
+Check the actual referenced DevExpress version/APIs and csproj/.resx registration. Do not apply this UI contract wholesale to MAUI/PDA.
 
-Designer의 Dispose에는 업무 관리자·DB·Task 정리 코드를 덧붙이지 않는다. 필요한 정리는 현재 code-behind의 실제 종료/취소 수명에 연결하고 상속·partial Dispose 구현을 중복하지 않는다. Designer가 다시 열렸다는 사실과 실제 종료 중 Task 정리 검증은 별개다.
+Do not add business-manager, DB, or Task cleanup to Designer Dispose. Attach required cleanup to the actual shutdown/cancellation lifecycle in current code-behind without duplicating inherited/partial Dispose implementations. Successfully reopening Designer does not verify Task cleanup during shutdown.
 
-컬럼 폭·숫자 편집기가 조회나 크기 변경 후 달라지는 경우에는 [화면 동작 계약](screen-behavior.md)의 런타임 덮어쓰기 경로까지 확인한다.
+If column widths or numeric editors change after a query or resize, also trace runtime overwrites using [screen behavior contracts](screen-behavior.md).

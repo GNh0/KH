@@ -1,7 +1,7 @@
-# 명시적으로 요청한 대화 감사
+# Explicitly requested conversation audits
 
-요청된 로컬 로그를 원문 위치/바이트 범위로 읽고 민감 값과 전체 사적 본문 복사를 최소화한다. 실제 주 작업 사용자 발화와 같은 event/response 중복, 자식에 복제된 문맥, 자동 Goal/heartbeat 알림, 인용 리뷰를 구분한다.
+Read the requested local logs by source location/byte range, minimizing exposure of sensitive values and copies of complete private text. Distinguish actual main-task user messages from duplicate event/response records, context copied into child tasks, automatic Goal/heartbeat notifications, and quoted reviews.
 
-정규식과 빈도는 후보 검색이다. 최신 사용자 정정·철회·프로젝트 범위와 응답/실제 도구 결과를 연결해 판단한다. 욕설이나 실패 주장만으로 실제 원인을 확정하지 않는다. 현재 코드 관찰과 과거 실행 증거는 분리한다.
+Use regexes and frequency counts to find candidates. Interpret them alongside the latest user corrections, withdrawals, project scope, responses, and actual tool results. Profanity or claims of failure alone do not establish the cause. Distinguish current code observations from historical execution evidence.
 
-`src.maintenance.session_report`는 명시한 JSONL 파일을 스트리밍해 원문 위치와 역할별 기록을 제공한다. 읽지 않은 이미지·생략/절단 본문·삭제/다른 호스트 로그·캡처 뒤 변경을 한계로 남긴다. 역할 산출물 파일을 실제 에이전트 실행으로 세지 않는다.
+`src.maintenance.session_report` streams the specified JSONL files and reports source locations and records by role. State limitations from unread images, omitted/truncated text, deleted logs, logs on other hosts, and changes after capture. Do not count role-output files as actual agent executions.

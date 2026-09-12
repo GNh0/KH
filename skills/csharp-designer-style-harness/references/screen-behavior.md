@@ -1,48 +1,48 @@
-# 화면 수정과 반복 조회의 동작 계약
+# Behavior contracts for screen edits and repeated queries
 
-여러 UserControl을 갖는 화면, 모니터링, 자동 조회, 그리드 재바인딩을 수정할 때 적용한다. 특정 프로젝트의 화면 이름·WORKTYPE·기간·갱신 초·표시 행 수를 모든 화면의 기본값으로 복사하지 않는다.
+Apply this when editing screens with multiple UserControls, monitoring, automatic queries, or grid rebinding. Do not copy one project's screen names, WORKTYPE, periods, refresh seconds, or displayed row counts into defaults for every screen.
 
-## 현재 요청과 소유 위치
+## Current request and ownership
 
-- 사용자가 문구만 빼라고 하면 날짜 입력이나 설정 저장까지 제거하지 않는다. 사용자가 직접 구성한 컬럼·폭·순서·Font·Visible은 새 기준이다. 이전 요청을 나중에 정정하거나 취소하면 마지막 지시를 적용한다.
-- 여러 화면 전체를 확인하라는 요청이면 해당 화면 목록을 실제 프로젝트에서 확인한다. 한 화면이나 처음 생성한 코드만 고친 후 전체 적용으로 보고하지 않는다. 이미 잘못된 현재 소스를 원본으로 놓고 변화가 없다는 검사만 통과시키지 않는다.
-- 각 UserControl이 조회를 소유하는 구조라면 DB 호출·DataTable/DataSet 바인딩은 해당 컨트롤에 둔다. 부모 폼은 실제 설정 전달·화면 전환을 맡는다. 단지 연결하기 쉽다는 이유로 업무 조회와 예시 데이터를 부모 폼에 모으지 않는다.
-- 프로시저명·WORKTYPE·매개변수·결과 테이블 순서는 실제 정의와 최신 사용자 지시로 정한다. 호출부만 준비하라고 하면 미구현 상태를 그대로 표시하고, 임의 프로시저명·Preview INI 분기·샘플 데이터로 실조회가 연결된 것처럼 만들지 않는다. 샘플 제거 요청은 생성·반환·호출 분기를 함께 확인한다.
+- If the user requests removing only wording, do not remove date inputs or settings persistence too. User-configured columns, widths, order, Font, and Visible become the baseline. Apply the latest instruction when an earlier request is corrected or canceled.
+- For a request to check all of several screens, identify their actual project list. Do not edit only one screen or the initially generated code and report full application. Do not use already incorrect current source as the original merely to pass an unchanged comparison.
+- If each UserControl owns its query, keep DB calls and DataTable/DataSet binding in that control. The parent form handles actual settings transfer and screen transitions. Do not centralize business queries or example data in the parent merely because wiring them there is convenient.
+- Determine procedure names, WORKTYPE, parameters, and result-table order from actual definitions and latest user instructions. If asked to prepare only callers, clearly retain the unimplemented status. Do not use invented procedure names, Preview INI branches, or sample data to imply a live query is connected. For sample removal, inspect generation, return, and call branches together.
 
-## Task 관리와 조회 시점
+## Task management and query timing
 
-사용자가 지정한 실제 Task 관리 클래스의 실행·반복·취소·중복 실행·UI 전환 API를 읽는다. 이미 처리하는 공통 기능을 각 폼/컨트롤의 TaskCompletionSource·취소 등록·반복 루프로 다시 구현하지 않는다. 필요한 UI 스레드 전환이나 종료 대기를 단순화한다는 이유로 제거하지 않는다. Task와 Timer 선택을 모든 프로젝트에 고정하지 않는다.
+Read the user-specified actual Task manager's APIs for execution, repetition, cancellation, duplicate execution, and UI dispatch. Do not reimplement shared functionality it already handles with per-form/control TaskCompletionSource, cancellation registrations, or repeat loops. Do not remove required UI-thread dispatch or shutdown waiting to simplify code. Do not impose one Task-versus-Timer choice on every project.
 
-자동 재조회, 화면 전환, 대표 목록 조회, 선택 키별 상세 조회는 각각 발생 조건을 확인한다. 현재 선택 페이지가 같다는 이유만으로 주기 재조회를 건너뛰지 않는다. 활성 화면이 하나여도 요구한 주기 갱신이 이루어져야 한다. 목록은 화면 진입 시, 상세는 대표 키 변경 시라는 요청이면 그 역할을 유지하며 주기 동작과 연결한다. 모든 컨트롤에 매번 전체 조회를 강제로 추가하는 방식으로 바꾸지 않는다.
+Check the separate triggers for automatic requerying, screen transitions, main-list queries, and selected-key detail queries. Do not skip periodic requerying merely because the selected page is unchanged. Required periodic refresh must occur even with only one active screen. If the request assigns list queries to screen entry and detail queries to main-key changes, preserve those roles while connecting periodic behavior. Do not replace this with forced full queries on every control each time.
 
-조회가 실행 중인 경우 중복 요청·늦은 이전 결과를 처리하고, 설정창·일시정지·종료 시 동작은 실제 요구와 수명에 맞춘다. 시계 갱신·화면 전환·DB 재조회가 한 이벤트라는 이유로 같은 완료 조건을 갖는다고 추정하지 않는다.
+During a running query, handle duplicate requests and late results from earlier requests. Match settings-dialog, pause, and shutdown behavior to actual requirements and lifetimes. Clock updates, screen transitions, and DB requerying do not share completion conditions merely because one event triggers them.
 
-## 그리드 연결과 다시 덮어쓰는 경로
+## Grid connections and overwrite paths
 
-숫자 컬럼은 실제 반환 타입과 업무 의미로 확인한다. ColumnEdit가 실제 Spin Repository를 가리키는지, 선언·생성·RepositoryItems 등록이 이어지는지 확인한다. 숫자 이름 또는 Repository 선언만으로 연결 완료로 판단하지 않는다. SQL에서 HH:mm 같은 문자열로 반환하는 시간 표시를 필드명만 보고 숫자 입력으로 바꾸지 않는다.
+Identify numeric columns from actual returned types and business meaning. Check that ColumnEdit references an actual Spin Repository and that declaration, construction, and RepositoryItems registration are connected. A numeric-looking name or Repository declaration alone does not establish a complete connection. Do not turn a time display returned by SQL as a string such as HH:mm into numeric input based only on its field name.
 
-“SpinEdit이 연결되지 않은 것 같다”는 지적에는 실제 선언·등록·ColumnEdit·재생성 경로를 확인한다. 소수점 뒤 0이 보인다는 사실만으로 연결 실패를 단정하지 않는다. 값의 타입·스케일과 실제 컨트롤 초기화를 확인하며, 연결 확인 요청을 DisplayFormat·EditMask 사용 요구로 바꾸지 않는다. 현재 사용자가 그 속성을 쓰지 않는다고 명시했다면 표시를 쉽게 고칠 수 있다는 이유로 예외 처리하지 않는다.
+For feedback such as “SpinEdit이 연결되지 않은 것 같다” (SpinEdit seems unconnected), inspect actual declarations, registration, ColumnEdit, and regeneration paths. Trailing decimal zeros alone do not establish a connection failure. Check value types/scales and actual control initialization; do not turn a connection-check request into a request for DisplayFormat/EditMask. If the current user explicitly excludes those properties, easier display correction does not justify an exception.
 
-비교 화면의 표시는 Designer만으로 설명하지 않는다. 공통 폼 → 컨트롤 초기화 helper → Repository 순회와 조건부 형식 대입을 추적하고, 대상에도 그 경로가 실행되는지 확인한다. 이후 사용자가 경로가 없는 대상에 동일 형식을 적용하라고 명시했다면 그 최신 요청을 따른다. 감사 기록도 요청 순서와 변경 시점을 구분하여, 승인 전 임의 추가와 승인 후 요청한 적용을 같은 위반으로 기록하지 않는다. 정확한 형식과 소수 정밀도는 [숫자 표시 형식](coding-style.md)을 따른다.
+Do not explain the comparison screen's display from Designer alone. Trace shared form → control-initialization helper → Repository iteration and conditional format assignments, and check whether the target executes that path. If the user later explicitly requests the same format on a target lacking the path, follow that latest request. In audits, distinguish request order and change timing: unrequested additions before authorization and requested application afterward are not the same violation. Follow [numeric display formats](coding-style.md) for exact formats and decimal precision.
 
-사용자가 수정한 열 폭·MaxWidth·AutoWidth·Font·컬럼 목록을 보존할 때 Designer와 최초 표시만 확인하지 않는다. Load·조회 후 바인딩·페이지 이동·SizeChanged·BestFitColumns·LayoutChanged·레이아웃 복원·동적 컬럼 재생성에서 같은 값을 다시 쓰는 경로를 찾는다. 폭 조정 하나를 해결하려고 불필요한 옵션을 추가하거나 다른 화면의 사용자 수정값을 초기화하지 않는다.
+To preserve user-edited column widths, MaxWidth, AutoWidth, Font, and column lists, inspect more than Designer and initial display. Find paths that rewrite these values during Load, post-query binding, page transitions, SizeChanged, BestFitColumns, LayoutChanged, layout restoration, and dynamic column regeneration. Do not add unnecessary options or reset user edits on other screens to resolve one width issue.
 
-마스크를 제거하면서 DisplayFormat·EditFormat 같은 다른 속성을 자동으로 대신 추가하지 않는다. 사용자가 표시 옵션을 지정하지 않는다고 한 범위와 실제 컨트롤·초기화 helper의 기본값을 대조한다. 필요한 표시 요구나 실제 적용되는 초기화 근거가 있는지 확인하고, 다른 프로젝트의 helper 예시만으로 현재 화면의 예외를 정하지 않는다.
+When removing a mask, do not automatically replace it with properties such as DisplayFormat/EditFormat. Compare the user's scope for omitting display options against actual control/initialization-helper defaults. Verify a required display behavior or an actual initialization path; another project's helper example alone does not justify an exception for this screen.
 
-실제 숫자 컬럼을 소스로 확인한 뒤 선택적으로 검사기에 --numeric-column colList_QTY처럼 전달할 수 있다. 원본과 동일해도 지정한 연결 계약은 검사한다. 사용자에게 새 프로필을 작성하라고 요구하는 절차가 아니다. 정적 검사 후에도 런타임 재생성·선택/페이지/크기 변경의 최종 연결은 확인해야 한다.
+After identifying actual numeric columns from source, optionally pass them to the checker with arguments such as --numeric-column colList_QTY. Explicit connection contracts are checked even when unchanged from the original. This does not require the user to create a new profile. After static checks, still verify final connections through runtime regeneration and selection/page/size changes.
 
-## 조회 결과의 계산과 표시
+## Query-result calculations and display
 
-지정한 비교 화면의 실제 프로시저와 현재 모드를 확인한다. 헤더·그리드·차트와 UNION 분기에 적용하는 기간·필터·JOIN 키·NULL 처리·단위가 같은 계약인지 대조한다. 조건 문자열의 개수만 세거나 비슷한 주석이 있다는 이유로 결과가 같다고 단정하지 않는다. 데이터가 다르다는 지적은 실제 날짜·원천 행·집계 키·중복·필터부터 추적한다.
+Check the specified comparison screen's actual procedures and current mode. Compare period, filter, JOIN-key, NULL-handling, and unit contracts across headers, grids, charts, and UNION branches. Condition-string counts or similar comments do not establish equal results. For reported data differences, first trace actual dates, source rows, aggregation keys, duplicates, and filters.
 
-전체 비율은 요구한 분자 합계와 분모 합계로 계산하고, 행별 비율의 단순 평균이나 합으로 대체하지 않는다. 실제 분모 0 처리·반올림·정수/소수·분/시간 단위를 확인한다. SQL이 이미 환산한 값을 화면에서 다시 환산하지 않는다. Footer, 마지막 합계 컬럼, 헤더의 표시 위치와 % 기호 여부는 사용자 요청대로 구분한다. DB가 반환하기로 한 표시 필드나 계산을 C#에 중복하지 않는다.
+Calculate an overall ratio from the required numerator total and denominator total, not the simple average or sum of row ratios. Check actual zero-denominator handling, rounding, integer/decimal types, and minute/hour units. Do not reconvert in the screen values already converted by SQL. Distinguish Footer, final total-column, and header locations and percent signs as requested. Do not duplicate in C# display fields or calculations the DB is contracted to return.
 
-## 예외와 최종 확인
+## Exceptions and final verification
 
---allow-property-change는 근거가 있는 정확한 속성의 기본 스타일 검사를 제외하는 입력이다. 사용자 허가나 필요성을 만들어 주지 않는다. 검사 경고를 없애려고 변경한 속성들을 자동으로 예외에 넣지 않는다. 편리한 해결책 하나를 시도했다는 이유로 비선호 예외를 충족했다고 판단하지 않는다. 현재 명시적 금지는 그대로 적용하고, 일반 비선호는 기존 필요성 기준을 따른다.
+--allow-property-change excludes default-style checks for exact, justified properties; it does not create user authorization or necessity. Do not automatically exempt changed properties to remove warnings. Trying one convenient solution does not satisfy the criteria for an exception to a disfavored approach. Current explicit prohibitions still apply; general preferences follow the existing necessity criteria.
 
-검사 결과에 표시되는 style_exemptions와 not_checked도 함께 읽는다. 경고를 제외한 통과를 해당 속성의 검증 완료로 보고하지 않는다. 매번 승인서·예외 JSON·체크포인트 파일을 요구하는 절차를 추가하지 않는다.
+Also read style_exemptions and not_checked in results. Passing with warnings excluded does not establish verification of those properties. Do not add a procedure requiring approval documents, exception JSON, or checkpoint files every time.
 
-완료 여부는 요청한 실제 시나리오로 확인한다. 같은 화면의 주기 조회, 대표 키 변경, 페이지 이동, 크기 변경, 빈 결과와 종료 중 필요한 경우를 선택한다. 빌드 통과는 표시·바인딩·조회 시점의 증거가 아니며, 확인하지 못한 실행 동작은 미확인으로 남긴다.
+Determine completion using actual requested scenarios, selecting relevant cases among periodic queries on the same screen, main-key changes, page transitions, resizing, empty results, and shutdown. A passing build does not establish display, binding, or query timing. Mark untested execution behavior as unverified.
 
-검증용 보조 프로세스에서 오류가 나면 업무 앱의 오류와 구분한다. 실제 예외·호출 방식·수명과 종료 상태를 확인하고, 해당 실행은 통과 근거에서 제외한다. 수정 후 확인한 시나리오와 여전히 실행하지 못한 항목을 구분한다. 보조 코드가 실패했다는 이유로 업무 소스에 추정 수정을 넣거나 실행 결과를 숨기지 않는다.
+Distinguish failures in validation-helper processes from business-app failures. Check actual exceptions, invocation, lifetime, and exit state; exclude that run from passing evidence. Distinguish scenarios verified after a fix from those still unexecuted. Do not make speculative business-source edits or hide execution results because helper code failed.

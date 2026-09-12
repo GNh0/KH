@@ -1,7 +1,7 @@
-# 선호와 필요한 예외
+# Preferences and necessary exceptions
 
-이 사용자의 기본 선택은 기존 프로젝트 방식이다. LINQ·중간 테이블·빌드는 기본적으로 피한다. 사용하지 않으면 구현이 어렵거나 다른 구현과의 성능 차이가 극단적으로 큰 경우에만 사용한다. 코드가 짧아짐·작성 편의·습관·막연한 성능 기대는 예외 이유가 아니다.
+This user defaults to the existing project's approach. Avoid LINQ, intermediate tables, and builds by default. Use them only when implementation would be difficult without them or the performance difference from an alternative would be extreme. Shorter code, authoring convenience, habit, and vague performance expectations do not justify an exception.
 
-대안과 실제 제약을 확인한 뒤 필요한 이유를 짧게 설명한다. 임의 성능 배수나 별도 승인 단계를 만들지 않는다. 사용자의 현재 명시적 선택은 과거 일반 선호보다 우선한다. 특정 작업에서 Clone/ImportRow로 행 소유권을 분리한 요구를 다른 업로드의 기본 방식으로 확장하지 않는다.
+Check alternatives and actual constraints, then briefly explain the necessity. Do not invent performance multipliers or a separate approval step. The user's current explicit choice overrides older general preferences. Do not extend a task-specific requirement to separate row ownership with Clone/ImportRow into the default for other uploads.
 
-정확성이나 API 호환성 때문에 필요하다는 말만 붙이지 말고, 해당 방식 없이는 구현이 어려운 구체적인 이유를 확인한다. 빌드도 기본 완료 의식으로 실행하지 않고 구현·오류 해결에 필요한 경우에 선택한다.
+Do not merely assert correctness or API compatibility as a justification: establish the specific reason implementation would be difficult without the approach. Choose builds when needed for implementation or resolving an error, not as a default completion ritual.

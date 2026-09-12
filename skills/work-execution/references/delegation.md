@@ -1,5 +1,5 @@
-# 독립 작업 전달
+# Delegating independent work
 
-현재 호스트 정책이 위임을 허용하고 독립 작업이 있을 때만 사용한다. 구체적인 결과, 최소 입력, 수정 가능한 파일/범위, 완료 판단과 반환 내용을 전달한다. 같은 파일을 여러 작업자가 동시에 수정하지 않도록 경계를 정한다.
+Use delegation only when current host policy permits it and independent work exists. Provide the concrete outcome, minimal inputs, editable files/scope, completion criteria, and expected return. Set boundaries so multiple workers do not edit the same file concurrently.
 
-생성 성공과 작업 완료를 구분하고 실제 도구 결과·오류를 수집한다. 도구 스키마에서 지원하는 모델/컨텍스트 인자를 확인한다. 전체 이력을 상속하는 호출에 지원하지 않는 override를 붙이지 않는다. 역할 이름이나 JSON 파일만으로 에이전트가 실행됐다고 보고하지 않는다.
+Distinguish successful creation from completed work; collect actual tool results and errors. Check the tool schema for supported model/context arguments. Do not add unsupported overrides to calls that inherit full history. Role names or JSON files alone do not establish that an agent ran.

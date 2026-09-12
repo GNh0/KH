@@ -1,38 +1,38 @@
-# 실제 데이터와 이벤트 흐름
+# Actual data and event flow
 
-전체 화면 요청은 Load/initControl → Search → 상세 → 보호 → 추가/복사/수정/삭제/저장/취소 → 재조회/포커스 복원까지 확인한다. BA060T 등 실제 권한과 CustomButton/SimpleButton/U_BUTTON 동작도 연결한다. 국소 수정에 전 생명주기 재구현을 강제하지 않는다.
+For a full-screen request, check Load/initControl → Search → detail → protection → add/copy/edit/delete/save/cancel → requery/focus restoration. Also connect actual permissions such as BA060T and CustomButton/SimpleButton/U_BUTTON behavior. Do not require reimplementing the full lifecycle for a local edit.
 
-현재 SearchCommand/NewCommand/DeleteCommand·m_Editmode 흐름을 따른다. 기존 처리를 중복 초기화하거나 확인 메시지를 두 번 띄우지 않는다. 포커스는 GetFocusedDataRow()/FocusedRowHandle, 체크 선택은 실제 선택 컬렉션으로 구분한다. 화면 정렬 순서와 선택 반환 순서를 혼동하지 않는다.
+Follow current SearchCommand/NewCommand/DeleteCommand and m_Editmode flow. Do not duplicate initialization or confirmation messages. Distinguish focus via GetFocusedDataRow()/FocusedRowHandle from checked selection via the actual selection collection. Do not confuse screen sort order with selection return order.
 
-## 기존 화면에 기능을 연결할 때
+## Connecting functionality to an existing screen
 
-사용자가 만든 현재 화면과 조회를 먼저 읽는다. 이관 원본은 업무 동작의 근거이고, 현재 프로젝트는 컨트롤 API·이벤트 구성·DB 호출 방식의 근거다. 같은 이름의 이벤트라도 현재 헤더·상세가 채워지는 시점과 상태가 다르면 본문을 그대로 복사하지 않는다. 원본의 별도 조회·재바인딩·검증이 현재 대상에도 필요한지 실제 호출 경로로 판단한다.
+First read the user's current screen and queries. The migration source defines business behavior; the current project defines control APIs, event structure, and DB call patterns. Do not copy an event body verbatim merely because its name matches if header/detail population timing or state differs. Use actual call paths to determine whether the source's separate queries, rebinding, or validation are needed in the target.
 
-| 작업 | 먼저 확인할 현재 계약 | 구현 기준 |
+| Task | Current contract to inspect first | Implementation rule |
 | --- | --- | --- |
-| 신규 진입 | 기존 DataTable 스키마, InitControl의 실제 초기화 범위 | 현재 초기화 경로를 사용한다. 빈 DETAIL 조회를 관례로 추가하지 않는다. 스키마가 없는 대상에서 조회가 실제로 필요한 경우는 구분한다. |
-| 수정 진입 | 포커스/상세 이벤트가 이미 헤더와 행을 연결했는지 | 기존 값을 유지하고 모드·탭을 전환한다. 필요한 품목 목록 등만 조회한다. 현재 계약에 재조회가 필요한 경우까지 금지하지 않는다. |
-| 선택 행 삭제 | 실제 GridView API와 행 상태·선택 범위 | 기존 DeleteSelectedRows 같은 API를 우선한다. GetSelectedRows/GetDataRow/Delete 반복문은 행별 추가 동작이 필요한 경우에만 구성한다. |
-| 상세 추가 | 키·사업장·부모 번호·순번이 SP 파라미터와 XML 중 어디서 정해지는지 | 실제 상세 XML에 필요한 필드만 대입한다. 서버 채번을 DataRowVersion/Math.Max로 중복 계산하지 않는다. |
-| 저장·전체 삭제 | 현재 CallSaveProcedure 호출과 확인/성공 메시지, 실패 시 행 상태 | 현재 분기 형태를 따른다. 요청에 없는 필수값·0값·건수 제약이나 별도 확인 단계를 임의로 보강하지 않는다. 기존 필수 검증과 오류 처리는 보존한다. |
-| 날짜 초기화 | 해당 사용자 컨트롤의 실제 메서드와 현재 화면의 사용 방식 | SetToDay(int)처럼 제공되는 API가 요구 의미에 맞으면 사용한다. 다른 날짜 컨트롤에 그 메서드가 있다고 가정하지 않는다. |
+| Enter new mode | Existing DataTable schema and InitControl's actual scope | Use current initialization. Do not conventionally add an empty DETAIL query. Distinguish targets without a schema that actually need the query. |
+| Enter edit mode | Whether focus/detail events already bind the header and rows | Preserve values and switch mode/tabs. Query only needed data, such as item lists. Do not prohibit requerying when the current contract requires it. |
+| Delete selected rows | Actual GridView API, row states, and selection scope | Prefer existing APIs such as DeleteSelectedRows. Build GetSelectedRows/GetDataRow/Delete loops only for required per-row additional behavior. |
+| Add detail | Where keys, business site, parent number, and sequence are set: SP parameters or XML | Assign only fields required in actual detail XML. Do not duplicate server numbering with DataRowVersion/Math.Max. |
+| Save/delete all | Current CallSaveProcedure calls, confirmation/success messages, and row states on failure | Follow current branches. Do not invent required-value, zero-value, or count restrictions or separate confirmation steps. Preserve existing required validation and error handling. |
+| Initialize dates | The user control's actual methods and current screen usage | Use an available API such as SetToDay(int) if it matches the requirement. Do not assume another date control has that method. |
 
-품목 추가의 DataRow 처리, 조회 바인딩, 포커스 처리를 새 CreateSelectedRowsTable/BindSelectProcedure 같은 wrapper로 감싸지 않는다. 기존 이벤트·저장 메서드에 직접 작성하는 프로젝트라면 그 방식을 유지한다. 실제 재사용 요구와 대상의 확립된 구조가 있는 helper는 사용할 수 있으며 메서드 이름 자체를 금지하는 규칙이 아니다.
+Do not wrap item-addition DataRow handling, query binding, or focus handling in new wrappers such as CreateSelectedRowsTable/BindSelectProcedure. If the project writes this directly in existing events/save methods, keep that approach. Helpers with an actual reuse requirement and an established target structure remain permitted; these method names are not themselves prohibited.
 
-원본에 없는 화면 상태 bool을 만들어 수정·삭제·첨부·버튼 Enabled/ReadOnly에 새로운 제한을 붙이지 않는다. 조회 결과에 상태값이 있거나 특정 상태에서 변경을 막는 것이 그럴듯하다는 이유만으로 업무 규칙을 추가하지 않는다. 현재 요청 또는 실제 기존 계약이 요구할 때만 그 상태와 분기를 구현한다. 변수명·bool·삼항식을 전역 금지하는 규칙은 아니다. 스타일 지적 뒤에는 해당 한 줄뿐 아니라 필드 선언, 초기화, 조회 대입과 모든 사용처를 함께 대조한다.
+Do not introduce a screen-state bool absent from the original to impose new restrictions on editing, deletion, attachments, or button Enabled/ReadOnly. A status value in query results, or a plausible reason to block changes in a state, does not justify a new business rule. Implement that state and branching only when the current request or actual existing contract requires them. This does not globally prohibit variable names, bools, or ternaries. After style feedback, check field declarations, initialization, query assignments, and every usage together, not just the cited line.
 
-스타일 지적을 받으면 지적된 한 줄뿐 아니라 같은 수정에서 추가한 검증·초기화·재조회·wrapper를 다시 대조한다. 자기 변경을 걷어내라는 요청에는 현재 사용자 변경을 보존하면서 자신의 변경만 되돌리고, 이미 거부된 구현을 새 작성본에 다시 넣지 않는다. 과거 작업 전 사본은 변경 출처의 근거이며 이후 사용자 정정을 무효화하는 기준이 아니다.
+After style feedback, also recheck validation, initialization, requerying, and wrappers added in the same change. When asked to remove your changes, revert only your changes while preserving current user edits, and do not reintroduce rejected implementations in a new version. A pre-task copy establishes change provenance; it does not override later user corrections.
 
-[사용자 작성 방식](coding-style.md)에 맞춰 이름 있는 이벤트 핸들러와 기존 CallSelectProcedure/CallSaveProcedure 경계를 유지한다. ExecSP/ExecSPTrn, GetEditModeWorkType/원래 mode 문자열은 실제 호출 의미를 확인하며 스타일만으로 통일하지 않는다. 기존 master-to-table helper가 복제/행 상태를 처리하는지 먼저 읽고 불필요한 Clone이나 중간 테이블을 덧붙이지 않는다.
+Retain named event handlers and existing CallSelectProcedure/CallSaveProcedure boundaries per the [user's coding style](coding-style.md). Check actual semantics of ExecSP/ExecSPTrn and GetEditModeWorkType/original mode strings; do not standardize them for style alone. First inspect whether the existing master-to-table helper handles cloning/row states, and do not add unnecessary Clone calls or intermediate tables.
 
-NEW/MOD/DEL과 Added/Modified/Deleted를 실제 XML 생성기와 SELECT/SAVE 분기에 맞춘다. 전체 삭제/재등록·모든 행 수정·일괄 원자성을 임의로 추가하지 않는다. SAVE에서 하라고 한 검증을 C#에 중복하지 않는다. 파라미터·XML 필드·채번·고정값·결과 테이블을 대조한다.
+Align NEW/MOD/DEL and Added/Modified/Deleted with the actual XML generator and SELECT/SAVE branches. Do not invent delete-all/reinsert behavior, modification of every row, or batch atomicity. Do not duplicate in C# validation assigned to SAVE. Compare parameters, XML fields, numbering, fixed values, and result tables.
 
-## 원본 연동을 주석으로 보존할 때
+## Preserving original integrations as comments
 
-아마란스·전자세금계산서처럼 원본 연동을 주석 처리하라는 요청은 실제 본문을 남기고 실행 경로를 끄라는 의미다. 전체 메서드·관련 SQL 분기를 설명문, 빈 메서드 목록, TODO로 바꾸지 않는다. 원본에서 이미 주석인 JOIN·검증·필터를 이관 중 활성화하지 않는다. 연결 컬럼을 빈 문자열·0·CAST로 대체하는 것도 별도 동작 변경이므로 임의로 수행하지 않는다. 원본 본문과 후보의 보존 내용, 활성 호출·바인딩을 각각 대조한다.
+A request to comment out an original integration, such as Amaranth (아마란스) or electronic tax invoices, means retaining its actual body while disabling execution. Do not replace complete methods or related SQL branches with explanations, empty method lists, or TODOs. Do not activate JOINs, validation, or filters already commented out in the original during migration. Replacing related columns with empty strings, 0, or CAST is also a behavior change; do not do it arbitrarily. Compare the original body with retained candidate content, and separately compare active calls/bindings.
 
-테이블이나 API 차이는 실제 대상 스키마·구현으로 해결한다. 주석 보존 요청을 원본 전체의 무조건 실행 요구로 바꾸거나, 빌드를 통과시키기 위해 업무 제약·반환값을 새로 만들지 않는다. 문자열·주석 보존과 런타임 동작은 정적 스타일 검사만으로 확인되지 않는다.
+Resolve table/API differences from actual target schemas and implementations. Do not turn a comment-preservation request into a requirement to execute the entire original, or invent business restrictions/return values to pass a build. Static style checks alone do not establish string/comment preservation or runtime behavior.
 
-기존 for/DataTable.Select/NewRow/Rows.Add를 우선한다. 해당 업로드 사례는 정상 행을 바로 대상에 추가하고 오류 행은 건너뛰어 한 번에 알려준다. 다른 업로드의 원자성을 이 사례로 결정하지 않는다. 실제 Excel 시트·셀 타입·헤더·키·날짜를 읽는다.
+Prefer existing for/DataTable.Select/NewRow/Rows.Add patterns. In the relevant upload case, add valid rows directly to the target, skip invalid rows, and report their errors together. Do not use that case to decide atomicity for other uploads. Inspect actual Excel sheets, cell types, headers, keys, and dates.
 
-TY 사용자 lookup은 요구 범위에서 조회 RTRUSER, 입력·수정 USER를 구분한다. get 블록과 파싱/비교 if 분리 등 지정한 기존 C# 스타일을 지킨다. 공통 기능 재사용은 반복 제거 필요가 있을 때 실제 helper 계약을 읽어 적용한다.
+For TY user lookups, distinguish query RTRUSER from input/edit USER within the requested scope. Follow the specified existing C# style, including get blocks and separate parsing/comparison if statements. Reuse shared functionality when duplication needs removal, after reading the actual helper contract.

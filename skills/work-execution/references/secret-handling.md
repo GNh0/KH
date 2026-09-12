@@ -1,5 +1,5 @@
-# 실제 비밀 정보 취급
+# Handling actual secrets
 
-이미 설정된 MCP나 DB 호출 자체는 비밀 설정을 읽을 이유가 아니다. 실제 자격증명 입력·설정 변경이 필요할 때만 필요한 항목에 접근하고 값 대신 존재 여부·키 이름·연결 결과를 확인한다.
+Calling an already configured MCP or database does not itself justify reading secret configuration. Access only the necessary fields when credentials must actually be entered or settings changed; check presence, key names, and connection results instead of exposing values.
 
-비밀번호가 있는 표/한국어 문장/연결 문자열은 통째로 출력하지 않는다. `src.common.output.redact`는 보조 마스킹이며 완전한 DLP가 아니다. 비밀 값을 문서·테스트 fixture·메모리에 복사하지 않는다. 명령 문자열 보간으로 토큰이 실행되거나 출력되지 않게 한다.
+Do not print entire tables, Korean sentences, or connection strings containing passwords. `src.common.output.redact` is supplementary masking, not complete DLP. Do not copy secrets into documents, test fixtures, or memory. Prevent command-string interpolation from executing or exposing tokens.

@@ -1,11 +1,11 @@
-# 선택적 SQL 검사
+# Optional SQL checks
 
-`python <plugin-root>/scripts/kh_check.py sql <absolute-original.sql> <absolute-candidate.sql>`로 리터럴·주석·토큰·별칭 참조 보존과 스타일 진단을 확인한다. `--preserve-aliases`는 명시적 별칭 유지에 사용한다. 결과는 SQL Server 실행 증명이 아니다.
+Run `python <plugin-root>/scripts/kh_check.py sql <absolute-original.sql> <absolute-candidate.sql>` to check preservation of literals, comments, tokens, and alias references, plus style diagnostics. Use `--preserve-aliases` for explicit alias preservation. Results do not prove SQL Server execution.
 
-새 SQL의 단독 검사는 `sql <absolute-candidate.sql>`로 실행한다. 원본과 후보에 같은 파일을 두 번 넣으면 입력 오류다. 변경 전 원본이 없는 상태에서 수정 후 사본을 원본으로 만들어 비교하지 않는다. `comparison_baselines.sql=false`는 원본과의 보존 비교를 수행하지 않았다는 뜻이다.
+For a standalone check of new SQL, use `sql <absolute-candidate.sql>`. Passing the same file as both original and candidate is an input error. Without a pre-change original, do not manufacture a baseline from a post-change copy. `comparison_baselines.sql=false` means no preservation comparison against the original was performed.
 
-`--normalize-layout`은 입력의 지원되는 FROM/JOIN 파생 쿼리와 JOIN/EXISTS 공백·절 줄바꿈을 정리해 stdout으로 반환한다. 파일은 자동 덮어쓰지 않는다. 별칭의 업무 역할은 Codex가 현재 쿼리와 사용자 지시로 판단한다. `src.sql.aliases`는 명시한 스코프/별칭 변경만 기계적으로 적용한다.
+`--normalize-layout` normalizes supported derived FROM/JOIN queries, JOIN/EXISTS whitespace, and clause line breaks, returning the result on stdout without overwriting files. Codex determines alias business roles from the current query and user instructions. `src.sql.aliases` mechanically applies only explicitly specified scope/alias changes.
 
-오류에는 토큰 보존과 검사 대상의 명시적 정렬 계약 위반이 포함된다. 경고는 별도 스타일/비선호 확인 항목이다. 지원하지 않는 구문이나 의미 변경은 미확인으로 남기고 성공으로 설명하지 않는다. 서명·provider 영수증·해시를 받기 위한 별도 재시도 절차는 없다.
+Errors include token-preservation failures and violations of explicit alignment contracts under inspection. Warnings identify separate style/disfavored-pattern checks. Mark unsupported syntax or semantic changes as unverified, not successful. There is no separate retry procedure to obtain signatures, provider receipts, or hashes.
 
-파생 블록은 FROM의 첫 소스도 검사한다. 여는 괄호와 닫는 괄호·별칭, 내부 절과 파생 JOIN의 조건을 함께 확인한다. 중첩된 FROM/JOIN/EXISTS 및 UNION 분기에서도 각 소속 블록의 위치를 기준으로 하며, 일반 JOIN의 I 열 기준은 유지한다. 괄호가 있다고 함수 인수나 APPLY를 이 규칙으로 일괄 변경하지 않는다.
+Check derived blocks even when they are the first FROM source. Inspect opening/closing parentheses, aliases, inner clauses, and derived JOIN conditions together. In nested FROM/JOIN/EXISTS blocks and UNION branches, align relative to each containing block; retain the I-column rule for ordinary JOINs. Do not apply these rules wholesale to function arguments or APPLY merely because they contain parentheses.

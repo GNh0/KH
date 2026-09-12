@@ -13,6 +13,7 @@
 - [3.0.6 이벤트·데이터 처리](kh/reports/2026-09-10-project-flow-review.md): 대상 프로젝트의 API·조회 상태 유지, 불필요한 처리 검토, 원본 주석 보존과 실제 실패 코드·독립 작성 평가.
 - [3.0.7 원본 보존과 비교 기준](kh/reports/2026-09-11-source-preservation.md): 원본 유지 이관, 속성 전체 비교와 이름 대응, 상태 제한 검토, 자기 자신과의 비교 방지 및 재발 사례 평가.
 - [3.0.8 스킬 선택과 인계](kh/reports/2026-09-12-skill-selection.md): 단순 작업의 계획 스킬 제외, 구형 하네스 사전점검 방지와 현재 스킬 경로 사용.
+- [3.0.9 English guidance and token comparison](kh/reports/2026-09-12-english-guidance.md): English skill instructions and references, preserved domain contracts, and measured token counts for all 32 translated documents.
 - 설계 계획과 C#·PB·SQL 대화 감사 원문은 로컬 작업 자료로 보존한다. 공개 보고서에는 48개 요구의 반영 위치와 관찰한 실패 원인 요약을 담았다.
 
 ## GitHub 배포

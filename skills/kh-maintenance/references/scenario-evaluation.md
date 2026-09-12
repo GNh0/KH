@@ -1,5 +1,5 @@
-# 실제 결과로 스킬 평가
+# Evaluating skills through actual outcomes
 
-tests/scenarios의 사용자 요청과 최소 입력으로 결과를 평가한다. 테스트 기대값에는 올바른 요구와 반대 사례를 포함한다. 고정 스킬 수·문구·자기점수보다 실제 결과·범위·오류 보존을 확인한다.
+Evaluate outcomes using user requests and minimal inputs from tests/scenarios. Include positive requirements and counterexamples in test expectations. Check actual results, scope, and preservation of errors instead of fixed skill counts, wording, or self-ratings.
 
-일반 Python 단위 검사, 도구를 모의한 검사, 실제 Codex 실행, 사용자 앱 렌더링은 서로 다른 증거 수준이다. 실행하지 않은 시나리오는 미실행으로 남긴다. 독립 스킬 평가를 수행할 때는 현재 호스트의 위임 허용 조건과 skill-creator의 최소 입력 지침을 따른다.
+Ordinary Python unit tests, mocked tool tests, actual Codex execution, and rendering in the user's app are different levels of evidence. Mark unexecuted scenarios as unexecuted. For independent skill evaluation, follow the current host's delegation permissions and skill-creator's minimal-input guidance.
