@@ -1,6 +1,6 @@
 # KH for Codex
 
-KH 3.0.7은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+KH 3.0.8은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
 작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
