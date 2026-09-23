@@ -2,7 +2,7 @@
 
 Verify the exact PBL, user-selected PB version, ORCA DLL, bitness, dependent DLLs, child-process PATH, and license. A PBL header of 0600 alone does not establish PB 6. Successful preparation is not completed execution.
 
-`src.pb.orca` provides execution of the existing PblScripter. Supply actual tool paths for the selected version. Use an explicit export output directory without changing user originals. If the environment needs a helper build, assess implementation necessity and the user's current build instructions.
+`src.pb.orca` provides execution of the existing PblScripter. Supply actual tool paths for the selected version. `convert` requires an explicit export output directory; use a task-specific system temporary directory for analysis exports unless the user specifies a final destination. `probe` can inspect capability without an output directory. If the environment needs a helper build, assess implementation necessity and the user's current build instructions.
 
 Even with exit code 0, Session open failed, Bad library, SySAM/license errors, or empty output mean failure. One issue fixed by changing PATH does not explain every later error. Inspect actual output and target exports. If extraction fails, continue with supplied exports/pasted source and identify missing evidence.
 # Local tool usage

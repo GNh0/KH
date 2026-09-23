@@ -20,6 +20,8 @@ For control work, prefer appropriate user controls available in the current proj
 - Use the [scoped default profile](references/default-profile.json) when checking project style. Do not repeat author discovery for every task.
 - Use the [checker](references/checks.md) when automated static comparison is needed.
 
+Keep probe scripts, Designer snapshots, build output, and other auxiliary files outside the target project and source tree; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
+
 Read only the needed parts of relevant references and source. If a batch output is truncated, retrieve the omitted parts that matter. Including a path in a command does not establish that its contents were inspected.
 
 Keep static controls/layout in Designer and follow actual code-behind patterns for binding/business behavior. Follow the existing constructor's named-handler subscription pattern without duplicate subscriptions. Check the project's DevExpress version/APIs and csproj registration. Reuse existing helpers; assess new abstractions, LINQ, intermediate tables, and unnecessary builds against the [necessity criteria](../work-execution/references/preferences.md).

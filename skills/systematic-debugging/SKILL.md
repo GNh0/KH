@@ -9,4 +9,6 @@ First identify the current files, procedures, connection target, and exact failu
 
 Narrow the reproduction input and execution path, then test the hypothesis with minimal comparisons. Measure SQL execution, data transfer, C# binding, and BestFit costs separately using the same parameters and row counts. A short tool success message or exit code alone does not establish that the actual output is correct.
 
+Place temporary probes and diagnostic output outside the source project using [workspace files](../work-execution/references/workspace-files.md).
+
 Once the cause is clear, fix only the affected scope and recheck the failure conditions. Do not treat a user-resolved issue or inability to reproduce as confirmation of a cause. Do not repeat unchanged checks or the same failed hypothesis.
