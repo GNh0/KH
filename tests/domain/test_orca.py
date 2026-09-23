@@ -332,6 +332,23 @@ class PbOrcaRuntimeTests(unittest.TestCase):
         self.assertEqual('incomplete', result.status)
         self.assertEqual('export_output_unconfirmed', result.reason_code)
 
+    def test_conversion_without_output_directory_does_not_write_beside_pbl(self):
+        from dataclasses import replace
+
+        runner = RecordingRunner()
+        runtime = self.runtime(runner)
+        request = replace(self.request('125'), output_directory=None)
+
+        probe = runtime.probe(request)
+        self.assertTrue(probe.ready)
+        self.assertIsNone(probe.to_dict()['output_directory'])
+
+        result = runtime.convert(request)
+        self.assertEqual('fallback', result.status)
+        self.assertEqual('output_directory_required', result.reason_code)
+        self.assertEqual([], runner.calls)
+        self.assertFalse((self.input_directory / self.pbl_path.stem).exists())
+
     def test_stale_export_is_not_evidence_for_this_run(self):
         self.output_directory.mkdir()
         (self.output_directory / 'old.srw').write_text('global type old from window')

@@ -7,6 +7,8 @@ description: Analyze PowerBuilder/PBL/DataWindow sources or migrate them to C# W
 
 First read the exact PBL/object, base classes, linked DataWindows, and actual event/SQL/report relationships. If only exports are supplied, stay within their evidence scope; do not claim analysis of an unread complete PBL.
 
+Put temporary exports, probes, and conversion output outside the source project. Supply an explicit output path for ORCA conversion and follow [workspace files](../work-execution/references/workspace-files.md) for auxiliary files.
+
 - For extraction or library errors, read [ORCA execution](references/orca.md).
 - For UI/DataWindow mapping, read [DataWindows and screens](references/datawindow.md). Apply the [user's HTML rules](../csharp-designer-style-harness/references/grid-layout.md) to grid defaults and editing properties.
 - Use [migration validation](references/validation.md) for migration plans and generated results.

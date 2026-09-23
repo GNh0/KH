@@ -10,7 +10,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -60,7 +60,7 @@ class OrcaCapabilityDecision:
     helper_path: Path
     helper_mode: str | None
     csc_path: Path | None
-    output_directory: Path
+    output_directory: Path | None
     api_mode: str | None
     ascii_staging_required: bool
     ascii_stage_root: Path | None
@@ -84,7 +84,7 @@ class OrcaCapabilityDecision:
             "helper_path": str(self.helper_path),
             "helper_mode": self.helper_mode,
             "csc_path": str(self.csc_path) if self.csc_path else None,
-            "output_directory": str(self.output_directory),
+            "output_directory": str(self.output_directory) if self.output_directory else None,
             "api_mode": self.api_mode,
             "ascii_staging_required": self.ascii_staging_required,
             "ascii_stage_root": (
@@ -290,9 +290,6 @@ class PbOrcaRuntime:
         ascii_staging_required: bool = False,
         ascii_stage_root: Path | None = None,
     ) -> OrcaCapabilityDecision:
-        output_directory = request.output_directory or (
-            request.pbl_path.parent / request.pbl_path.stem
-        )
         return OrcaCapabilityDecision(
             status="fallback",
             reason_code=reason_code,
@@ -305,7 +302,7 @@ class PbOrcaRuntime:
             helper_path=request.tool_root / "PblExporter.exe",
             helper_mode=helper_mode,
             csc_path=csc_path,
-            output_directory=output_directory,
+            output_directory=request.output_directory,
             api_mode=config.api_mode if config else None,
             ascii_staging_required=ascii_staging_required,
             ascii_stage_root=ascii_stage_root,
@@ -423,20 +420,19 @@ class PbOrcaRuntime:
                 runtime_dlls=tuple(runtime_dlls),
             )
 
-        output_directory = request.output_directory or (
-            request.pbl_path.parent / request.pbl_path.stem
-        )
-        output_parent = _nearest_existing_parent(output_directory)
-        if output_parent is None or not os.access(output_parent, os.W_OK):
-            return self._fallback(
-                request,
-                reason_code="output_path_unavailable",
-                message="The output path has no existing writable parent.",
-                config=config,
-                runtime_dlls=tuple(runtime_dlls),
-                helper_mode=helper_mode,
-                csc_path=csc_path,
-            )
+        output_directory = request.output_directory
+        if output_directory is not None:
+            output_parent = _nearest_existing_parent(output_directory)
+            if output_parent is None or not os.access(output_parent, os.W_OK):
+                return self._fallback(
+                    request,
+                    reason_code="output_path_unavailable",
+                    message="The output path has no existing writable parent.",
+                    config=config,
+                    runtime_dlls=tuple(runtime_dlls),
+                    helper_mode=helper_mode,
+                    csc_path=csc_path,
+                )
 
         ascii_staging_required = False
         ascii_stage_root: Path | None = None
@@ -507,6 +503,7 @@ class PbOrcaRuntime:
         decision: OrcaCapabilityDecision,
         pbl_path: Path,
     ) -> list[str]:
+        assert decision.output_directory is not None
         runtime_path = ";".join(str(path) for path in decision.runtime_directories)
         command = [
             self._powershell_executable,
@@ -544,6 +541,8 @@ class PbOrcaRuntime:
         *,
         staged_input: bool,
     ) -> OrcaConversionResult:
+        assert decision.output_directory is not None
+        output_directory = decision.output_directory
         base_environment = dict(
             self._base_environment
             if self._base_environment is not None
@@ -555,7 +554,7 @@ class PbOrcaRuntime:
             [*path_prefix, *([current_path] if current_path else [])]
         )
         command = self._build_command(request, decision, pbl_path)
-        before = _export_files(decision.output_directory)
+        before = _export_files(output_directory)
 
         try:
             completed = self._process_runner(
@@ -584,7 +583,7 @@ class PbOrcaRuntime:
         exit_code = int(completed.returncode)
         stdout, stderr = completed.stdout or "", completed.stderr or ""
         diagnostic = _failure_diagnostic(stdout + "\n" + stderr)
-        after = _export_files(decision.output_directory)
+        after = _export_files(output_directory)
         fresh = [name for name, fingerprint in after.items() if before.get(name) != fingerprint]
         if exit_code != 0:
             status, reason, message = "failed", "conversion_process_failed", "PBL conversion failed; the child exit code was preserved."
@@ -612,6 +611,13 @@ class PbOrcaRuntime:
 
     def convert(self, request: OrcaRequest) -> OrcaConversionResult:
         decision = self.probe(request)
+        if decision.ready and decision.output_directory is None:
+            decision = replace(
+                decision,
+                status="fallback",
+                reason_code="output_directory_required",
+                message="Specify an explicit output directory before conversion.",
+            )
         if not decision.ready:
             return OrcaConversionResult(
                 status="fallback",
