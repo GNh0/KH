@@ -20,15 +20,21 @@ from .source_preservation import remap_members
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
                  allowed_changes: Mapping[str, Sequence[str]] | None = None,
                  original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
+                 style_reference_designer: str | None = None,
                  allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
                  numeric_columns: Sequence[str] = (), preserve_existing: bool = False,
                  member_renames: Mapping[str, str] | None = None) -> CheckResult:
     allowed = allowed_changes or {}
     result = CheckResult(checked=["C# lexical source patterns", "new unbraced control bodies"],
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
-    result.metadata['comparison_baselines'] = {'csharp': original is not None, 'designer': original_designer is not None}
+    result.metadata['comparison_baselines'] = {'csharp': original is not None,
+        'designer': original_designer is not None}
+    if style_reference_designer is not None:
+        result.metadata['comparison_baselines']['style_reference'] = True
     if member_renames and (designer is None or original_designer is None):
         raise ValueError('C# member renames require both Designer versions')
+    if style_reference_designer is not None and designer is None:
+        raise ValueError('A comparison Designer requires the candidate Designer')
     if original is None:
         result.not_checked.append('C# changes and source preservation; no original C# supplied')
     if original is not None and member_renames:
@@ -108,6 +114,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
             result.issues.append(Issue(name, "warning", "Prefer the established project form. A difficult implementation without this construct or an extreme performance disadvantage can justify an exception; convenience alone cannot."))
     if designer is not None:
         ui = check_designer(designer, code_behind=candidate, original=original_designer,
+                            style_reference=style_reference_designer,
                             column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes,
                             control_sources=control_sources, numeric_columns=numeric_columns,
                             preserve_existing=preserve_existing, member_renames=member_renames)

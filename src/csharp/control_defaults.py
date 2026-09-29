@@ -10,7 +10,7 @@ import re
 from src.common.results import Issue
 from .control_style import direct_statement_spans
 from .control_names import control_name_issue, known_control_kind
-from .designer_model import DesignerModel, _normalized_csharp_value
+from .designer_model import DesignerModel, _normalized_csharp_value, _parse_size
 from .lexer import _scan_csharp, balanced_close, string_literal_value
 
 
@@ -151,6 +151,16 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
                 continue
             actual = control.properties[prop]
             equal = _normalized_csharp_value(actual) == _normalized_csharp_value(expected)
+            if prop == 'Size' and not equal:
+                default_size, screen_size = _parse_size(expected), _parse_size(actual)
+                if default_size is not None and screen_size is not None:
+                    if any(screen < default for screen, default in zip(screen_size, default_size)):
+                        issues.append(Issue('user_control_size_shrink', 'error',
+                                            'The new control is smaller than its current user-control default. Do not shrink it to fit short text; use the default size or expand it unless the user explicitly requests a compact size.',
+                                            details={'property': f'{name}.Size', 'constructor_size': default_size,
+                                                     'screen_size': screen_size}))
+                    # Larger controls may be needed for long content or the screen layout.
+                    continue
             issues.append(Issue('user_control_default_restatement' if equal else 'user_control_default_override',
                                 'info' if equal else 'warning',
                                 'This assignment repeats a supplied constructor default; prefer inheriting it unless Designer serialization requires it.' if equal else

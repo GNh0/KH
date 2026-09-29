@@ -16,7 +16,7 @@ Keep static fields and control/column/Repository creation, layout, and propertie
 
 This does not move all event subscriptions into Designer. Follow the existing screen's [coding style](coding-style.md): connect named handlers after InitializeComponent in the constructor, without duplicating existing subscriptions.
 
-Read and retain current UserControl defaults for width, height, AutoHeight, buttons, and alignment. Do not hardcode 100x25 or a particular font for all controls. Preserve user-edited font and Visible values. Align TabIndex with the specified input order, including container order.
+Read and retain current UserControl defaults for width, height, AutoHeight, buttons, and alignment. Use default width/height as the floor for new controls; expand for long content, and shrink only for an explicit compact-size requirement. Do not hardcode 100x25 or a particular font for all controls; an explicit size for the current screen still takes precedence. Check right-side lookup/date buttons in the rendered form, since their initialization can live in Designer rather than the user-control constructor. Preserve user-edited font and Visible values. Align TabIndex with the specified input order, including container order.
 
 Follow [DataWindowToXml rules](grid-layout.md) for grid defaults, Appearance, and editing modes. Do not extend centered headers to cell alignment. Connect numbers to the actual Spin Repository, codes/display values to lookup binding, and buttons to real actions. A request for a Spin Repository alone does not justify EditMask. Do not set either DisplayFormat.FormatString or DisplayFormat.FormatType by default. Do not extend these restrictions to permitted report expression formats.
 

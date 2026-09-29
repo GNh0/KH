@@ -13,6 +13,8 @@ The migration source defines business behavior; the target project defines requi
 
 For control work, prefer appropriate user controls available in the current project, not just KoneLib. Follow [user-control rules](references/user-controls.md): read and preserve constructor, initialization-helper, and inherited defaults; add only properties needed for the screen's requested behavior. Do not invent or overwrite defaults. Name date controls with ymd and the actual field name.
 
+For new controls, keep the current user control's default width and height as a floor. Longer content may require expansion; short captions or values do not justify shrinking. Honor an explicit compact-size request for that screen. Compare the actual project's Designer initialization as well as the constructor: lookup/date drop-down buttons and label alignment options may be serialized only in Designer.
+
 - For writing/editing C#, read the [user's coding style](references/coding-style.md). Reference source that differs from agreed rules may contain an oversight; do not use the difference to relax those rules.
 - For UI/Designer work, read [screen style](references/designer.md). For grids, also read [HTML defaults](references/grid-layout.md).
 - For queries, saves, uploads, or row selection, read [data and event contracts](references/data-flow.md).
