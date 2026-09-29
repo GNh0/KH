@@ -5,14 +5,62 @@ from typing import Iterable, Mapping, Sequence
 from src.common.results import CheckResult, Issue
 from .lexer import _scan_csharp
 from .syntax import _method_declarations
-from .designer_model import parse_designer_source, _normalized_csharp_value
+from .designer_model import DesignerModel, parse_designer_source, _normalized_csharp_value
 from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
+from .control_names import known_control_kind
 from .source_preservation import compare_existing_properties, remap_members, validate_designer_renames
 
 
+_EDITOR_BUTTON_CALL = re.compile(
+    r'\bthis\.(?P<name>\w+)\.(?P<path>Properties\.(?:CalendarTimeProperties\.)?Buttons)'
+    r'\.(?:Add|AddRange)\s*\('
+)
+
+
+def _editor_button_paths(source: str) -> dict[str, set[str]]:
+    code, _ = _scan_csharp(source)
+    paths: dict[str, set[str]] = defaultdict(set)
+    for match in _EDITOR_BUTTON_CALL.finditer(code):
+        paths[match['name']].add(match['path'])
+    return paths
+
+
+def _check_reference_editor_defaults(model: DesignerModel, reference: DesignerModel,
+                                     retained_controls: set[str]) -> list[Issue]:
+    """Review button and label setup visible in an actual comparison screen."""
+    reference_paths = _editor_button_paths(reference.source)
+    candidate_paths = _editor_button_paths(model.source)
+    expected: dict[str, set[str]] = defaultdict(set)
+    label_text_options = False
+    for name, control in reference.controls.items():
+        kind = known_control_kind(control.type_name)
+        if kind in {'LookUpEdit', 'DateEdit'}:
+            expected[kind].update(reference_paths.get(name, set()))
+        elif kind == 'LabelControl' and control.properties.get('Appearance.Options.UseTextOptions', '').strip() == 'true':
+            label_text_options = True
+    issues: list[Issue] = []
+    for name, control in model.controls.items():
+        kind = known_control_kind(control.type_name)
+        if name in retained_controls:
+            continue
+        if kind in expected:
+            missing = sorted(expected[kind] - candidate_paths.get(name, set()))
+            if missing:
+                issues.append(Issue('editor_button_initialization_review', 'warning',
+                                    'The comparison screen initializes embedded editor buttons, but this new control does not. Verify the current control/base defaults and visible drop-down or calendar button; add the matching Designer initialization when needed.',
+                                    details={'control': name, 'type': control.type_name, 'missing_button_paths': missing}))
+        elif kind == 'LabelControl' and label_text_options and \
+                control.properties.get('Appearance.Options.UseTextOptions', '').strip() != 'true':
+            issues.append(Issue('label_text_options_review', 'warning',
+                                'Comparison-screen labels enable Appearance.Options.UseTextOptions, but this new label does not. Verify effective alignment through the current control constructor and rendered screen.',
+                                details={'control': name, 'type': control.type_name}))
+    return issues
+
+
 def check_designer(designer: str, *, code_behind: str = "", original: str | None = None,
+                   style_reference: str | None = None,
                    preserved_properties: Iterable[str] = (), expected_tab_order: Iterable[str] = (),
                    inherited_handlers: Iterable[str] = (), column_edit_modes: Mapping[str, str] | None = None,
                    allowed_property_changes: Iterable[str] = (), control_sources: Sequence[str] = (),
@@ -21,6 +69,8 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
     result.metadata['comparison_baselines'] = {'designer': original is not None}
+    if style_reference is not None:
+        result.metadata['comparison_baselines']['style_reference'] = True
     renames = member_renames or {}
     if renames:
         if original is None:
@@ -34,6 +84,15 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
     baseline = parse_designer_source(original) if original is not None else None
     defaults = read_control_defaults(control_sources)
+    if style_reference is not None:
+        reference = parse_designer_source(style_reference)
+        retained_controls = {name for name, control in model.controls.items()
+                             if baseline is not None and name in baseline.controls and
+                             baseline.controls[name].type_name == control.type_name}
+        result.issues.extend(_check_reference_editor_defaults(with_control_base_types(model, defaults),
+            with_control_base_types(reference, defaults), retained_controls))
+        result.checked.append('new lookup/date button and label text-option initialization against the supplied comparison screen')
+        result.not_checked.append('runtime button visibility, label alignment and indirect control/base initialization')
     allowed_property_changes = tuple(allowed_property_changes)
     numeric_columns = tuple(numeric_columns)
     if allowed_property_changes:

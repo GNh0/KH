@@ -87,6 +87,22 @@ class CliTests(unittest.TestCase):
                 self.assertIn('user_control_default_override', {i['code'] for i in json.loads(result.stdout)['issues']})
             self.assertEqual(before, library.read_bytes())
 
+    def test_style_reference_and_constructor_size_are_available_from_cli(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            screen, reference, library = root/'screen.Designer.cs', root/'reference.Designer.cs', root/'LookupBox.cs'
+            screen.write_text('this.cboName = new Widgets.LookupBox(); this.cboName.Size = new Size(110, 25);', encoding='utf-8')
+            reference.write_text('this.cboRef = new Widgets.LookupBox(); this.cboRef.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton() });', encoding='utf-8')
+            library.write_text('namespace Widgets { public class LookupBox : DevExpress.XtraEditors.LookUpEdit { public LookupBox() { base.Size = new Size(150, 23); } } }', encoding='utf-8')
+            result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'designer', str(screen),
+                '--style-reference-designer', str(reference), '--control-source', str(library)],
+                cwd=root, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(1, result.returncode, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertTrue(output['comparison_baselines']['style_reference'])
+            self.assertIn('user_control_size_shrink', {item['code'] for item in output['issues']})
+            self.assertIn('editor_button_initialization_review', {item['code'] for item in output['issues']})
+
 
     def test_numeric_column_and_exemption_scope_are_reported_by_both_commands(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -33,6 +33,65 @@ def codes(source, **kwargs):
 
 
 class ControlDefaultsTests(unittest.TestCase):
+    def test_new_user_control_may_expand_but_must_not_shrink_to_short_text(self):
+        library = '''namespace Widgets { public class InputBox : TextEdit {
+            public InputBox() { base.Size = new System.Drawing.Size(150, 23); }
+        } }'''
+        prefix = 'this.txtName = new Widgets.InputBox(); '
+        shrunk = prefix + 'this.txtName.Size = new System.Drawing.Size(110, 25);'
+        finding = [i for i in check_designer(shrunk, control_sources=[library]).issues
+                   if i.code == 'user_control_size_shrink']
+        self.assertEqual(1, len(finding))
+        self.assertEqual('error', finding[0].severity)
+        self.assertEqual((150, 23), finding[0].details['constructor_size'])
+        self.assertEqual((110, 25), finding[0].details['screen_size'])
+        self.assertEqual('failed', check_designer(shrunk, control_sources=[library]).status)
+        expanded = prefix + 'this.txtName.Size = new System.Drawing.Size(170, 25);'
+        self.assertNotIn('user_control_size_shrink', codes(expanded, control_sources=[library]))
+        self.assertNotIn('user_control_default_override', codes(expanded, control_sources=[library]))
+        self.assertNotIn('user_control_size_shrink', codes(shrunk, original=shrunk, control_sources=[library]))
+        self.assertNotIn('user_control_size_shrink', codes(shrunk, control_sources=[library],
+            allowed_property_changes=['txtName.Size']))
+
+    def test_comparison_screen_exposes_missing_lookup_date_buttons_and_label_alignment(self):
+        reference = '''
+            this.cboRef = new Widgets.LookupBox();
+            this.cboRef.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton() });
+            this.ymdRef = new Widgets.CalendarBox();
+            this.ymdRef.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton() });
+            this.ymdRef.Properties.CalendarTimeProperties.Buttons.AddRange(new EditorButton[] { new EditorButton() });
+            this.lblRef = new Widgets.LabelBox();
+            this.lblRef.Appearance.Options.UseTextOptions = true;
+        '''
+        candidate = '''this.cboName = new Widgets.LookupBox();
+            this.ymdDate = new Widgets.CalendarBox();
+            this.lblName = new Widgets.LabelBox();'''
+        library = '''namespace Widgets {
+            public class LookupBox : DevExpress.XtraEditors.LookUpEdit { public LookupBox() {} }
+            public class CalendarBox : DevExpress.XtraEditors.DateEdit { public CalendarBox() {} }
+            public class LabelBox : DevExpress.XtraEditors.LabelControl { public LabelBox() {} }
+        }'''
+        result = check_designer(candidate, style_reference=reference, control_sources=[library])
+        findings = {i.details['control']: i for i in result.issues
+                    if i.code in {'editor_button_initialization_review', 'label_text_options_review'}}
+        self.assertEqual(['Properties.Buttons'], findings['cboName'].details['missing_button_paths'])
+        self.assertEqual(['Properties.Buttons', 'Properties.CalendarTimeProperties.Buttons'],
+                         findings['ymdDate'].details['missing_button_paths'])
+        self.assertIn('lblName', findings)
+        self.assertEqual(3, sum(i.code == 'editor_button_initialization_review' or i.code == 'label_text_options_review'
+                                for i in result.issues))
+        complete = candidate + '''
+            this.cboName.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton() });
+            this.ymdDate.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton() });
+            this.ymdDate.Properties.CalendarTimeProperties.Buttons.AddRange(new EditorButton[] { new EditorButton() });
+            this.lblName.Appearance.Options.UseTextOptions = true;'''
+        self.assertNotIn('editor_button_initialization_review', codes(complete, style_reference=reference,
+                                                                      control_sources=[library]))
+        self.assertNotIn('label_text_options_review', codes(complete, style_reference=reference,
+                                                            control_sources=[library]))
+        self.assertNotIn('editor_button_initialization_review', codes(candidate, original=candidate,
+                                                                      style_reference=reference, control_sources=[library]))
+
     def test_available_user_controls_are_not_limited_to_one_library_or_prefix(self):
         source = 'this.txtFind = new DevExpress.XtraEditors.TextEdit();'
         self.assertIn('available_user_control_preference', codes(source, control_sources=[LIBRARY]))

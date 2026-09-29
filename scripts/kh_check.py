@@ -28,6 +28,8 @@ def main(argv=None):
     designer.add_argument('--code-behind')
     designer.add_argument('--preserve-property', action='append', default=[])
     for command in (cs, designer):
+        command.add_argument('--style-reference-designer', metavar='ABSOLUTE_COMPARISON_DESIGNER',
+                             help='actual same-project screen used to review new editor buttons and label text options')
         command.add_argument('--preserve-existing', action='store_true',
                              help='compare retained Designer properties with the actual original; requires a Designer baseline')
         command.add_argument('--member-rename', action='append', default=[], metavar='OLD=NEW',
@@ -56,6 +58,11 @@ def main(argv=None):
         if args.command == 'sql' and args.candidate:
             pairs.append((args.input, args.candidate))
         elif args.command in {'csharp', 'designer'}:
+            if args.command == 'csharp' and args.style_reference_designer and not args.designer:
+                raise ValueError('--style-reference-designer with csharp requires --designer')
+            if args.style_reference_designer:
+                pairs.append((args.style_reference_designer,
+                              args.designer if args.command == 'csharp' else args.input))
             if args.original:
                 pairs.append((args.original, args.input))
             if args.command == 'csharp' and args.designer_original:
@@ -98,6 +105,7 @@ def main(argv=None):
                                    original=read_file(args.original).text() if args.original else None,
                                    designer=read_file(args.designer).text() if args.designer else None,
                                    original_designer=read_file(args.designer_original).text() if args.designer_original else None,
+                                   style_reference_designer=read_file(args.style_reference_designer).text() if args.style_reference_designer else None,
                                    column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change,
                                    control_sources=control_sources, numeric_columns=args.numeric_column,
                                    preserve_existing=args.preserve_existing, member_renames=member_renames)
@@ -105,6 +113,7 @@ def main(argv=None):
             from src.csharp.designer import check_designer
             result = check_designer(read_file(args.input).text(),
                 original=read_file(args.original).text() if args.original else None,
+                style_reference=read_file(args.style_reference_designer).text() if args.style_reference_designer else None,
                 code_behind=read_file(args.code_behind).text() if args.code_behind else '',
                 preserved_properties=args.preserve_property, column_edit_modes=column_modes,
                 allowed_property_changes=args.allow_property_change, control_sources=control_sources, numeric_columns=args.numeric_column,
