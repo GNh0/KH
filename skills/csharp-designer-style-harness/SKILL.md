@@ -36,7 +36,7 @@ Trace defaults through actual shared-form initialization/helpers as well as user
 
 Do not arbitrarily add changed properties to --allow-property-change to suppress warnings. Excluded checks are not passing evidence; verify the actual requirement and necessity separately.
 
-Check the full lifecycle for a full-screen request; keep a local edit scoped. Validate the actual requested behavior at completion. Build results do not guarantee UI or save behavior.
+Check the full lifecycle for a full-screen request; keep a local edit scoped. For focused-row saving, check successful-save state recovery and pending-edit protection during row movement together using the [data and event contracts](references/data-flow.md). Validate the actual requested behavior at completion. Build results do not guarantee UI or save behavior.
 
 The checker's `status=passed` means the executed static checks found no errors. Read every relevant warning as well as `comparison_baselines`, `review_status`, and `not_checked`; a count of warnings is not their resolution. To verify preservation, supply the actual original and compare retained Designer properties, including rename mappings. For a new import or a requested full style correction, also inspect the candidate without an original so inherited mistakes are not hidden as unchanged source. Follow [comparison modes](references/checks.md); a foreign C# original is not a target-style baseline. Reading the skill or passing the checker alone does not establish project-style compliance.
 # Limits of supplied snippets
