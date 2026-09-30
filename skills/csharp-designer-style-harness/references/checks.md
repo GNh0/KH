@@ -58,12 +58,8 @@ C# checks compare current methods with originals and warn about these candidates
 - `input_tag_binding_review`: an SP parameter uses Tag from an input control whose type is known from the supplied Designer/control sources. It does not reject button action metadata or resolve indirect code/name mappings.
 - `focus_edit_gate_order_review`: a top-level negative focused-row return precedes an edit-mode guard in a recognized FocusedRowChanged method. Other event/order paths and branch feasibility need source review.
 - `action_tag_case_preference`: lowercase application-code candidates in a Tag switch or a new/changed button Tag assignment. Check both sites together and preserve externally defined case-sensitive values.
-- `save_success_notification_only_review`: a recognized save event's direct `if (CallSaveProcedure(...))` success block contains only notification calls. Trace actual caller/base cleanup and apply the requested post-save state; another call suppressing this narrow finding does not prove cleanup.
-- `focused_row_save_navigation_review`: a recognized save directly imports its focused DataRow and serializes XML, while matching local focus handlers and uniquely named same-type helpers show neither cancellation nor previous-row restoration. Inspect actual pending-edit identity, event wiring and the [save/movement lifecycle](data-flow.md#successful-save-and-movement-with-pending-edits). A rebind flag alone is insufficient. Overloaded, inherited, indirect or differently structured save/event paths require manual review.
 
 These structure-aware warnings do not prohibit all validation, loops, helpers, fixed operations, Tag usage, or requerying. They do not automatically resolve method aliases, indirect calls, local-function bodies, general conditional execution order, or actual server numbering/required fields. Complete preservation of original commented bodies is also outside this check; compare those requests against actual bodies separately. Comparing added helpers requires `--original`. Supply required actual control source through existing `--control-source` arguments without asking the user for new profiles or approval files.
-
-Neither finding verifies successful-save recovery, correct dirty-state detection, confirmation results, row-scoped discard, handler subscription or effective runtime cancellation. An observed cancellation/restoration statement is not a semantic pass; these limits remain in `not_checked`.
 
 ## Preserving original Designer properties
 

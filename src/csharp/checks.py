@@ -64,9 +64,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     result.issues.extend(check_project_flow(candidate, original=original,
         control_types=flow_types,
         control_sources=control_sources))
-    result.checked.append('recognizable UI/data helpers, entry queries, save gates, save-mode literals, original-row comparisons, input Tag values, action codes, focus-guard ordering, notification-only save success and local focused-XML navigation actions')
+    result.checked.append('recognizable UI/data helpers, entry queries, save gates, save-mode literals, original-row comparisons, input Tag values, action codes and focus-guard ordering')
     result.not_checked.append('necessity of validation, dynamic edit-mode values, indirect event order, XML/SP field ownership and project-wide coding-style compliance')
-    result.not_checked.append('successful-save state recovery, pending-edit identity, confirmation/discard semantics, focus-handler wiring, inherited protection and runtime navigation; observed local actions are not proof of protection')
     for call in ("PostEditor", "UpdateCurrentRow"):
         if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
             result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))

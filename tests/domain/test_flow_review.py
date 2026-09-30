@@ -64,60 +64,6 @@ class FlowReviewTests(unittest.TestCase):
         source += screen('Screen_SearchCommand', 'if (value == null) { ShowMessage("선택"); return; }')
         self.assertNotIn('save_gate_review', self.codes(source, original=''))
 
-    def test_notification_only_save_success_needs_lifecycle_review(self):
-        source = screen('Screen_SaveCommand', 'if (CallSaveProcedure()) { ShowMessage("완료"); }')
-        self.assertIn('save_success_notification_only_review', self.codes(source))
-        self.assertNotIn('save_success_notification_only_review', self.codes(source, original=source))
-        for follow_up in ['CallCommand(BizCommand.Search);', 'RestoreSavedRow();']:
-            self.assertNotIn('save_success_notification_only_review', self.codes(screen(
-                'Screen_SaveCommand', 'if (CallSaveProcedure()) { ShowMessage("완료"); ' + follow_up + ' }')))
-        self.assertNotIn('save_success_notification_only_review', self.codes(screen(
-            'Other_Click', 'if (CallSaveProcedure()) { ShowMessage("완료"); }')))
-
-    def test_focused_xml_save_without_navigation_protection_is_reviewed(self):
-        save = 'private bool CallSaveProcedure() { DataRow row = gvwList.GetFocusedDataRow(); '
-        save += 'table.ImportRow(row); DataUtil.DataTableToXml(table); return true; }'
-        changed = 'private void GvwList_FocusedRowChanged(object sender, FocusedRowChangedEventArgs e) { '
-        changed += 'if (!isBinding) { return; } BindEquipment(); }'
-        source = 'class Screen { ' + save + changed + ' }'
-        self.assertIn('focused_row_save_navigation_review', self.codes(source))
-        self.assertNotIn('focused_row_save_navigation_review', self.codes(source, original=source))
-        result = check_csharp(source)
-        self.assertTrue(result.success)
-        self.assertEqual('needs_review', result.metadata['review_status'])
-        self.assertNotIn('focused_row_save_navigation_review', self.codes('class Screen { ' + changed + ' }'))
-
-    def test_focus_protection_must_belong_to_the_saved_grid_and_type(self):
-        save = 'private bool CallSaveProcedure() { DataRow row = gvwList.GetFocusedDataRow(); '
-        save += 'table.ImportRow(row); DataUtil.DataTableToXml(table); return true; }'
-        changed = 'private void GvwList_FocusedRowChanged(object sender, FocusedRowChangedEventArgs e) { BindEquipment(); }'
-        changing = 'private void GvwList_FocusedRowChanging(object sender, FocusedRowChangingEventArgs e) { '
-        changing += 'if (table.HasChanges()) { e.Cancel = true; } }'
-        self.assertNotIn('focused_row_save_navigation_review', self.codes('class Screen { ' + save + changed + changing + ' }'))
-        self.assertIn('focused_row_save_navigation_review', self.codes('class Screen { ' + save + changed + changing.replace('GvwList_', 'GvwOther_') + ' }'))
-        self.assertIn('focused_row_save_navigation_review', self.codes('class Screen { ' + save + changed + ' } class Other { ' + changing + ' }'))
-
-    def test_focus_restore_and_actual_local_helper_are_detected(self):
-        save = 'private bool CallSaveProcedure() { DataRow row = gvwList.GetFocusedDataRow(); '
-        save += 'table.ImportRow(row); DataUtil.DataTableToXml(table); return true; }'
-        for handler in ['GvwList_FocusedRowChanged', 'OnRowChange']:
-            subscription = 'public Screen() { gvwList.FocusedRowChanged += ' + handler + '; }'
-            changed = 'private void ' + handler + '(object sender, FocusedRowChangedEventArgs e) { GuardMovement(e); }'
-            helper = 'private void GuardMovement(FocusedRowChangedEventArgs e) { '
-            helper += 'if (table.HasChanges()) { isBinding = false; gvwList.FocusedRowHandle = e.PrevFocusedRowHandle; isBinding = true; return; } }'
-            source = 'class Screen { ' + subscription + save + changed + helper + ' }'
-            self.assertNotIn('focused_row_save_navigation_review', self.codes(source))
-            broken = source.replace('gvwList.FocusedRowHandle = e.PrevFocusedRowHandle;', '')
-            self.assertIn('focused_row_save_navigation_review', self.codes(broken, original=source))
-
-    def test_lifecycle_review_does_not_treat_comments_or_strings_as_protection(self):
-        save = 'private bool CallSaveProcedure() { DataRow row = gvwList.GetFocusedDataRow(); '
-        save += 'table.ImportRow(row); DataUtil.DataTableToXml(table); return true; }'
-        changed = 'private void GvwList_FocusedRowChanged(object sender, FocusedRowChangedEventArgs e) { '
-        changed += '// e.Cancel = true;\nstring sample = "gvwList.FocusedRowHandle = e.PrevFocusedRowHandle;"; BindEquipment(); }'
-        self.assertIn('focused_row_save_navigation_review', self.codes('class Screen { ' + save + changed + ' }'))
-        self.assertNotIn('focused_row_save_navigation_review', self.codes('class Screen { string sample = """' + save + changed + '"""; }'))
-
     def test_manual_selected_row_deletion_is_reviewed(self):
         source = screen('Remove_Click', 'int[] rows = view.GetSelectedRows(); for (int i = rows.Length - 1; i >= 0; i--) { DataRow row = view.GetDataRow(rows[i]); if (row != null) { row.Delete(); } }')
         self.assertIn('manual_selected_row_delete', self.codes(source, original=screen('Remove_Click', '')))
