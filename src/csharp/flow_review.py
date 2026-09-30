@@ -6,8 +6,11 @@ import re
 
 from src.common.results import Issue
 from .control_defaults import _same_type, read_control_defaults
+from .control_names import known_control_kind
+from .control_style import direct_statement_spans
 from .lexer import _scan_csharp, balanced_close, string_literal_value
 from .source import _method_declaration_matches, _target_local_method_inventory
+from .syntax import parameter_constructor_sites
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,11 @@ _MESSAGES = {
     'row_header_propagation_review': 'Review this new header/context assignment to a new detail row against XML/SP field ownership. Assign only fields the target detail contract requires.',
     'date_helper_review': 'The supplied target control exposes SetToDay(int), or this member already uses it. Prefer that existing date API when it matches the requested initialization; inspect intentional semantic differences.',
     'ui_state_policy_review': 'A screen boolean field controls editing, action availability or an event gate. Compare its declaration, reset, assignment and uses with the actual source and request. Do not introduce or broaden a business restriction as a style change.',
+    'save_worktype_literal_review': 'A save boundary supplies a literal WORKTYPE. Follow the actual target edit-mode API and matching SP branches; retain a fixed operation only when that operation is required by the current contract.',
+    'manual_original_row_comparison_review': 'A save manually compares several original field values before skipping a row. Review the existing DataRowState/XML change-selection contract instead of adding a second field-by-field change detector.',
+    'input_tag_binding_review': 'An input control Tag is passed as an SP value. Trace the actual code/name binding and use its established EditValue or separate key control; action metadata in Tag is a different contract.',
+    'focus_edit_gate_order_review': 'A negative focused-row return precedes an edit-mode guard in FocusedRowChanged. Check whether filter-row focus can bypass the guard; apply the target row-movement protection before that return when required.',
+    'action_tag_case_preference': 'Use the agreed uppercase application action code consistently in button Tag assignments and matching switch cases. Preserve externally defined case-sensitive values when the actual contract requires them.',
 }
 
 
@@ -41,6 +49,33 @@ def _methods(code: str):
             continue
         previous_end = closing + 1
         yield match, opening + 1, closing
+
+
+def _parameter_values(source: str):
+    """Observe a directly named parameter's second constructor argument."""
+    code, _ = _scan_csharp(source)
+    for _, name, offset in parameter_constructor_sites(source):
+        if name is None:
+            continue
+        opening = code.find('(', offset)
+        closing = balanced_close(code, opening, '(', ')')
+        if closing < 0:
+            continue
+        _, tokens = _scan_csharp(source[opening + 1:closing])
+        if len(tokens) < 3 or tokens[1][1] != ',':
+            continue
+        start = opening + 1 + tokens[2][2]
+        end = closing
+        depth = 0
+        for _, value, left, _ in tokens[2:]:
+            if value in {'(', '[', '{'}:
+                depth += 1
+            elif value in {')', ']', '}'}:
+                depth -= 1
+            elif value == ',' and depth == 0:
+                end = opening + 1 + left
+                break
+        yield name, source[start:end].strip(), offset, closing + 1
 
 
 def _date_types(sources: Sequence[str]) -> set[str]:
@@ -120,7 +155,7 @@ def _state_policies(source: str, code: str) -> list[_Finding]:
 
 
 def _findings(source: str, *, control_types: Mapping[str, str], date_types: set[str],
-              known_date_members: set[str]) -> list[_Finding]:
+              known_date_members: set[str], input_members: set[str]) -> list[_Finding]:
     code, _ = _scan_csharp(source)
     helpers = {item['name'] for item in _target_local_method_inventory(code)}
     findings = _state_policies(source, code)
@@ -144,6 +179,15 @@ def _findings(source: str, *, control_types: Mapping[str, str], date_types: set[
                     add('entry_query_review', call.start(), close + 1)
 
         is_save = 'SaveCommandEventArgs' in declaration['parameters'] or name == 'CallSaveProcedure' or name.endswith('_SaveCommand')
+        for parameter, value, left, right in _parameter_values(source[start:end]):
+            literal = string_literal_value(value)
+            if is_save and parameter.upper() == '@WORKTYPE' and literal is not None:
+                add('save_worktype_literal_review', left, right)
+            value_code, _ = _scan_csharp(value)
+            for tag in re.finditer(r'\b(?:this\.)?(\w+)\.Tag\b', value_code):
+                if tag[1] in input_members:
+                    add('input_tag_binding_review', left, right)
+
         if is_save:
             for condition in re.finditer(r'\bif\s*\(', body):
                 close = balanced_close(body, condition.end() - 1, '(', ')')
@@ -156,6 +200,55 @@ def _findings(source: str, *, control_types: Mapping[str, str], date_types: set[
                 fragment = body[condition.start():closing + 1] if closing >= 0 else ''
                 if re.search(r'\bShowMessage\w*\s*\(', fragment) and re.search(r'\breturn\b', fragment):
                     add('save_gate_review', condition.start(), closing + 1)
+                comparison = body[condition.end():close]
+                if (len(re.findall(r'\bDataRowVersion\.Original\b', comparison)) >= 2
+                        and re.search(r'\bEquals\s*\(', comparison) and re.search(r'\bcontinue\b', fragment)):
+                    add('manual_original_row_comparison_review', condition.start(), closing + 1)
+
+        if name.endswith('_FocusedRowChanged') or 'FocusedRowChangedEventArgs' in declaration['parameters']:
+            negative_guard = None
+            for left, right in direct_statement_spans(source[start:end]):
+                statement = body[left:right]
+                condition = re.match(r'\s*if\s*\(', statement)
+                if condition is None:
+                    continue
+                close = balanced_close(statement, condition.end() - 1, '(', ')')
+                if close < 0:
+                    continue
+                expression = statement[condition.end():close]
+                if re.search(r'\bFocusedRowHandle\s*<\s*0\b', expression) and re.search(r'\breturn\b', statement[close:]):
+                    negative_guard = (left, right)
+                elif (re.search(r'\bm_Editmode\b', expression) and
+                      re.search(r'\breturn\b|\b(?:FocusedRowHandle|Cancel)\s*=', statement[close:])):
+                    if negative_guard is not None:
+                        add('focus_edit_gate_order_review', *negative_guard)
+                    break
+
+        for switch in re.finditer(r'\bswitch\s*\(', body):
+            close = balanced_close(body, switch.end() - 1, '(', ')')
+            if close < 0 or not re.search(r'\.Tag\b', body[switch.end():close]):
+                continue
+            opening = close + 1
+            while opening < len(body) and body[opening].isspace():
+                opening += 1
+            if body[opening:opening + 1] != '{':
+                continue
+            closing = balanced_close(body, opening, '{', '}')
+            if closing < 0:
+                continue
+            _, tokens = _scan_csharp(source[start + opening + 1:start + closing])
+            depth = 0
+            for index, (_, value, left, _) in enumerate(tokens):
+                if value == '{':
+                    depth += 1
+                elif value == '}':
+                    depth -= 1
+                elif value == 'case' and depth == 0 and index + 2 < len(tokens) and tokens[index + 2][1] == ':':
+                    literal = tokens[index + 1]
+                    raw = source[start + opening + 1 + literal[2]:start + opening + 1 + literal[3]]
+                    label = string_literal_value(raw)
+                    if label and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', label) and label != label.upper():
+                        add('action_tag_case_preference', opening + 1 + left, opening + 1 + literal[3])
 
         if (re.search(r'\b(?:for|foreach)\s*\(', body) and re.search(r'\.GetSelectedRows\s*\(', body)
                 and re.search(r'\.GetDataRow\s*\(', body)):
@@ -190,12 +283,28 @@ def check_project_flow(source: str, *, original: str | None = None,
     before, _ = _scan_csharp(original or '')
     known_members = set(re.findall(r'\b(?:this\.)?(\w+)\.SetToDay\s*\(', before))
     date_types = _date_types(control_sources)
-    types = control_types or {}
+    types = dict(control_types or {})
+    defaults = read_control_defaults(control_sources)
+    input_members: set[str] = set()
+    for name, type_name in types.items():
+        seen: set[str] = set()
+        while type_name not in seen:
+            seen.add(type_name)
+            matching = [item for item in defaults if _same_type(type_name, item.type_name)]
+            if len(matching) != 1:
+                break
+            type_name = matching[0].base_type
+        if known_control_kind(type_name) in {
+            'TextEdit', 'TextBox', 'ButtonEdit', 'LookUpEdit', 'GridLookUpEdit', 'DateEdit', 'SpinEdit', 'MemoEdit',
+        }:
+            input_members.add(name)
     existing_methods = {m['name'] + '(' + re.sub(r'\s+', ' ', m['parameters']).strip() + ')' for m, _, _ in _methods(before)}
     previous = Counter((item.code, item.method, item.evidence) for item in _findings(
-        original or '', control_types=types, date_types=date_types, known_date_members=known_members))
+        original or '', control_types=types, date_types=date_types, known_date_members=known_members,
+        input_members=input_members))
     issues: list[Issue] = []
-    for item in _findings(source, control_types=types, date_types=date_types, known_date_members=known_members):
+    for item in _findings(source, control_types=types, date_types=date_types, known_date_members=known_members,
+                          input_members=input_members):
         key = item.code, item.method, item.evidence
         if previous[key]:
             previous[key] -= 1

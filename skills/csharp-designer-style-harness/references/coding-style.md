@@ -16,6 +16,7 @@ A current request to preserve the original and edit only part of it is more spec
 - Prefer explicit types such as DataTable/DataRow/DataSet and string/int/decimal/bool. Do not batch-convert `var` or clean up an entire existing file. Write properties with `get { ... }` blocks, not expression bodies.
 - Follow existing `str...`, `dt...`, `dr...`, `ds...`, and `grd/gvw/col/rps/txt/btn` names. Follow the current file's prefixes/casing for numeric and state variables. Do not impose a sample business name or one prefix as a global naming rule.
 - Preserve early returns, explicit assignments, and existing switch branches. Check parsing success and compare the resulting value in separate if statements. Inline TryParse/ternary expressions in references do not override this agreement; this does not prohibit every ternary expression.
+- Use string interpolation for composed display text such as an item name plus a count. Preserve SQL/XML/key construction semantics rather than mechanically rewriting every concatenation. Use uppercase application action codes in button Tag values and their matching switch cases; retain the case of externally defined identifiers.
 
 ```csharp
 DataTable dtList
@@ -50,6 +51,8 @@ Follow the existing FrmDevBase screen structure: SelectType enum → state field
 Keep static control declarations, creation, layout, and properties in Designer. Follow the actual screen's constructor pattern of subscribing named handlers after `InitializeComponent()`. Do not arbitrarily convert Load/SearchCommand/NewCommand/EditCommand/SaveCommand/DeleteCommand/ClearCommand or grid/button/Repository events to lambdas or move them into Designer. Do not duplicate subscriptions already made in Designer or another initialization path. Honor actual dynamic subscription/unsubscription requirements according to the event's lifetime.
 
 Keep queries/saves in existing `CallSelectProcedure`/`CallSaveProcedure` methods and connect screen-command events to that flow. Reuse existing helpers with actual roles, such as `fnFocusedRowChanged`, `SetEditMode`, and `PopUpItems`. Do not create a new helper or generic layer for every short code fragment.
+
+Name new handlers from the actual control/event and the current project's casing. A shared handler is appropriate when the target actually uses that pattern; do not invent a generic event layer merely to combine a few lines. Check constructor and Designer subscriptions together, especially Repository ButtonClick plus grid RowCellClick routes that could open the same popup twice.
 
 ## Database and row handling
 

@@ -56,6 +56,18 @@ class CSharpTests(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 class DesignerEdgeTests(unittest.TestCase):
+    def test_missing_editor_comparison_is_reported_as_unchecked(self):
+        result = check_designer('this.cboUser = new KoneLib.Controls.u_LookUpEdit();')
+        self.assertTrue(any('no same-project comparison Designer' in item for item in result.not_checked))
+        self.assertFalse(any('against the supplied comparison screen' in item for item in result.checked))
+
+    def test_identical_constructor_information_is_not_an_unresolved_warning(self):
+        control = 'namespace Widgets { public class InputBox : TextEdit { public InputBox() { base.Properties.AutoHeight = false; } } }'
+        result = check_designer('this.txtCode = new Widgets.InputBox(); this.txtCode.Properties.AutoHeight = false;', control_sources=[control])
+        self.assertEqual(['info'], [issue.severity for issue in result.issues])
+        self.assertEqual('static_checks_only', result.metadata['review_status'])
+        self.assertFalse(result.metadata['project_style_verified'])
+
     def test_new_code_behind_font_assignment_is_reviewed(self):
         before = 'class Form { void Load() {\n} }'
         after = 'class Form { void Load() {\nthis.btn.Font = new System.Drawing.Font("Arial", 10F);\n} }'

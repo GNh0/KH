@@ -78,6 +78,19 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(['tool_return_recorded', 'call_without_observed_return'], [x['observed_state'] for x in report['tool_calls']])
             self.assertNotIn('private-value', json.dumps(report))
 
+    def test_ui_context_wrappers_are_not_human_requests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'session.jsonl'
+            messages = ['<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>',
+                        '<recommended_plugins>plugin list</recommended_plugins>',
+                        '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>\nFix the selected source',
+                        'Fix the source']
+            path.write_text('\n'.join(json.dumps({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': text}})
+                                      for text in messages), encoding='utf-8')
+            report = inspect_sessions([path])
+            self.assertEqual(2, len(report['user_candidates']))
+            self.assertEqual(2, report['files'][0]['counts']['environment_or_automatic_records'])
+
     def test_session_excerpts_mask_secret_and_do_not_auto_infer_preference(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'session.jsonl'

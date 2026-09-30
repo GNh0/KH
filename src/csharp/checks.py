@@ -64,8 +64,11 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     result.issues.extend(check_project_flow(candidate, original=original,
         control_types=flow_types,
         control_sources=control_sources))
-    result.checked.append('new recognizable UI/data helpers, entry queries, save gates, row handling and supplied date APIs')
-    result.not_checked.append('necessity of new validation, target event state, XML/SP field ownership and project-wide coding-style compliance')
+    result.checked.append('recognizable UI/data helpers, entry queries, save gates, save-mode literals, original-row comparisons, input Tag values, action codes and focus-guard ordering')
+    result.not_checked.append('necessity of validation, dynamic edit-mode values, indirect event order, XML/SP field ownership and project-wide coding-style compliance')
+    for call in ("PostEditor", "UpdateCurrentRow"):
+        if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
+            result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))
     result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, defaults=defaults,
                          allowed_property_changes=allowed_property_changes, check_declarations=designer is None))
     result.issues.extend(check_grid_style(with_control_base_types(candidate_model, defaults),
@@ -84,9 +87,6 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         for signature, count in (old_methods - new_methods).items():
             if signature not in allowed.get("removed_methods", []):
                 result.issues.append(Issue("target_method_removed", "warning", "Review removal of an established target-local method against the requested change.", details={"signature": signature, "count": count}))
-        for call in ("PostEditor", "UpdateCurrentRow"):
-            if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
-                result.issues.append(Issue("new_edit_commit_call", "warning", "Confirm why this new edit-commit call is needed in the actual framework path.", details={"call": call}))
         for finding in _transaction_invocation_drift_issues(before, code):
             if finding["code"] not in allowed.get("issue_codes", []):
                 result.issues += from_legacy_issues([finding])
@@ -149,7 +149,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                 result.issues.append(issue)
         result.checked.append('supplied numeric column bindings including explicit code-behind assignments')
         result.not_checked.append('runtime paths, dynamic column recreation and unsupplied numeric data types')
-    result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
+    result.metadata['review_status'] = 'needs_review' if any(i.severity != 'info' for i in result.issues) else 'static_checks_only'
     result.metadata['project_style_verified'] = False
     return result
 

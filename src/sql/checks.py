@@ -1,10 +1,63 @@
 """Distinguish SQL preservation errors from scoped style preferences."""
+from collections import Counter
 import re
 from src.common.results import CheckResult, HarnessResult, Issue
 from .compare import compare_sql
-from .lexer import _analyze_sql_integrity, _masked_sql
+from .lexer import _analyze_sql_integrity, _masked_sql, _scan_sql_tokens
 from .layout import _style_lint
 from .delta import _full_replace_records
+
+
+def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]]]:
+    """Observe explicit hints and aliased empty CAST results, not their necessity."""
+    tokens = [token for token in _scan_sql_tokens(source)[0]
+              if token.kind not in {'line_comment', 'block_comment'}]
+    findings: list[tuple[str, str, int, dict[str, str]]] = []
+    for index, token in enumerate(tokens):
+        if token.kind != 'word' or index + 1 >= len(tokens) or tokens[index + 1].text != '(':
+            continue
+        closing = index + 2
+        depth = 1
+        while closing < len(tokens):
+            value = tokens[closing].text
+            if value == '(':
+                depth += 1
+            elif value == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            closing += 1
+        if closing >= len(tokens):
+            continue
+        if token.normalized == 'WITH':
+            for hint in tokens[index + 2:closing]:
+                if hint.kind == 'word' and hint.normalized in {'UPDLOCK', 'HOLDLOCK'}:
+                    findings.append(('locking_hint_review', hint.normalized, hint.start, {'hint': hint.normalized}))
+        elif (token.normalized == 'CAST' and index + 4 < closing and
+              tokens[index + 2].normalized in {"''", "N''", 'NULL'} and
+              tokens[index + 3].normalized == 'AS' and closing + 2 < len(tokens) and
+              tokens[closing + 1].normalized == 'AS' and
+              tokens[closing + 2].kind in {'word', 'bracket_identifier', 'quoted_identifier'}):
+            field = tokens[closing + 2].text
+            identity = repr([t.normalized for t in tokens[index:closing + 3]])
+            findings.append(('synthetic_result_field_review', identity, token.start, {'field': field}))
+    return findings
+
+
+def _review_generation_choices(candidate: str, original: str | None) -> list[Issue]:
+    previous = Counter((code, identity) for code, identity, _, _ in _generation_choices(original or ''))
+    messages = {
+        'locking_hint_review': 'Review this added locking hint against the actual target concurrency and transaction contract. Do not add UPDLOCK/HOLDLOCK routinely; retain them when the requested behavior or verified necessity requires them.',
+        'synthetic_result_field_review': 'This output field is a typed empty or NULL placeholder. Check the requested target result/binding contract; remove excluded source-only fields instead of carrying them as placeholders, and keep a placeholder only when the actual output type contract requires it.',
+    }
+    issues: list[Issue] = []
+    for code, identity, offset, details in _generation_choices(candidate):
+        if previous[(code, identity)]:
+            previous[(code, identity)] -= 1
+            continue
+        issues.append(Issue(code, 'warning', messages[code],
+                            line=candidate.count('\n', 0, offset) + 1, details=details))
+    return issues
 
 
 def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: bool = False,
@@ -41,6 +94,10 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
                           ("subquery_preference", r"\b(?:WHERE|AND|OR)\b[^;]*?\b(?:NOT\s+EXISTS|IN\s*\(\s*SELECT)")]:
         if len(re.findall(pattern, masked, re.I)) > len(re.findall(pattern, previous, re.I)):
             result.issues.append(Issue(code, "warning", "Use the preferred existing form unless avoiding this construct makes implementation difficult or the alternative performs extremely worse."))
+    result.issues.extend(_review_generation_choices(candidate, original))
+    result.checked.append('explicit added locking hints and aliased typed-empty output fields')
+    result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')
+    result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
     return result
 
 

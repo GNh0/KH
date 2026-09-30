@@ -75,6 +75,9 @@ def inspect_sessions(paths, *, pattern=None, excerpt_chars=240):
                 if not prose or prose.startswith(('<environment_context>', '<user_instructions>', '<turn_aborted>', '<automations_context>')):
                     counts['environment_or_automatic_records'] += 1
                     continue
+                if re.fullmatch(r'<(recommended_plugins|external_codex_apps_open_page)>[\s\S]*</\1>', prose):
+                    counts['environment_or_automatic_records'] += 1
+                    continue
                 digest = hashlib.sha256(prose.encode('utf-8')).hexdigest()
                 if last_user and digest == last_user[0] and kind != last_user[1] and line_number - last_user[2] <= 5:
                     counts['adjacent_user_mirrors'] += 1
