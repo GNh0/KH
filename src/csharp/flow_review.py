@@ -35,6 +35,8 @@ _MESSAGES = {
     'input_tag_binding_review': 'An input control Tag is passed as an SP value. Trace the actual code/name binding and use its established EditValue or separate key control; action metadata in Tag is a different contract.',
     'focus_edit_gate_order_review': 'A negative focused-row return precedes an edit-mode guard in FocusedRowChanged. Check whether filter-row focus can bypass the guard; apply the target row-movement protection before that return when required.',
     'action_tag_case_preference': 'Use the agreed uppercase application action code consistently in button Tag assignments and matching switch cases. Preserve externally defined case-sensitive values when the actual contract requires them.',
+    'save_success_notification_only_review': 'This direct save-success block only displays a message. Trace the actual caller/base path and restore the requested saved-row values, row state, edit mode and control protection after success. A message alone does not complete that lifecycle; preserve pending changes on failure.',
+    'focused_row_save_navigation_review': 'A save imports the focused row into XML, but the corresponding local focus handlers show no cancellation or previous-row restoration. Verify the edited row identity and either block movement while edits are pending or confirm discard and restore that row before rebinding the next row. Binding-event suppression alone is not edit protection.',
 }
 
 
@@ -49,6 +51,73 @@ def _methods(code: str):
             continue
         previous_end = closing + 1
         yield match, opening + 1, closing
+
+
+def _is_save_boundary(declaration: re.Match[str]) -> bool:
+    return ('SaveCommandEventArgs' in declaration['parameters'] or
+            declaration['name'] == 'CallSaveProcedure' or declaration['name'].endswith('_SaveCommand'))
+
+
+def _focused_xml_navigation(code: str,
+                            methods: Sequence[tuple[re.Match[str], int, int]]) -> list[_Finding]:
+    """Observe one direct focused-row XML path and its supplied local handlers."""
+    owners = []
+    for owner in re.finditer(r'\bclass\s+\w+[^{}]*\{', code):
+        closing = balanced_close(code, owner.end() - 1, '{', '}')
+        if closing >= 0:
+            owners.append((owner.end(), closing))
+
+    def scope_at(offset: int) -> int:
+        return max((left for left, right in owners if left <= offset < right), default=-1)
+
+    local: dict[tuple[int, str], list[tuple[re.Match[str], int, int]]] = {}
+    saved_views: set[tuple[int, str]] = set()
+    for declaration, start, end in methods:
+        scope = scope_at(start)
+        local.setdefault((scope, declaration['name']), []).append((declaration, start, end))
+        body = code[start:end]
+        if not _is_save_boundary(declaration) or not re.search(r'\bDataTableToXml\s*\(', body):
+            continue
+        for row in re.finditer(r'\b(?:DataRow|var)\s+(\w+)\s*=\s*(?:this\.)?(\w+)\.GetFocusedDataRow\s*\(\s*\)', body):
+            if re.search(r'\.ImportRow\s*\(\s*' + re.escape(row[1]) + r'\s*\)', body):
+                saved_views.add((scope, row[2]))
+
+    def reachable_bodies(scope: int, name: str) -> str:
+        pending, visited, parts = [name], set(), []
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            matches = local.get((scope, current), [])
+            if len(matches) != 1:
+                continue
+            _, start, end = matches[0]
+            fragment = code[start:end]
+            parts.append(fragment)
+            for call in re.finditer(r'(?<![\w.])(?:this\.)?(\w+)\s*\(', fragment):
+                if (scope, call[1]) in local:
+                    pending.append(call[1])
+        return '\n'.join(parts)
+
+    findings = []
+    for scope, view in sorted(saved_views):
+        subscribed = {m[1] for m in re.finditer(
+            r'\b(?:this\.)?' + re.escape(view) + r'\.FocusedRow(?:Changing|Changed)\s*\+=\s*(?:this\.)?(\w+)\s*;', code)
+            if scope_at(m.start()) == scope}
+        handlers = [(d, start, end) for d, start, end in methods if scope_at(start) == scope and
+                    (d['name'] in subscribed or d['name'].lower() in {
+                        view.lower() + '_focusedrowchanged', view.lower() + '_focusedrowchanging'})]
+        bodies = '\n'.join(reachable_bodies(scope, d['name']) for d, _, _ in handlers)
+        has_action = (re.search(r'\b\w+\.Cancel\s*=\s*true\b', bodies) or re.search(
+            r'\b(?:this\.)?' + re.escape(view) + r'\.FocusedRowHandle\s*=\s*\w+\.PrevFocusedRowHandle\b', bodies))
+        if not handlers or has_action:
+            continue
+        declaration = handlers[0][0]
+        signature = declaration['name'] + '(' + re.sub(r'\s+', ' ', declaration['parameters']).strip() + ')'
+        evidence = repr((view, [(kind, value) for kind, value, _, _ in _scan_csharp(bodies)[1]]))
+        findings.append(_Finding('focused_row_save_navigation_review', signature, evidence, declaration.start('name')))
+    return findings
 
 
 def _parameter_values(source: str):
@@ -158,8 +227,9 @@ def _findings(source: str, *, control_types: Mapping[str, str], date_types: set[
               known_date_members: set[str], input_members: set[str]) -> list[_Finding]:
     code, _ = _scan_csharp(source)
     helpers = {item['name'] for item in _target_local_method_inventory(code)}
-    findings = _state_policies(source, code)
-    for declaration, start, end in _methods(code):
+    methods = list(_methods(code))
+    findings = _state_policies(source, code) + _focused_xml_navigation(code, methods)
+    for declaration, start, end in methods:
         name = declaration['name']
         signature = name + '(' + re.sub(r'\s+', ' ', declaration['parameters']).strip() + ')'
         body = code[start:end]
@@ -178,7 +248,7 @@ def _findings(source: str, *, control_types: Mapping[str, str], date_types: set[
                 if close >= 0:
                     add('entry_query_review', call.start(), close + 1)
 
-        is_save = 'SaveCommandEventArgs' in declaration['parameters'] or name == 'CallSaveProcedure' or name.endswith('_SaveCommand')
+        is_save = _is_save_boundary(declaration)
         for parameter, value, left, right in _parameter_values(source[start:end]):
             literal = string_literal_value(value)
             if is_save and parameter.upper() == '@WORKTYPE' and literal is not None:
@@ -201,6 +271,17 @@ def _findings(source: str, *, control_types: Mapping[str, str], date_types: set[
                 if re.search(r'\bShowMessage\w*\s*\(', fragment) and re.search(r'\breturn\b', fragment):
                     add('save_gate_review', condition.start(), closing + 1)
                 comparison = body[condition.end():close]
+                if name != 'CallSaveProcedure':
+                    expression = comparison.strip()
+                    save_call = re.match(r'(?:this\.)?CallSaveProcedure\s*\(', expression)
+                    success_body = source[start + opening + 1:start + closing] if closing >= 0 else ''
+                    statements = [body[opening + 1 + left:opening + 1 + right].strip()
+                                  for left, right in direct_statement_spans(success_body)]
+                    notifications = [re.fullmatch(r'(?:this\.)?ShowMessage\w*\s*\([\s\S]*\)\s*;', statement)
+                                     for statement in statements]
+                    if (save_call and balanced_close(expression, save_call.end() - 1, '(', ')') == len(expression) - 1
+                            and notifications and all(notifications)):
+                        add('save_success_notification_only_review', condition.start(), closing + 1)
                 if (len(re.findall(r'\bDataRowVersion\.Original\b', comparison)) >= 2
                         and re.search(r'\bEquals\s*\(', comparison) and re.search(r'\bcontinue\b', fragment)):
                     add('manual_original_row_comparison_review', condition.start(), closing + 1)
