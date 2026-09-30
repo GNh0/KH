@@ -140,6 +140,85 @@ class FlowReviewTests(unittest.TestCase):
         result = check_csharp(source, original='', designer=designer, control_sources=[DATE_SOURCE])
         self.assertIn('date_helper_review', {i.code for i in result.issues})
 
+    def test_literal_save_mode_is_reviewed_without_forcing_a_mode_api(self):
+        for value in ['"NEW"', '"MOD"', '@"EDIT"']:
+            with self.subTest(value=value):
+                source = screen('CallSaveProcedure', 'db.ExecSPTrn("sp_SAMPLE_SAVE", new DbParameter("@WORKTYPE", ' + value + '));')
+                self.assertIn('save_worktype_literal_review', self.codes(source))
+                self.assertNotIn('save_worktype_literal_review', self.codes(source, original=source))
+                result = check_csharp(source)
+                self.assertTrue(result.success)
+                self.assertEqual('needs_review', result.metadata['review_status'])
+        for value in ['m_Editmode.ToString()', 'GetEditModeWorkType()', 'operation']:
+            self.assertNotIn('save_worktype_literal_review', self.codes(screen('CallSaveProcedure',
+                'db.ExecSPTrn("sp_SAMPLE_SAVE", new DbParameter("@WORKTYPE", ' + value + '));')))
+
+    def test_select_literal_and_output_parameter_are_not_save_mode_findings(self):
+        source = screen('CallSelectProcedure', 'new DbParameter("@WORKTYPE", "LIST");')
+        source += screen('CallSaveProcedure', 'new DbParameter("@OUTPUT", ParameterDirection.Output, DbType.String, 20);')
+        self.assertNotIn('save_worktype_literal_review', self.codes(source))
+
+    def test_field_by_field_original_comparison_is_visible_in_a_save(self):
+        source = screen('CallSaveProcedure', 'foreach (DataRow row in table.Rows) { '
+            'if (Equals(row["A"], row["A", DataRowVersion.Original]) && '
+            'Equals(row["B"], row["B", DataRowVersion.Original])) { continue; } }')
+        self.assertIn('manual_original_row_comparison_review', self.codes(source))
+        self.assertNotIn('manual_original_row_comparison_review', self.codes(source, original=source))
+        source = screen('CallSaveProcedure', 'string key = row["KEY", DataRowVersion.Original].ToString(); '
+            'DataUtil.DataTableToXml(table, DataRowState.Modified | DataRowState.Deleted);')
+        self.assertNotIn('manual_original_row_comparison_review', self.codes(source))
+
+    def test_full_file_review_does_not_omit_edit_commit_calls(self):
+        source = screen('CallSaveProcedure', 'gvwList.PostEditor(); gvwList.UpdateCurrentRow();')
+        result = check_csharp(source)
+        self.assertEqual({'PostEditor', 'UpdateCurrentRow'}, {i.details['call'] for i in result.issues if i.code == 'new_edit_commit_call'})
+        self.assertNotIn('new_edit_commit_call', {i.code for i in check_csharp(source, original=source).issues})
+
+    def test_input_tag_passed_to_sp_is_reviewed_using_actual_control_type(self):
+        source = screen('CallSelectProcedure', 'new DbParameter("@USERID", this.btnUser.Tag);')
+        self.assertIn('input_tag_binding_review', self.codes(source, control_types={'btnUser': 'KoneLib.Controls.u_ButtonEdit'}))
+        self.assertNotIn('input_tag_binding_review', self.codes(source, control_types={'btnUser': 'SimpleButton'}))
+        self.assertNotIn('input_tag_binding_review', self.codes(source))
+        self.assertIn('input_tag_binding_review', self.codes(source,
+            control_types={'btnUser': 'Widgets.PersonInput'},
+            control_sources=['namespace Widgets { public class PersonInput : DevExpress.XtraEditors.ButtonEdit { } }']))
+        source = screen('CallSelectProcedure', 'new DbParameter("@USERID", txtUSERID.EditValue);')
+        self.assertNotIn('input_tag_binding_review', self.codes(source, control_types={'txtUSERID': 'TextEdit'}))
+
+    def test_focus_edit_guard_must_be_reviewed_before_filter_row_return(self):
+        negative = 'if (gvwList.FocusedRowHandle < 0) { return; }'
+        mode = 'if (!m_Editmode.Equals(DataEditMode.DEFAULT)) { gvwList.FocusedRowHandle = e.PrevFocusedRowHandle; return; }'
+        source = screen('GvwList_FocusedRowChanged', negative + mode)
+        self.assertIn('focus_edit_gate_order_review', self.codes(source))
+        self.assertNotIn('focus_edit_gate_order_review', self.codes(screen('GvwList_FocusedRowChanged', mode + negative)))
+        self.assertNotIn('focus_edit_gate_order_review', self.codes(screen('GvwList_FocusedRowChanged', mode + negative + mode)))
+        self.assertNotIn('focus_edit_gate_order_review', self.codes(screen('GvwList_FocusedRowChanged', negative + 'if(m_Editmode == EDIT) { x = true; }')))
+        self.assertNotIn('focus_edit_gate_order_review', self.codes(screen('GvwList_FocusedRowChanged', negative)))
+        self.assertNotIn('focus_edit_gate_order_review', self.codes(screen('Other_Click', negative + mode)))
+
+    def test_action_tag_case_and_designer_assignment_are_reviewed_together(self):
+        source = screen('BtnCopy_Click', 'switch (Convert.ToString(btnCopy.Tag)) { case "state": Copy(); break; case "ALL": Copy(); break; }')
+        self.assertIn('action_tag_case_preference', self.codes(source))
+        designer = 'this.btnCopy = new KoneLib.Controls.u_ButtonControl(); this.btnCopy.Tag = "state";'
+        result = check_csharp(source, designer=designer)
+        self.assertEqual(2, sum(i.code == 'action_tag_case_preference' for i in result.issues))
+        fixed = source.replace('"state"', '"STATE"')
+        self.assertNotIn('action_tag_case_preference', self.codes(fixed))
+        self.assertNotIn('action_tag_case_preference', self.codes(source, original=source))
+        self.assertNotIn('action_tag_case_preference', self.codes(screen('Other_Click', 'switch (field) { case "state": break; }')))
+
+    def test_new_flow_findings_ignore_commented_and_quoted_examples(self):
+        source = screen('CallSaveProcedure', '// new DbParameter("@WORKTYPE", "MOD");\n'
+            'string sample = """new DbParameter("@WORKTYPE", "NEW");"""; '
+            '/* if (Equals(r["A"], r["A", DataRowVersion.Original]) && Equals(r["B"], r["B", DataRowVersion.Original])) { continue; } */')
+        self.assertNotIn('save_worktype_literal_review', self.codes(source))
+        self.assertNotIn('manual_original_row_comparison_review', self.codes(source))
+
+    def test_parameter_overloads_and_nested_values_do_not_invent_literal_modes(self):
+        source = screen('CallSaveProcedure', 'new DbParameter("@WORKTYPE", GetMode("NEW,MOD")); '
+            'new SqlParameter(name, "NEW"); new DbParameter("@WORKTYPE", ParameterDirection.Output, DbType.String, 20);')
+        self.assertNotIn('save_worktype_literal_review', self.codes(source))
+
 
 if __name__ == '__main__':
     unittest.main()

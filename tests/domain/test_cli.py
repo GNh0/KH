@@ -9,6 +9,24 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CliTests(unittest.TestCase):
+    def test_standalone_csharp_reports_save_and_input_contract_review(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, designer = Path(folder)/'screen.cs', Path(folder)/'screen.Designer.cs'
+            source.write_text('class Screen { bool CallSaveProcedure() { '
+                'gvwList.PostEditor(); db.ExecSPTrn("sp_SAMPLE_SAVE", new DbParameter("@WORKTYPE", "MOD"), '
+                'new DbParameter("@USERID", btnUser.Tag)); return true; } }', encoding='utf-8')
+            designer.write_text('private KoneLib.Controls.u_ButtonEdit btnUser;', encoding='utf-8')
+            before = source.read_bytes()
+            result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'csharp', str(source),
+                '--designer', str(designer)], cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(0, result.returncode, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual('needs_review', output['review_status'])
+            self.assertLessEqual({'save_worktype_literal_review', 'input_tag_binding_review', 'new_edit_commit_call'},
+                                 {issue['code'] for issue in output['issues']})
+            self.assertFalse(output['project_style_verified'])
+            self.assertEqual(before, source.read_bytes())
+
     def test_bom_crlf_input_from_an_unrelated_working_directory(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

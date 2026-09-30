@@ -11,6 +11,7 @@ Apply the current skill-creator guidance to skill changes. Do not turn a single 
 
 - Package validation: `python <plugin-root>/scripts/kh_check.py package <absolute-plugin-root>`.
 - Type/regression validation for checker changes: [development checks](../../docs/development.md).
+- Requested GitHub publication: follow the existing two-branch [publication flow](../../docs/development.md#github-publication) and verify both remote refs and identical file trees.
 - Profile maintenance: [PB/C# profiles](references/pb-profile-maintenance.md).
 - Explicit conversation audits: [source-log audits](references/session-audit.md).
 - Realistic behavior evaluation: [scenario evaluation](references/scenario-evaluation.md).

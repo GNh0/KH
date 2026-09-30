@@ -121,6 +121,12 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
                     (new_type or prop not in old or _normalized_csharp_value(old[prop]) != _normalized_csharp_value(control.properties[prop])))
 
         is_date = known_control_kind(base_model.controls[name].type_name) == 'DateEdit'
+        if known_control_kind(base_model.controls[name].type_name) in {'SimpleButton', 'Button'} and changed('Tag'):
+            value = string_literal_value(control.properties['Tag'])
+            if value and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', value) and value != value.upper():
+                issues.append(Issue('action_tag_case_preference', 'warning',
+                                    'Use the agreed uppercase application action code consistently in this button Tag and its handler. Verify any externally defined case-sensitive value.',
+                                    details={'control': name, 'tag': value}))
         if check_declarations and control.type_name and changed('Name'):
             value = string_literal_value(control.properties['Name'])
             if value is not None and value != name:

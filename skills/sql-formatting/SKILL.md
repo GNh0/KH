@@ -11,6 +11,8 @@ For cleanup of supplied SQL alone, deliver the completed SQL directly. Do not re
 
 Read [checker usage](references/checks.md) only when semantic comparison of a cleanup or checks of complex nested JOINs would help. For changes that could alter semantics, such as replacing a function with a JOIN, check actual definitions, NULL behavior, duplicates, row counts, and performance. The checker does not replace database execution.
 
+For generated or migrated procedures, follow [target save contracts](references/save-contracts.md) for caller modes, XML, batch keys, numbering, required/default parameters and retained fields. Formatting alone cannot verify these contracts.
+
 Keep temporary query files and verification output outside the source project; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
 
 Do not habitually add unnecessary CTEs, intermediate tables, or WHERE/SELECT subqueries. Apply [preferences and exceptions](../work-execution/references/preferences.md) without mechanically substituting JOINs that change semantics. Return the requested complete SQL or exact replacement block.

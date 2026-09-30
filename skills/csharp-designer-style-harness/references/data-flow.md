@@ -12,7 +12,8 @@ First read the user's current screen and queries. The migration source defines b
 | --- | --- | --- |
 | Enter new mode | Existing DataTable schema and InitControl's actual scope | Use current initialization. Do not conventionally add an empty DETAIL query. Distinguish targets without a schema that actually need the query. |
 | Enter edit mode | Whether focus/detail events already bind the header and rows | Preserve values and switch mode/tabs. Query only needed data, such as item lists. Do not prohibit requerying when the current contract requires it. |
-| Delete selected rows | Actual GridView API, row states, and selection scope | Prefer existing APIs such as DeleteSelectedRows. Build GetSelectedRows/GetDataRow/Delete loops only for required per-row additional behavior. |
+| Remove detail rows | Actual GridView API, row states, and selection scope | Prefer an existing API such as DeleteSelectedRows when removing editable detail rows. Build GetSelectedRows/GetDataRow/Delete loops only for required per-row additional behavior. |
+| Delete persisted master documents | Selected master keys, CallSaveProcedure's DELETE branch, and XML row-state selection | Follow the current master-XML deletion pattern. Do not substitute a detail-row deletion API or reduce multiple selected documents to the focused row. |
 | Add detail | Where keys, business site, parent number, and sequence are set: SP parameters or XML | Assign only fields required in actual detail XML. Do not duplicate server numbering with DataRowVersion/Math.Max. |
 | Save/delete all | Current CallSaveProcedure calls, confirmation/success messages, and row states on failure | Follow current branches. Do not invent required-value, zero-value, or count restrictions or separate confirmation steps. Preserve existing required validation and error handling. |
 | Initialize dates | The user control's actual methods and current screen usage | Use an available API such as SetToDay(int) if it matches the requirement. Do not assume another date control has that method. |
@@ -26,6 +27,20 @@ After style feedback, also recheck validation, initialization, requerying, and w
 Retain named event handlers and existing CallSelectProcedure/CallSaveProcedure boundaries per the [user's coding style](coding-style.md). Check actual semantics of ExecSP/ExecSPTrn and GetEditModeWorkType/original mode strings; do not standardize them for style alone. First inspect whether the existing master-to-table helper handles cloning/row states, and do not add unnecessary Clone calls or intermediate tables.
 
 Align NEW/MOD/DEL and Added/Modified/Deleted with the actual XML generator and SELECT/SAVE branches. Do not invent delete-all/reinsert behavior, modification of every row, or batch atomicity. Do not duplicate in C# validation assigned to SAVE. Compare parameters, XML fields, numbering, fixed values, and result tables.
+
+## Save modes, selection and binding
+
+For the current FrmDevBase save pattern, derive `@WORKTYPE` from the actual edit-mode API, such as `m_Editmode.ToString()` and any established casing conversion. Read that API and the SP branches together; do not replace it with a literal `"NEW"`/`"MOD"` just because the screen currently has one button. A genuinely fixed special operation remains valid when required by the target contract. Keep SELECT enum values separate from SAVE edit modes.
+
+For persisted master deletion, inspect how the target marks selected Unchanged rows Modified and either imports those rows into the established XML table or serializes the appropriate master table. This prescribed Clone/ImportRow use can be necessary even though intermediate tables are generally disfavored. Verify selected-row scope, TableName, row states, and the SP's set-based key JOINs; a scalar header variable cannot represent several selected documents. Do not impose one variant on every screen.
+
+Use the existing DataRowState/XML selection to choose changed rows. Do not add repeated `Equals(..., DataRowVersion.Original)` checks for every field, redundant `GetChanges`, `CloseEdit`, `PostEditor`, or `UpdateCurrentRow` without inspecting the actual save/editor path. Reading a deleted row's Original key is a separate valid requirement. Keep failed-save state and pending edits intact.
+
+Bind lookup/popup display names and persisted codes according to the actual target. If the user specifies a visible USERNM control and a hidden USERID input, initialize and populate both and pass the hidden input's EditValue to the query. Do not invent a state field or store that ID in Tag. A requested FieldName/BindingField rename does not by itself require renaming an SP parameter: inspect and change each affected caller/result binding within scope.
+
+In FocusedRowChanged, apply the existing edit-mode row-movement guard before a negative/filter-row early return when that return could bypass protection. Preserve tab/input/detail data during requery according to the current request. Use the target's `Usr_ControlsProtect` or equivalent protection path for edit-state colors and availability; do not simulate it with arbitrary Designer colors.
+
+When creating or changing SAVE procedures, also apply the [SQL save contracts](../../sql-formatting/references/save-contracts.md). A full screen migration needs the target's actual caller/XML/SP chain; compilation and a similarly named foreign procedure do not establish that chain.
 
 ## Preserving original integrations as comments
 

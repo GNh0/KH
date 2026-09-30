@@ -14,7 +14,7 @@ from .source_preservation import compare_existing_properties, remap_members, val
 
 
 _EDITOR_BUTTON_CALL = re.compile(
-    r'\bthis\.(?P<name>\w+)\.(?P<path>Properties\.(?:CalendarTimeProperties\.)?Buttons)'
+    r'\bthis\.(?P<name>\w+)\.(?P<path>(?:Properties\.)?(?:CalendarTimeProperties\.)?Buttons)'
     r'\.(?:Add|AddRange)\s*\('
 )
 
@@ -36,7 +36,7 @@ def _check_reference_editor_defaults(model: DesignerModel, reference: DesignerMo
     label_text_options = False
     for name, control in reference.controls.items():
         kind = known_control_kind(control.type_name)
-        if kind in {'LookUpEdit', 'DateEdit'}:
+        if kind in {'LookUpEdit', 'DateEdit', 'SpinEdit', 'RepositoryItemLookUpEdit', 'RepositoryItemDateEdit', 'RepositoryItemSpinEdit'}:
             expected[kind].update(reference_paths.get(name, set()))
         elif kind == 'LabelControl' and control.properties.get('Appearance.Options.UseTextOptions', '').strip() == 'true':
             label_text_options = True
@@ -49,7 +49,7 @@ def _check_reference_editor_defaults(model: DesignerModel, reference: DesignerMo
             missing = sorted(expected[kind] - candidate_paths.get(name, set()))
             if missing:
                 issues.append(Issue('editor_button_initialization_review', 'warning',
-                                    'The comparison screen initializes embedded editor buttons, but this new control does not. Verify the current control/base defaults and visible drop-down or calendar button; add the matching Designer initialization when needed.',
+                                    'The comparison screen initializes editor buttons, but this new control does not. Verify the actual constructor/shared initialization and required collection items; a button hidden at runtime may still need its Designer initializer.',
                                     details={'control': name, 'type': control.type_name, 'missing_button_paths': missing}))
         elif kind == 'LabelControl' and label_text_options and \
                 control.properties.get('Appearance.Options.UseTextOptions', '').strip() != 'true':
@@ -84,6 +84,18 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
     baseline = parse_designer_source(original) if original is not None else None
     defaults = read_control_defaults(control_sources)
+    if baseline is not None:
+        before_buttons = _editor_button_paths(baseline.source)
+        after_buttons = _editor_button_paths(model.source)
+        for name, paths in before_buttons.items():
+            if (name in model.controls and name in baseline.controls and
+                    model.controls[name].type_name == baseline.controls[name].type_name):
+                missing = sorted(paths - after_buttons.get(name, set()))
+                if missing:
+                    result.issues.append(Issue('editor_button_initialization_removed', 'warning',
+                        'An existing editor button initialization path was removed. Verify the requested scope, actual constructor and shared initialization before removing it; a runtime-hidden button may still be required.',
+                        details={'control': name, 'removed_button_paths': missing}))
+        result.checked.append('removed button-initializer paths on retained editor members')
     if style_reference is not None:
         reference = parse_designer_source(style_reference)
         retained_controls = {name for name, control in model.controls.items()
@@ -91,8 +103,11 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
                              baseline.controls[name].type_name == control.type_name}
         result.issues.extend(_check_reference_editor_defaults(with_control_base_types(model, defaults),
             with_control_base_types(reference, defaults), retained_controls))
-        result.checked.append('new lookup/date button and label text-option initialization against the supplied comparison screen')
+        result.checked.append('new lookup/date/spin control and Repository button initialization plus label text options against the supplied comparison screen')
         result.not_checked.append('runtime button visibility, label alignment and indirect control/base initialization')
+    elif any(known_control_kind(control.type_name) in {'LookUpEdit', 'DateEdit', 'SpinEdit', 'RepositoryItemLookUpEdit', 'RepositoryItemDateEdit', 'RepositoryItemSpinEdit', 'LabelControl'}
+             for control in with_control_base_types(model, defaults).controls.values()):
+        result.not_checked.append('lookup/date/spin button and label text-option comparison; no same-project comparison Designer supplied')
     allowed_property_changes = tuple(allowed_property_changes)
     numeric_columns = tuple(numeric_columns)
     if allowed_property_changes:
@@ -178,6 +193,6 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         if len(grouped) > 1:
             result.not_checked.append("tab traversal order between separate containers")
     result.metadata["controls"] = sorted(model.controls)
-    result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
+    result.metadata['review_status'] = 'needs_review' if any(i.severity != 'info' for i in result.issues) else 'static_checks_only'
     result.metadata['project_style_verified'] = False
     return result

@@ -33,6 +33,35 @@ def codes(source, **kwargs):
 
 
 class ControlDefaultsTests(unittest.TestCase):
+    def test_spin_button_initializer_is_compared_without_inventing_library_defaults(self):
+        library = 'namespace Widgets { public class QuantityEdit : DevExpress.XtraEditors.SpinEdit { public QuantityEdit() { } } }'
+        candidate = 'this.SpinQTY = new Widgets.QuantityEdit();'
+        reference = 'this.SpinRef = new Widgets.QuantityEdit(); this.SpinRef.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton(ButtonPredefines.Combo) });'
+        result = check_designer(candidate, style_reference=reference, control_sources=[library])
+        finding = next(i for i in result.issues if i.code == 'editor_button_initialization_review')
+        self.assertEqual(['Properties.Buttons'], finding.details['missing_button_paths'])
+        fixed = candidate + 'this.SpinQTY.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton(ButtonPredefines.Combo) });'
+        self.assertNotIn('editor_button_initialization_review', codes(fixed, style_reference=reference, control_sources=[library]))
+        self.assertNotIn('editor_button_initialization_review', codes(candidate, control_sources=[library]))
+
+    def test_retained_editor_button_removal_is_reviewed_without_a_style_reference(self):
+        candidate = 'this.ymdDATE = new KoneLib.Controls.u_DateEdit();'
+        before = candidate + 'this.ymdDATE.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton() });'
+        result = check_designer(candidate, original=before)
+        finding = next(i for i in result.issues if i.code == 'editor_button_initialization_removed')
+        self.assertEqual(['Properties.Buttons'], finding.details['removed_button_paths'])
+        self.assertNotIn('editor_button_initialization_removed', codes(before, original=before))
+        self.assertNotIn('editor_button_initialization_removed', codes('', original=before))
+
+    def test_repository_spin_buttons_use_the_repository_path(self):
+        candidate = 'this.rpsSpinQTY = new RepositoryItemSpinEdit();'
+        reference = 'this.rpsSpinREF = new RepositoryItemSpinEdit(); this.rpsSpinREF.Buttons.AddRange(new EditorButton[] { new EditorButton(ButtonPredefines.Combo) });'
+        result = check_designer(candidate, style_reference=reference)
+        finding = next(i for i in result.issues if i.code == 'editor_button_initialization_review')
+        self.assertEqual(['Buttons'], finding.details['missing_button_paths'])
+        fixed = candidate + 'this.rpsSpinQTY.Buttons.AddRange(new EditorButton[] { new EditorButton(ButtonPredefines.Combo) });'
+        self.assertNotIn('editor_button_initialization_review', codes(fixed, style_reference=reference))
+
     def test_new_user_control_may_expand_but_must_not_shrink_to_short_text(self):
         library = '''namespace Widgets { public class InputBox : TextEdit {
             public InputBox() { base.Size = new System.Drawing.Size(150, 23); }

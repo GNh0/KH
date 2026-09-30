@@ -29,7 +29,7 @@ def main(argv=None):
     designer.add_argument('--preserve-property', action='append', default=[])
     for command in (cs, designer):
         command.add_argument('--style-reference-designer', metavar='ABSOLUTE_COMPARISON_DESIGNER',
-                             help='actual same-project screen used to review new editor buttons and label text options')
+                             help='actual same-project screen used to review new lookup/date/spin buttons and label text options')
         command.add_argument('--preserve-existing', action='store_true',
                              help='compare retained Designer properties with the actual original; requires a Designer baseline')
         command.add_argument('--member-rename', action='append', default=[], metavar='OLD=NEW',
