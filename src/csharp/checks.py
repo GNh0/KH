@@ -11,6 +11,7 @@ from .designer_model import parse_designer_source
 from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
 from .flow_review import check_project_flow
+from .command_flow import check_command_flow
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .syntax import _property_assignments, linq_candidates
@@ -21,6 +22,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                  allowed_changes: Mapping[str, Sequence[str]] | None = None,
                  original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
                  style_reference_designer: str | None = None,
+                 style_reference_csharp: str | None = None, screen_commands: Sequence[str] | None = None,
                  allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
                  numeric_columns: Sequence[str] = (), preserve_existing: bool = False,
                  member_renames: Mapping[str, str] | None = None) -> CheckResult:
@@ -31,6 +33,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         'designer': original_designer is not None}
     if style_reference_designer is not None:
         result.metadata['comparison_baselines']['style_reference'] = True
+    if style_reference_csharp is not None:
+        result.metadata['comparison_baselines']['command_style_reference'] = True
     if member_renames and (designer is None or original_designer is None):
         raise ValueError('C# member renames require both Designer versions')
     if style_reference_designer is not None and designer is None:
@@ -66,6 +70,12 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         control_sources=control_sources))
     result.checked.append('recognizable UI/data helpers, entry queries, save gates, save-mode literals, original-row comparisons, input Tag values, action codes and focus-guard ordering')
     result.not_checked.append('necessity of validation, dynamic edit-mode values, indirect event order, XML/SP field ownership and project-wide coding-style compliance')
+    command_flow = check_command_flow(candidate, original=original,
+        style_reference=style_reference_csharp, allowed_commands=screen_commands)
+    result.issues.extend(command_flow.issues)
+    result.checked.extend(command_flow.checked)
+    result.not_checked.extend(command_flow.not_checked)
+    result.metadata.update(command_flow.metadata)
     for call in ("PostEditor", "UpdateCurrentRow"):
         if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
             result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))

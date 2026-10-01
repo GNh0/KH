@@ -10,6 +10,8 @@ Preserve copies of the original C#/Designer/resx before editing. Use explicit re
 
 ## New controls and general structural review
 
+When a supplied slide defines a new screen, inspect the complete rendered slide with its text, shapes, tables and images together before deriving the column list. Extracted embedded images are partial evidence; they can omit or separate captions and reorder the intended layout. Compare the final ordered captions/fields and editable columns with the full slide and latest user corrections. A rendering or temporary extraction belongs outside the project source tree.
+
 For new controls, follow [user-control selection and initialization](user-controls.md). Prefer appropriate user controls from the current project and retain their constructor, initialization, and inherited defaults unless a property has a specific requirement. This applies to all user controls.
 
 Keep static fields and control/column/Repository creation, layout, and properties in Designer. Helper-based construction that Visual Studio Designer cannot read is a compatibility defect. Keep business logic and dynamic binding in the current framework's code-behind.
