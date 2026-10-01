@@ -2,6 +2,8 @@
 
 Map PBL/object, base classes, linked DWs, retrieve arguments, SQL, column/compute, protect/taborder, update properties, and events. Reflect groups, panels, grids, captions, column order, and defaults from HTML-to-XML input in the actual layout.
 
+For slide-based screen requirements, inspect the complete rendered slide before mapping columns, captions and editable fields. Separate embedded-image exports do not represent the full composite layout. Follow the [Designer source rules](../../csharp-designer-style-harness/references/designer.md) and latest user corrections.
+
 Preserve raw composite-key components and create display keys separately. Derive component counts and business names from input. Migrate read-only/editable states, list/detail connections, selection/focus, user permissions, and lookup/numeric/button Repositories using current C# patterns.
 
 For reports, preserve H/D/F, group, band, and page order. Review shared paths for converting multiple reports to HTML while checking constructor side effects and render order. Check actual contracts for missing bands and empty values. Do not replace output behavior with simple HTML concatenation.

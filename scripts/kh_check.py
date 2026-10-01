@@ -22,6 +22,10 @@ def main(argv=None):
     cs.add_argument("--original")
     cs.add_argument("--designer")
     cs.add_argument('--designer-original')
+    cs.add_argument('--style-reference-csharp', metavar='ABSOLUTE_COMPARISON_CS',
+                    help='actual same-project screen used to compare Save/New command phases')
+    cs.add_argument('--screen-command', action='append', choices=('search', 'new', 'edit', 'save', 'delete', 'clear'),
+                    help='explicitly allowed screen operation from the current request; repeat for each operation')
     designer = commands.add_parser('designer', help='compare explicit Designer properties with a supplied baseline')
     designer.add_argument('input')
     designer.add_argument('--original')
@@ -58,6 +62,8 @@ def main(argv=None):
         if args.command == 'sql' and args.candidate:
             pairs.append((args.input, args.candidate))
         elif args.command in {'csharp', 'designer'}:
+            if args.command == 'csharp' and args.style_reference_csharp:
+                pairs.append((args.style_reference_csharp, args.input))
             if args.command == 'csharp' and args.style_reference_designer and not args.designer:
                 raise ValueError('--style-reference-designer with csharp requires --designer')
             if args.style_reference_designer:
@@ -106,6 +112,8 @@ def main(argv=None):
                                    designer=read_file(args.designer).text() if args.designer else None,
                                    original_designer=read_file(args.designer_original).text() if args.designer_original else None,
                                    style_reference_designer=read_file(args.style_reference_designer).text() if args.style_reference_designer else None,
+                                   style_reference_csharp=read_file(args.style_reference_csharp).text() if args.style_reference_csharp else None,
+                                   screen_commands=args.screen_command,
                                    column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change,
                                    control_sources=control_sources, numeric_columns=args.numeric_column,
                                    preserve_existing=args.preserve_existing, member_renames=member_renames)

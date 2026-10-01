@@ -9,6 +9,34 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CliTests(unittest.TestCase):
+    def test_command_style_and_operation_scope_are_available_without_mutation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, reference = Path(folder)/'screen.cs', Path(folder)/'project.cs'
+            source.write_text('class Screen { void Init() { this.NewCommand += OnNew; } '
+                'void OnSave(object s, SaveCommandEventArgs e) { dt.AcceptChanges(); } }', encoding='utf-8')
+            reference.write_text('void OnSave(object s, SaveCommandEventArgs e) { CallCommand(BizCommand.Search); }', encoding='utf-8')
+            before = {path: path.read_bytes() for path in (source, reference)}
+            result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'csharp', str(source),
+                '--style-reference-csharp', str(reference), '--screen-command', 'search', '--screen-command', 'save'],
+                cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(1, result.returncode, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertTrue(output['comparison_baselines']['command_style_reference'])
+            self.assertEqual(['save', 'search'], output['command_flow']['allowed_commands'])
+            self.assertLessEqual({'screen_command_out_of_scope', 'command_phase_drift_review', 'save_refresh_drift_review'},
+                                 {issue['code'] for issue in output['issues']})
+            self.assertTrue(all(path.read_bytes() == content for path, content in before.items()))
+            self.assertEqual({'screen.cs', 'project.cs'}, {path.name for path in Path(folder).iterdir()})
+
+    def test_command_style_reference_cannot_be_candidate_itself(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder)/'screen.cs'
+            source.write_text('class Screen {}', encoding='utf-8')
+            result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'csharp', str(source),
+                '--style-reference-csharp', str(source)], cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(1, result.returncode)
+            self.assertEqual('input_error', json.loads(result.stdout)['issues'][0]['code'])
+
     def test_standalone_csharp_reports_save_and_input_contract_review(self):
         with tempfile.TemporaryDirectory() as folder:
             source, designer = Path(folder)/'screen.cs', Path(folder)/'screen.Designer.cs'

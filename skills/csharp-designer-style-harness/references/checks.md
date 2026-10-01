@@ -44,6 +44,24 @@ LINQ candidates and changes between transaction-method name families are review 
 
 ## Reviewing new event/data handling
 
+### Comparing project command phases and requested operations
+
+Supply `--style-reference-csharp <absolute-same-project-screen.cs>` to compare recognizable Save/New operations with the actual reference command bodies. This is separate from `--original`, which establishes change provenance. Read the reference first and select one with a matching screen flow; the checker cannot verify its project, relevance or provenance. It does not make one screen's pattern universal.
+
+Repeat `--screen-command` for the operations permitted by the latest request. For a modify-only screen with search, edit, save and cancel, use:
+
+```text
+python <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --style-reference-csharp <same-project-screen.cs> --screen-command search --screen-command edit --screen-command save --screen-command clear
+```
+
+- `screen_command_out_of_scope`: a direct subscription to an excluded screen command is an error. Check inherited toolbar availability separately. Nonempty recognizable handlers without such a subscription produce `screen_command_body_out_of_scope` review warnings; an empty unwired handler does not imply an implemented feature.
+- `command_phase_drift_review`: Save adds AcceptChanges, DEFAULT mode assignment or Usr_ControlsProtect, or New adds OpenMenuProgram, beyond occurrences in the corresponding reference command. Review their purpose and phase; none of these operations is globally prohibited. Other reference phases are reported as context. A legitimate reset already present in reference Save is retained.
+- `save_refresh_drift_review`: the reference Save dispatches Search but the candidate Save does not. Trace valid indirect refresh/tab paths before changing code.
+
+`command_flow` reports the supplied operation scope, reference command kinds and compared phases; `comparison_baselines.command_style_reference` records reference availability. Missing or ambiguous reference bodies, unsupported expression-bodied handlers, indirect calls/subscriptions and XML/SP behavior remain in `not_checked`. Comments, literal strings and uncalled local-function bodies are excluded from recognizable operation counts. General branch feasibility and operation arguments are not resolved.
+
+With `--original`, unchanged command bodies are excluded from phase-style review, while explicit command scope still applies. New imports/full style corrections also need standalone inspection. Without the corresponding inputs, neither requested operation scope nor project command phases are verified. Resolve warnings against the current user request and actual helper/base path; do not add exemptions or blindly copy the reference to get a pass.
+
 C# checks compare current methods with originals and warn about these candidates. Unchanged existing handling is preserved; calls moved to another event or reintroduced are also reviewed.
 
 - `new_ui_data_helper`: newly declared query, selected-row, or table-cloning wrappers, distinguished from implementing an existing empty method body.
