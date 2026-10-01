@@ -15,7 +15,7 @@ For control work, prefer appropriate user controls available in the current proj
 
 For new controls, keep the current user control's default width and height as a floor. Longer content may require expansion; short captions or values do not justify shrinking. Honor an explicit compact-size request for that screen. Compare the actual project's Designer initialization as well as the constructor: lookup/date/spin buttons and label alignment options may be serialized only in Designer.
 
-- For writing/editing C#, read the [user's coding style](references/coding-style.md). Reference source that differs from agreed rules may contain an oversight; do not use the difference to relax those rules.
+- For writing/editing C#, read and apply the [user's coding style](references/coding-style.md), including its implementation-decision table. Establish the actual source/requirement before adding a framework or state-handling step; correct unexplained differences before completion. Reference source that differs from agreed rules may contain an oversight; do not use the difference to relax those rules.
 - For UI/Designer work, read [screen style](references/designer.md). For grids, also read [HTML defaults](references/grid-layout.md).
 - For queries, saves, uploads, or row selection, read [data and event contracts](references/data-flow.md).
 - For monitoring, multiple UserControls, repeated queries, or grid rebinding, read [screen behavior contracts](references/screen-behavior.md). Check events that overwrite user edits and the actual query timing.
