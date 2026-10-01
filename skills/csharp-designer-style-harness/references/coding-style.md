@@ -10,6 +10,21 @@ The actual target's bindings, SPs, row states, transactions, and inherited APIs 
 
 A current request to preserve the original and edit only part of it is more specific than general preferences for new code. Within that scope, do not conventionally reorganize original properties or branches. Distinguish necessary naming/brace changes from new business conditions. Replacing existing if/else with a ternary or introducing a separate bool state to restrict editing, attachments, or button actions is not merely a style change.
 
+## Applying the rules while writing code
+
+Use the agreed rules to choose the implementation, not merely to review names after writing. Before changing an event, read its target body and the relevant helper/base path. For a new screen, choose a same-project example with matching list/detail structure and data timing; a similar program name or a foreign business reference is insufficient.
+
+| Decision | Evidence to establish first | Implementation |
+| --- | --- | --- |
+| Add an operation, filter or editable field | Latest requested behavior and actual bindings | Implement that scope. A toolbar, status column or plausible workflow does not authorize additional business rules. |
+| Add reset, protection, AcceptChanges, validation or a query | Which event/helper already owns it and why the target needs it | Reuse the established path. Do not add a conventional step or duplicate another event's responsibility. Preserve a different target flow when its actual behavior requires it. |
+| Set a control property | Actual constructor, Designer, shared initialization and current requirement | Reproduce required initialization, including serialized buttons. Override defaults only for the required behavior; missing required initialization is not default preservation. |
+| Add a helper, state field, wrapper or alternative data API | Actual reuse/behavior need and available target API | Follow the existing direct event/data pattern unless that need justifies a change. Shorter code, general best practice or familiarity alone is insufficient. |
+
+When the existing pattern cannot implement a required behavior, make the necessary scoped change and briefly explain its concrete reason. Apply the separate necessity criteria for LINQ, intermediate tables and builds. Resolve these choices internally from available source; do not introduce a new approval form, profile or report.
+
+Before reporting completion, compare the actual changed bodies, bindings and property assignments with the current request and selected source. If a relevant difference has no established reason, correct it. Reading a skill, renaming controls or compiling is not this comparison; optional static checks cover only the items they report.
+
 ## Syntax and naming
 
 - Put method/control-statement braces on separate lines and indent by 4 spaces. Use body braces for `if`, `else`, `for`, `foreach`, `while`, and `do`, even for a one-line return/assignment. Preserve `else if` chains. Missing braces in reference examples do not weaken this rule.
