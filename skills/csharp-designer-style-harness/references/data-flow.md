@@ -4,13 +4,9 @@ For a full-screen request, identify the permitted operations first, then trace L
 
 Follow current SearchCommand/NewCommand/DeleteCommand and m_Editmode flow. Do not duplicate initialization or confirmation messages. Distinguish focus via GetFocusedDataRow()/FocusedRowHandle from checked selection via the actual selection collection. Do not confuse screen sort order with selection return order.
 
-Read the actual target command bodies before copying a flow. Compare Save with Save and Search with Search, including their helper/base calls. If the reference Save only calls CallSaveProcedure, reports success and dispatches Search, do not also insert AcceptChanges, control protection or a mode reset that Search already owns. Conversely, preserve a Save reset required by the target's tab/detail flow. AcceptChanges and DataEditMode.DEFAULT are not globally banned: their timing and row-state effects must follow the actual XML/save contract. A foreign screen can supply business behavior without supplying this target's event structure.
-
-At completion, compare implemented and wired commands with the latest request, and compare the changed event bodies with the selected project source. Resolve differences in the real call path rather than treating a build, familiar method name, skill read or static pass as evidence of compliance. For an automated comparison, use the optional C# reference and explicit command scope in [checks](checks.md).
-
 ## Connecting functionality to an existing screen
 
-First read the user's current screen and queries. The migration source defines business behavior; the current project defines control APIs, event structure, and DB call patterns. Do not copy an event body verbatim merely because its name matches if header/detail population timing or state differs. Use actual call paths to determine whether the source's separate queries, rebinding, or validation are needed in the target.
+Trace header/detail population timing and state before copying an event body. Use the target call paths to determine whether separate queries, rebinding or validation are needed.
 
 | Task | Current contract to inspect first | Implementation rule |
 | --- | --- | --- |

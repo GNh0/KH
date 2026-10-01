@@ -5,40 +5,31 @@ description: Generate, modify, or review WinForms/DevExpress/KoneLib C# and Desi
 
 # C# and Designer
 
-Read the current files, user edits, specified comparison screen, and actual framework call paths. Do not apply this skill's WinForms rules wholesale to MAUI/PDA or other C# projects.
+Apply to the actual target project. Do not impose WinForms architecture on MAUI/PDA or other C# projects.
 
-For migrations and unfinished screens, first identify the modification scope. If the user requests selected deletions, renames, or binding changes based on an original screen, start from its C#/Designer/resx. Do not redesign retained controls' properties or behavior outside the request. The currently specified preservation scope overrides defaults for new screens. Follow [migration with source preservation](references/designer.md).
+## Working basis
 
-The migration source defines business behavior; the target project defines coding style, required APIs, events, and DB call patterns. Before implementing command handlers, identify the currently requested operations and read matching event bodies in the actual target or a same-project screen. Trace which event owns mode reset, control protection, row-state acceptance and requerying; do not reconstruct these from memory or a foreign template. A toolbar or event name does not authorize adding New/Delete or another program's navigation. Adapt imported C# while preserving the requested Designer layout; keep existing-screen edits scoped. Use [data and event contracts](references/data-flow.md) to resolve necessary validation, requerying, wrappers and row-key assignments. Keep this comparison in the working context; no separate intake form or audit file is needed.
+1. Use the latest request and agreed style. Preserve current user edits and keep the change scoped. A conflicting sample does not weaken an agreed rule.
+2. Read the actual target and a relevant same-project example before writing. Match event responsibilities, data timing and initialization paths. Migration source defines business behavior; target source defines APIs and implementation patterns. Available APIs alone do not establish the intended workflow.
+3. Add or change behavior/settings only for the requested function or a concrete implementation need. Reuse the established path. Resolve differences against actual source before completion; necessary departures require a concrete reason.
 
-For control work, prefer appropriate user controls available in the current project, not just KoneLib. Follow [user-control rules](references/user-controls.md): read and preserve constructor, initialization-helper, and inherited defaults; add only properties needed for the screen's requested behavior. Do not invent or overwrite defaults. Name date controls with ymd and the actual field name.
+Keep these decisions in the working context; no intake form or audit file is required.
 
-For new controls, keep the current user control's default width and height as a floor. Longer content may require expansion; short captions or values do not justify shrinking. Honor an explicit compact-size request for that screen. Compare the actual project's Designer initialization as well as the constructor: lookup/date/spin buttons and label alignment options may be serialized only in Designer.
+## Read for the current change
 
-- For writing/editing C#, read and apply the [user's coding style](references/coding-style.md), including its implementation-decision table. Establish the actual source/requirement before adding a framework or state-handling step; correct unexplained differences before completion. Reference source that differs from agreed rules may contain an oversight; do not use the difference to relax those rules.
-- For UI/Designer work, read [screen style](references/designer.md). For grids, also read [HTML defaults](references/grid-layout.md).
-- For queries, saves, uploads, or row selection, read [data and event contracts](references/data-flow.md).
-- For monitoring, multiple UserControls, repeated queries, or grid rebinding, read [screen behavior contracts](references/screen-behavior.md). Check events that overwrite user edits and the actual query timing.
-- Use the [scoped default profile](references/default-profile.json) when checking project style. Do not repeat author discovery for every task.
-- Use the [checker](references/checks.md) when automated static comparison is needed.
+Read the needed sections, not every reference. Inspect relevant source bodies completely; retrieve material omissions from truncated output.
 
-Keep probe scripts, Designer snapshots, build output, and other auxiliary files outside the target project and source tree; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
+| Change | Reference |
+| --- | --- |
+| C# syntax, names, events and DB-call style | [Coding style](references/coding-style.md) |
+| Control selection, defaults, dimensions and initialization | [User controls](references/user-controls.md) |
+| Layout, import preservation, Designer/resx and slides | [Designer](references/designer.md); for grids, [HTML defaults](references/grid-layout.md) |
+| Query/save, XML, row handling, selection and binding | [Data and event contracts](references/data-flow.md) |
+| Monitoring, repeated queries or rebinding | [Screen behavior](references/screen-behavior.md) |
+| Optional automated comparison | [Checks](references/checks.md) and the [scoped profile](references/default-profile.json) |
 
-Read only the needed parts of relevant references and source. If a batch output is truncated, retrieve the omitted parts that matter. Including a path in a command does not establish that its contents were inspected.
+Use the [necessity criteria](../work-execution/references/preferences.md) for LINQ, intermediate tables and builds. Keep auxiliary files outside project/source trees using [workspace files](../work-execution/references/workspace-files.md).
 
-Keep static controls/layout in Designer and follow actual code-behind patterns for binding/business behavior. Follow the existing constructor's named-handler subscription pattern without duplicate subscriptions. Check the project's DevExpress version/APIs and csproj registration. Reuse existing helpers; assess new abstractions, LINQ, intermediate tables, and unnecessary builds against the [necessity criteria](../work-execution/references/preferences.md).
+Static checks cover only their reported items. Use actual comparison inputs, resolve relevant warnings and inspect `not_checked`; a pass or build is not project-style verification. New imports/full style corrections also need standalone inspection so unchanged foreign mistakes are not hidden.
 
-Use the Load Layout properties from the user's DataWindowToXml.html as grid defaults. Do not add cell TextOptions, SpinEdit EditMask, DisplayFormat (including FormatType), or OptionsBehavior by default. For blocked editing, set AllowEdit=false and ReadOnly=true; for button-like columns whose actions must remain available, set only ReadOnly=true; for editable columns, omit both. Do not reset existing screen properties wholesale. Determine changes needed for specific behavior from current requirements and actual source.
-
-For summaries or string output that need numeric formatting, follow [custom numeric formats](references/coding-style.md). Prefer #,##0, #,##0.##, and similar formats over N0/N2. Do not expand a summary-format or Spin-connection check into permission to add cell/Repository DisplayFormat.
-
-Trace defaults through actual shared-form initialization/helpers as well as user-control constructors. If the current user explicitly requests the same display on a target without that initialization path, you may apply the verified format and decimal precision exactly. An older instruction to avoid a setting must not block a later specific request.
-
-Do not arbitrarily add changed properties to --allow-property-change to suppress warnings. Excluded checks are not passing evidence; verify the actual requirement and necessity separately.
-
-Check the full lifecycle for a full-screen request; keep a local edit scoped. Validate the actual requested behavior at completion. Build results do not guarantee UI or save behavior.
-
-The checker's `status=passed` means the executed static checks found no errors. Read every relevant warning as well as `comparison_baselines`, `review_status`, and `not_checked`; a count of warnings is not their resolution. To verify preservation, supply the actual original and compare retained Designer properties, including rename mappings. For a new import or a requested full style correction, also inspect the candidate without an original so inherited mistakes are not hidden as unchanged source. Follow [comparison modes](references/checks.md); a foreign C# original is not a target-style baseline. Reading the skill or passing the checker alone does not establish project-style compliance.
-# Limits of supplied snippets
-
-If only snippets/fixtures are supplied without a project, perform the edits possible within that scope. Mark the DevExpress version, csproj, and inherited implementations as unverified. Their absence alone must not block a clear local edit or trigger reading a substitute project. Seek only the missing information needed when an API difference actually determines the solution.
+With snippets only, perform the clear scoped edit. Mark unavailable project APIs, inherited paths and registration as unverified; seek missing information only when it determines the implementation. Do not substitute another project.
