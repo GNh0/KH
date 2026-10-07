@@ -1,5 +1,5 @@
 {
-  "include": ["src", "scripts", "skills/pb-to-csharp-migration-harness/scripts"],
+  "include": ["src", "scripts", "skills/pb-to-csharp-migration-harness/scripts", "company/plugins/company-dev/scripts"],
   "pythonVersion": "3.11",
   "pythonPlatform": "Windows",
   "strict": ["src/pb/equivalence.py", "src/pb/lexer.py", "src/csharp/lexer.py"],

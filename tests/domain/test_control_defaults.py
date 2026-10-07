@@ -102,12 +102,13 @@ class ControlDefaultsTests(unittest.TestCase):
         }'''
         result = check_designer(candidate, style_reference=reference, control_sources=[library])
         findings = {i.details['control']: i for i in result.issues
-                    if i.code in {'editor_button_initialization_review', 'label_text_options_review'}}
+                    if i.code == 'editor_button_initialization_review'}
         self.assertEqual(['Properties.Buttons'], findings['cboName'].details['missing_button_paths'])
         self.assertEqual(['Properties.Buttons', 'Properties.CalendarTimeProperties.Buttons'],
                          findings['ymdDate'].details['missing_button_paths'])
-        self.assertIn('lblName', findings)
-        self.assertEqual(3, sum(i.code == 'editor_button_initialization_review' or i.code == 'label_text_options_review'
+        self.assertTrue(any(i.code == 'label_property_unverified' and i.details['property'] == 'lblName.Appearance.Options.UseTextOptions'
+                            for i in result.issues))
+        self.assertEqual(3, sum(i.code == 'editor_button_initialization_review' or i.code == 'label_property_unverified'
                                 for i in result.issues))
         complete = candidate + '''
             this.cboName.Properties.Buttons.AddRange(new EditorButton[] { new EditorButton() });

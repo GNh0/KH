@@ -61,7 +61,7 @@ def _review_generation_choices(candidate: str, original: str | None) -> list[Iss
 
 
 def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: bool = False,
-              check_style: bool = True, check_delta: bool = False) -> CheckResult:
+              check_style: bool = True, check_delta: bool = False, check_preferences: bool = True) -> CheckResult:
     result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None else CheckResult(
         checked=["SQL lexical integrity"], not_checked=["SQL Server execution", "complete T-SQL grammar and type semantics", "business equivalence to an unsupplied source"])
     result.metadata['comparison_baselines'] = {'sql': original is not None}
@@ -92,7 +92,7 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
     previous = _masked_sql(original or "")
     for code, pattern in [("intermediate_table_preference", r"\b(?:CREATE\s+TABLE\s+#|DECLARE\s+@\w+\s+TABLE|INTO\s+#)"),
                           ("subquery_preference", r"\b(?:WHERE|AND|OR)\b[^;]*?\b(?:NOT\s+EXISTS|IN\s*\(\s*SELECT)")]:
-        if len(re.findall(pattern, masked, re.I)) > len(re.findall(pattern, previous, re.I)):
+        if check_preferences and len(re.findall(pattern, masked, re.I)) > len(re.findall(pattern, previous, re.I)):
             result.issues.append(Issue(code, "warning", "Use the preferred existing form unless avoiding this construct makes implementation difficult or the alternative performs extremely worse."))
     result.issues.extend(_review_generation_choices(candidate, original))
     result.checked.append('explicit added locking hints and aliased typed-empty output fields')

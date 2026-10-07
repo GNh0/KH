@@ -14,6 +14,7 @@ from .flow_review import check_project_flow
 from .command_flow import check_command_flow
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
+from .label_style import check_label_style
 from .syntax import _property_assignments, linq_candidates
 from .source_preservation import remap_members
 
@@ -25,9 +26,9 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                  style_reference_csharp: str | None = None, screen_commands: Sequence[str] | None = None,
                  allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
                  numeric_columns: Sequence[str] = (), preserve_existing: bool = False,
-                 member_renames: Mapping[str, str] | None = None) -> CheckResult:
+                 member_renames: Mapping[str, str] | None = None, check_style: bool = True) -> CheckResult:
     allowed = allowed_changes or {}
-    result = CheckResult(checked=["C# lexical source patterns", "new unbraced control bodies"],
+    result = CheckResult(checked=["C# lexical source patterns"],
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
     result.metadata['comparison_baselines'] = {'csharp': original is not None,
         'designer': original_designer is not None}
@@ -48,10 +49,13 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         result.issues.append(Issue('preservation_designer_missing', 'warning', 'Supply both Designer versions for existing-property preservation.'))
     code, _ = _scan_csharp(candidate)
     before, _ = _scan_csharp(original or "")
-    result.issues.extend(check_control_braces(candidate, original=original))
-    result.issues.extend(check_numeric_formats(candidate, original=original))
-    result.checked.append('literal numeric format choices at recognized C# format sites')
-    result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
+    if check_style:
+        result.issues.extend(check_control_braces(candidate, original=original))
+        result.issues.extend(check_numeric_formats(candidate, original=original))
+        result.checked.extend(['new unbraced control bodies', 'literal numeric format choices at recognized C# format sites'])
+        result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
+    else:
+        result.not_checked.append('personal coding, naming, numeric-format and KH grid-layout preferences')
     candidate_model = parse_designer_source(candidate)
     baseline_model = parse_designer_source(original) if original is not None else None
     if designer is not None:
@@ -80,11 +84,21 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
             result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))
     result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, defaults=defaults,
-                         allowed_property_changes=allowed_property_changes, check_declarations=designer is None))
+                         allowed_property_changes=allowed_property_changes, check_declarations=designer is None, check_style=check_style))
+    if check_style:
+        labels = check_label_style(candidate_model, original=baseline_model,
+                                   reference=parse_designer_source(style_reference_designer) if style_reference_designer is not None else None,
+                                   defaults=defaults, allowed_property_changes=allowed_property_changes,
+                                   explicit_only=designer is not None)
+        result.issues.extend(labels.issues)
+        result.checked.extend(labels.checked)
+        result.not_checked.extend(labels.not_checked)
+        result.incomplete |= labels.incomplete
+        result.metadata.update(labels.metadata)
     result.issues.extend(check_grid_style(with_control_base_types(candidate_model, defaults),
                          original=with_control_base_types(baseline_model, defaults) if baseline_model else None,
                          column_edit_modes=column_edit_modes if designer is None else None,
-                         allowed_property_changes=allowed_property_changes, check_required_defaults=False))
+                         allowed_property_changes=allowed_property_changes, check_required_defaults=False, check_style=check_style))
     if not code.strip():
         result.incomplete = True
         result.issues.append(Issue('csharp_code_missing', 'warning', 'No executable/declarative C# text is available for the requested source checks.'))
@@ -110,24 +124,24 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         for member, properties in _property_assignments(candidate).items():
             for prop, (value, line) in properties.items():
                 old = previous_properties.get(member, {}).get(prop)
-                if (prop in {'Location', 'Size', 'Font', 'Caption', 'FieldName', 'ColumnEdit'} or prop.startswith('Appearance')) and (old is None or old[0] != value):
+                if check_style and (prop in {'Location', 'Size', 'Font', 'Caption', 'FieldName', 'ColumnEdit'} or prop.startswith('Appearance')) and (old is None or old[0] != value):
                     result.issues.append(Issue('static_ui_in_code_behind_review', 'warning', 'Place static UI setup in Designer; retain a code-behind assignment when the actual event requires dynamic behavior.', line=line, details={'member': member, 'property': prop}))
     patterns = {
         "intermediate_table_preference": r"\b(?:Clone|ImportRow)\s*\(",
         "expression_body_preference": r"\b(?:public|protected|private|internal)\b[^;{}\n]*=>",
     }
-    if len(linq_candidates(candidate)) > len(linq_candidates(original or '')):
+    if check_style and len(linq_candidates(candidate)) > len(linq_candidates(original or '')):
         result.issues.append(Issue('linq_preference', 'warning',
             'Review a likely LINQ invocation against the existing project form. The lexer cannot resolve extension methods; verify the actual API. An exception needs difficult implementation without it or an extreme performance disadvantage.'))
     for name, pattern in patterns.items():
-        if len(re.findall(pattern, code)) > len(re.findall(pattern, before)):
+        if check_style and len(re.findall(pattern, code)) > len(re.findall(pattern, before)):
             result.issues.append(Issue(name, "warning", "Prefer the established project form. A difficult implementation without this construct or an extreme performance disadvantage can justify an exception; convenience alone cannot."))
     if designer is not None:
         ui = check_designer(designer, code_behind=candidate, original=original_designer,
                             style_reference=style_reference_designer,
                             column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes,
                             control_sources=control_sources, numeric_columns=numeric_columns,
-                            preserve_existing=preserve_existing, member_renames=member_renames)
+                            preserve_existing=preserve_existing, member_renames=member_renames, check_style=check_style)
         result.issues.extend(ui.issues)
         result.checked.extend(ui.checked)
         result.not_checked.extend(ui.not_checked)
@@ -135,6 +149,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         for key in ('designer_preservation', 'member_renames'):
             if key in ui.metadata:
                 result.metadata[key] = ui.metadata[key]
+        if 'label_style' in ui.metadata:
+            result.metadata['label_style_designer'] = ui.metadata['label_style']
     elif control_sources:
         result.checked.append('supplied user-control types and direct parameterless-constructor assignments')
         result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')

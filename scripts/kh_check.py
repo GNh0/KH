@@ -31,9 +31,12 @@ def main(argv=None):
     designer.add_argument('--original')
     designer.add_argument('--code-behind')
     designer.add_argument('--preserve-property', action='append', default=[])
+    for command in (sql, cs, designer):
+        command.add_argument('--style-policy', choices=('kh', 'project'), default='kh',
+                             help='kh retains the personal KH preferences; project checks supplied source/contracts without imposing them')
     for command in (cs, designer):
         command.add_argument('--style-reference-designer', metavar='ABSOLUTE_COMPARISON_DESIGNER',
-                             help='actual same-project screen used to review new lookup/date/spin buttons and label text options')
+                             help='actual same-project screen used to compare label/input heights, label presentation and editor buttons')
         command.add_argument('--preserve-existing', action='store_true',
                              help='compare retained Designer properties with the actual original; requires a Designer baseline')
         command.add_argument('--member-rename', action='append', default=[], metavar='OLD=NEW',
@@ -98,13 +101,16 @@ def main(argv=None):
             from src.sql.layout import normalize_sql_join_layout
             original = read_file(args.input).text()
             if args.normalize_layout:
+                if args.style_policy != 'kh':
+                    raise ValueError('--normalize-layout implements KH layout; it is unavailable with project style policy')
                 if args.candidate:
                     parser.error("--normalize-layout accepts one input")
                 print(normalize_sql_join_layout(original), end="")
                 return 0
             candidate = read_file(args.candidate).text() if args.candidate else original
             result = check_sql(candidate, original=original if args.candidate else None,
-                               preserve_aliases=args.preserve_aliases, check_delta=args.check_delta)
+                               preserve_aliases=args.preserve_aliases, check_delta=args.check_delta,
+                               check_style=args.style_policy == 'kh', check_preferences=args.style_policy == 'kh')
         elif args.command == "csharp":
             from src.csharp.checks import check_csharp
             result = check_csharp(read_file(args.input).text(),
@@ -116,7 +122,8 @@ def main(argv=None):
                                    screen_commands=args.screen_command,
                                    column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change,
                                    control_sources=control_sources, numeric_columns=args.numeric_column,
-                                   preserve_existing=args.preserve_existing, member_renames=member_renames)
+                                   preserve_existing=args.preserve_existing, member_renames=member_renames,
+                                   check_style=args.style_policy == 'kh')
         elif args.command == 'designer':
             from src.csharp.designer import check_designer
             result = check_designer(read_file(args.input).text(),
@@ -125,7 +132,8 @@ def main(argv=None):
                 code_behind=read_file(args.code_behind).text() if args.code_behind else '',
                 preserved_properties=args.preserve_property, column_edit_modes=column_modes,
                 allowed_property_changes=args.allow_property_change, control_sources=control_sources, numeric_columns=args.numeric_column,
-                preserve_existing=args.preserve_existing, member_renames=member_renames)
+                preserve_existing=args.preserve_existing, member_renames=member_renames,
+                check_style=args.style_policy == 'kh')
         elif args.command == 'sp-call':
             from src.pb.sql import check_sp_call
             result = check_sp_call(read_file(args.input).text(), read_file(args.procedure).text())
@@ -138,6 +146,10 @@ def main(argv=None):
         else:
             from src.maintenance.package_check import check_package
             result = check_package(args.input)
+        if args.command in {'sql', 'csharp', 'designer'}:
+            result.metadata['style_policy'] = args.style_policy
+            if args.style_policy == 'project':
+                result.not_checked.append('employee style instructions; inspect the selected personal style and actual project manually')
         print(result.to_json())
         return result.exit_code
     except (OSError, ValueError, UnicodeError) as error:
