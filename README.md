@@ -1,6 +1,6 @@
 # KH for Codex
 
-KH 3.0.17 provides ten focused skills and optional local checks for SQL, C#/Designer and PowerBuilder work. [한국어 및 상세 사용법](README.ko.md)
+KH 3.0.18 provides ten focused skills and optional local checks for SQL, C#/Designer and PowerBuilder work. [한국어 및 상세 사용법](README.ko.md)
 
 Use current user instructions, exact source and real project APIs. Small clear requests run directly. Load only the skills useful for the task. LINQ, intermediate tables and builds are disfavored; use them only when avoidance makes implementation difficult or the alternative has an extreme performance disadvantage. A current explicit prohibition still applies.
 
@@ -8,7 +8,9 @@ The skill entrypoints are `work-planning`, `work-execution`, `code-review`, `sys
 
 New DevExpress grids use the user-supplied [DataWindowToXml layout defaults](skills/csharp-designer-style-harness/references/grid-layout.md). Column edit modes distinguish ordinary read-only, action-enabled and editable columns. Checks review added cell TextOptions, SpinEdit masks, DisplayFormat and view behavior changes while preserving existing settings when a baseline is supplied.
 
-C# work uses the [user coding style](skills/csharp-designer-style-harness/references/coding-style.md) and [user-control initialization](skills/csharp-designer-style-harness/references/user-controls.md). Prefer suitable controls available in the target project, retain their defaults, and use the agreed semantic names. New controls retain at least their current constructor size unless compact sizing is explicitly requested; longer content can expand them. Optional checks accept actual control sources and a same-project Designer comparison screen; no fixed library name or universal font/size table is required.
+C# work uses the [user coding style](skills/csharp-designer-style-harness/references/coding-style.md) and [user-control initialization](skills/csharp-designer-style-harness/references/user-controls.md). Prefer suitable controls available in the target project, retain their defaults, and use the agreed semantic names. Match label and single-line input heights to similar controls in the actual screen; preserve constructor label font/alignment, including a self-property Default fallback to Far/Center. Width may grow for content. Optional checks use actual control sources and a same-project Designer to flag proved font/alignment/height mismatches; no universal font/height table is required.
+
+For company distribution with employee-owned styles and no personal GitHub dependency, use the separate [company ZIP bundle](company/README.ko.md). Its checks use project policy rather than enforcing KH's personal syntax and format preferences.
 
 Before implementing screen commands, read the actual same-project event flow and current permitted operations. Optional C# checks accept `--style-reference-csharp` and repeated `--screen-command` arguments to review command phases and detect excluded event subscriptions. These comparisons do not globally ban row-state acceptance, mode resets or navigation. Slide-based layouts require the full rendered slide before deriving columns.
 

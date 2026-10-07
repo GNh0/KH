@@ -15,6 +15,8 @@ Apply to the actual target project. Do not impose WinForms architecture on MAUI/
 
 Keep these decisions in the working context; no intake form or audit file is required.
 
+For labels and single-line inputs added or edited, match height and sizing constraints to similar controls in the actual screen. Inherit the selected control's initialized label font, H/V alignment and UseTextOptions; avoid arbitrary overrides. Read a self-property Default fallback from that source rather than imposing one global alignment. Apply needed role/request exceptions with their actual basis. Width may grow for content. Resolve differences before completion.
+
 ## Read for the current change
 
 Read the needed sections, not every reference. Inspect relevant source bodies completely; retrieve material omissions from truncated output.

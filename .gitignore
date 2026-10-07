@@ -10,3 +10,4 @@ venv/
 .demo-output/
 test_cli_project/
 test_project/
+dist/

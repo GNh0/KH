@@ -155,7 +155,9 @@ def parse_designer_source(designer_source: str) -> DesignerModel:
                 form_properties[parts[0]] = value
             continue
         name, property_path = parts[0], '.'.join(parts[1:])
-        property_values.setdefault(name, {})[property_path] = value
+        properties = property_values.setdefault(name, {})
+        properties.pop(property_path, None)
+        properties[property_path] = value
         assignments.append({"name": name, "property": property_path, "value": value,
                             "line": source.count('\n', 0, match.start()) + 1})
 

@@ -12,6 +12,7 @@ from .control_style import direct_statement_spans
 from .control_names import control_name_issue, known_control_kind
 from .designer_model import DesignerModel, _normalized_csharp_value, _parse_size
 from .lexer import _scan_csharp, balanced_close, string_literal_value
+from .control_values import LABEL_PROPERTIES, label_value_key
 
 
 _TYPE = r'[A-Za-z_][A-Za-z0-9_.:]*'
@@ -54,6 +55,7 @@ def read_control_defaults(sources: Sequence[str]) -> list[ControlDefaults]:
                         masked, _ = _scan_csharp(statement)
                         writes = list(_WRITE.finditer(masked))
                         if len(writes) == 1 and not masked[:writes[0].start()].strip():
+                            props.pop(writes[0][1], None)
                             props[writes[0][1]] = statement[writes[0].end():].rstrip().removesuffix(';').strip()
                             unresolved.discard(writes[0][1])
                         else:
@@ -106,7 +108,7 @@ def _inherited_defaults(control: ControlDefaults, defaults: Sequence[ControlDefa
 def check_control_defaults(model: DesignerModel, *, original: DesignerModel | None = None,
                           defaults: Sequence[ControlDefaults] = (),
                           allowed_property_changes: Iterable[str] = (),
-                          check_declarations: bool = True) -> list[Issue]:
+                          check_declarations: bool = True, check_style: bool = True) -> list[Issue]:
     issues: list[Issue] = []
     allowed = set(allowed_property_changes)
     base_model = with_control_base_types(model, defaults)
@@ -121,7 +123,8 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
                     (new_type or prop not in old or _normalized_csharp_value(old[prop]) != _normalized_csharp_value(control.properties[prop])))
 
         is_date = known_control_kind(base_model.controls[name].type_name) == 'DateEdit'
-        if known_control_kind(base_model.controls[name].type_name) in {'SimpleButton', 'Button'} and changed('Tag'):
+        is_label = known_control_kind(base_model.controls[name].type_name) == 'LabelControl'
+        if check_style and known_control_kind(base_model.controls[name].type_name) in {'SimpleButton', 'Button'} and changed('Tag'):
             value = string_literal_value(control.properties['Tag'])
             if value and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', value) and value != value.upper():
                 issues.append(Issue('action_tag_case_preference', 'warning',
@@ -133,11 +136,11 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
                 issues.append(Issue('control_name_mismatch', 'warning',
                                     'The declared member and its Name differ. Keep naming changes consistent with the actual field and references.',
                                     details={'control': name, 'name_value': value}))
-        if check_declarations and new_type and f'{name}.Name' not in allowed:
+        if check_style and check_declarations and new_type and f'{name}.Name' not in allowed:
             naming = control_name_issue(name, base_model.controls[name].type_name)
             if naming:
                 issues.append(naming)
-        if is_date:
+        if check_style and is_date:
             for prop in control.properties:
                 if (re.search(r'(^|\.)EditFormat\.', prop) or prop.endswith(('Mask.EditMask', 'Properties.EditMask', 'Mask.MaskType'))) and changed(prop):
                     issues.append(Issue('date_input_option_review', 'warning',
@@ -157,7 +160,19 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
                 continue
             actual = control.properties[prop]
             equal = _normalized_csharp_value(actual) == _normalized_csharp_value(expected)
-            if prop == 'Size' and not equal:
+            if is_label and check_style and prop in LABEL_PROPERTIES:
+                if prop == 'Size':
+                    default_size, screen_size = _parse_size(expected), _parse_size(actual)
+                    if default_size is not None and screen_size is not None and screen_size[0] < default_size[0]:
+                        issues.append(Issue('user_control_size_shrink', 'error',
+                                            'The new label width is smaller than its supplied constructor width; an explicit compact-size request can establish an exception.',
+                                            details={'property': f'{name}.Size', 'constructor_size': default_size, 'screen_size': screen_size}))
+                # Label height/font/alignment use the scoped constructor + approved screen comparison.
+                continue
+            if is_label:
+                left, right = label_value_key(prop, actual), label_value_key(prop, expected)
+                equal |= left is not None and left == right
+            if check_style and prop == 'Size' and not equal:
                 default_size, screen_size = _parse_size(expected), _parse_size(actual)
                 if default_size is not None and screen_size is not None:
                     if any(screen < default for screen, default in zip(screen_size, default_size)):

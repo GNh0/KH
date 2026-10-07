@@ -1,0 +1,11 @@
+# C# and Designer source contracts
+
+Read the exact class, relevant partial/base class, handlers and actual control library. Constructors, inherited initialization, shared helpers and Designer collection initialization can jointly determine effective defaults. A similar control or familiar DevExpress property is not evidence that this project needs a new assignment. Check lookup code/display binding, buttons, date editor collections, label alignment, numeric editors and sizing through the actual source and intended rendered screen.
+
+Static Designer and runtime responsibilities follow the target project. Preserve member references, Name values, event subscriptions, resources, container relationships and repository registration when editing or renaming. For imports, review the final result as well as the delta so unchanged foreign defects are not hidden.
+
+Trace query/edit/new/save/clear responsibilities in approved source. Focused rows and checked selections may identify different records. Distinguish UI-only values, XML fields, DataRow states and persisted keys. Do not replace transaction calls or propagate values across all rows without examining actual ownership and the requested behavior.
+
+For optional checks, `csharp` and `designer` accept separate source originals, `--style-reference-csharp`, `--style-reference-designer`, repeated `--control-source`, explicit `--preserve-property`, `--preserve-existing`, `--member-rename OLD=NEW` and `--allow-property-change MEMBER.PROPERTY` where supported. Read `--help` for the selected command. These inputs describe the comparison scope, not authorization. `--column-mode MEMBER=read_only|action|editable` and `--numeric-column MEMBER` opt into the documented DevExpress edit/Spin repository contract; do not use them as a universal rule for all controls.
+
+The company wrapper omits personal KH naming, braces, numeric-format and grid-template preferences. Supplied constructor differences remain review findings, but a smaller control does not become a universal company error. Free-form employee style, full API semantics, indirect initialization, runtime layout and database persistence require actual review or execution evidence.

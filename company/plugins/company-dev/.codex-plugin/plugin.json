@@ -1,0 +1,14 @@
+{
+  "name": "company-dev",
+  "version": "1.0.0",
+  "description": "Shared SQL, PowerBuilder and C# development skills with separate personal style settings.",
+  "author": { "name": "Development Team" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Company Development",
+    "shortDescription": "SQL, PB, C# and practical development workflows.",
+    "longDescription": "Nine focused development skills. Common source and contract checks are shared; employees maintain their own style files outside the plugin. Distributed through a local marketplace without a personal GitHub dependency.",
+    "developerName": "Development Team",
+    "category": "Productivity"
+  }
+}

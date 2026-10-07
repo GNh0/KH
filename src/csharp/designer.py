@@ -10,6 +10,7 @@ from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .control_names import known_control_kind
+from .label_style import check_label_style
 from .source_preservation import compare_existing_properties, remap_members, validate_designer_renames
 
 
@@ -29,17 +30,14 @@ def _editor_button_paths(source: str) -> dict[str, set[str]]:
 
 def _check_reference_editor_defaults(model: DesignerModel, reference: DesignerModel,
                                      retained_controls: set[str]) -> list[Issue]:
-    """Review button and label setup visible in an actual comparison screen."""
+    """Review button setup visible in an actual comparison screen."""
     reference_paths = _editor_button_paths(reference.source)
     candidate_paths = _editor_button_paths(model.source)
     expected: dict[str, set[str]] = defaultdict(set)
-    label_text_options = False
     for name, control in reference.controls.items():
         kind = known_control_kind(control.type_name)
         if kind in {'LookUpEdit', 'DateEdit', 'SpinEdit', 'RepositoryItemLookUpEdit', 'RepositoryItemDateEdit', 'RepositoryItemSpinEdit'}:
             expected[kind].update(reference_paths.get(name, set()))
-        elif kind == 'LabelControl' and control.properties.get('Appearance.Options.UseTextOptions', '').strip() == 'true':
-            label_text_options = True
     issues: list[Issue] = []
     for name, control in model.controls.items():
         kind = known_control_kind(control.type_name)
@@ -51,11 +49,6 @@ def _check_reference_editor_defaults(model: DesignerModel, reference: DesignerMo
                 issues.append(Issue('editor_button_initialization_review', 'warning',
                                     'The comparison screen initializes editor buttons, but this new control does not. Verify the actual constructor/shared initialization and required collection items; a button hidden at runtime may still need its Designer initializer.',
                                     details={'control': name, 'type': control.type_name, 'missing_button_paths': missing}))
-        elif kind == 'LabelControl' and label_text_options and \
-                control.properties.get('Appearance.Options.UseTextOptions', '').strip() != 'true':
-            issues.append(Issue('label_text_options_review', 'warning',
-                                'Comparison-screen labels enable Appearance.Options.UseTextOptions, but this new label does not. Verify effective alignment through the current control constructor and rendered screen.',
-                                details={'control': name, 'type': control.type_name}))
     return issues
 
 
@@ -65,7 +58,7 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
                    inherited_handlers: Iterable[str] = (), column_edit_modes: Mapping[str, str] | None = None,
                    allowed_property_changes: Iterable[str] = (), control_sources: Sequence[str] = (),
                    numeric_columns: Iterable[str] = (), preserve_existing: bool = False,
-                   member_renames: Mapping[str, str] | None = None) -> CheckResult:
+                   member_renames: Mapping[str, str] | None = None, check_style: bool = True) -> CheckResult:
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
     result.metadata['comparison_baselines'] = {'designer': original is not None}
@@ -79,9 +72,12 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         original = remap_members(original, renames)
         result.metadata['member_renames'] = dict(renames)
     model = parse_designer_source(designer)
-    result.issues.extend(check_numeric_formats(designer, original=original))
-    result.checked.append('literal numeric format choices at recognized C# format sites')
-    result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
+    if check_style:
+        result.issues.extend(check_numeric_formats(designer, original=original))
+        result.checked.append('literal numeric format choices at recognized C# format sites')
+        result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
+    else:
+        result.not_checked.append('personal naming, numeric-format and KH grid-layout preferences')
     baseline = parse_designer_source(original) if original is not None else None
     defaults = read_control_defaults(control_sources)
     if baseline is not None:
@@ -103,7 +99,7 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
                              baseline.controls[name].type_name == control.type_name}
         result.issues.extend(_check_reference_editor_defaults(with_control_base_types(model, defaults),
             with_control_base_types(reference, defaults), retained_controls))
-        result.checked.append('new lookup/date/spin control and Repository button initialization plus label text options against the supplied comparison screen')
+        result.checked.append('new lookup/date/spin control and Repository button initialization against the supplied comparison screen')
         result.not_checked.append('runtime button visibility, label alignment and indirect control/base initialization')
     elif any(known_control_kind(control.type_name) in {'LookUpEdit', 'DateEdit', 'SpinEdit', 'RepositoryItemLookUpEdit', 'RepositoryItemDateEdit', 'RepositoryItemSpinEdit', 'LabelControl'}
              for control in with_control_base_types(model, defaults).controls.values()):
@@ -118,8 +114,18 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         result.checked.append('Spin repository bindings for supplied numeric column members')
     result.not_checked.append('numeric column type inference and runtime ColumnEdit/column recreation')
     result.issues.extend(check_control_defaults(model, original=baseline, defaults=defaults,
-                                                allowed_property_changes=allowed_property_changes))
-    result.checked.append('date control naming and added input formatting')
+                                                allowed_property_changes=allowed_property_changes, check_style=check_style))
+    if check_style:
+        labels = check_label_style(model, original=baseline,
+                                   reference=parse_designer_source(style_reference) if style_reference is not None else None,
+                                   defaults=defaults, allowed_property_changes=allowed_property_changes)
+        result.issues.extend(labels.issues)
+        result.checked.extend(labels.checked)
+        result.not_checked.extend(labels.not_checked)
+        result.incomplete |= labels.incomplete
+        result.metadata.update(labels.metadata)
+    if check_style:
+        result.checked.append('date control naming and added input formatting')
     if control_sources:
         result.checked.append('supplied user-control types and direct parameterless-constructor assignments')
         result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')
@@ -127,9 +133,14 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         result.not_checked.append('available user-control selection and constructor-default overrides; no control sources supplied')
     result.issues.extend(check_grid_style(with_control_base_types(model, defaults),
                                          original=with_control_base_types(baseline, defaults) if baseline else None,
-                                         column_edit_modes=column_edit_modes,
-                                         allowed_property_changes=allowed_property_changes))
-    result.checked.append('KH HTML grid defaults and explicit column edit modes; property deltas when baseline supplied')
+                                          column_edit_modes=column_edit_modes,
+                                          allowed_property_changes=allowed_property_changes, check_style=check_style))
+    if check_style:
+        result.checked.append('KH HTML grid defaults and explicit column edit modes; property deltas when baseline supplied')
+    elif column_edit_modes:
+        result.checked.append('explicitly supplied column edit modes')
+    else:
+        result.not_checked.append('column editing contract; no explicit column modes supplied')
     masked, _ = _scan_csharp(designer)
     preserved_properties = tuple(preserved_properties)
     inherited_handlers = set(inherited_handlers)

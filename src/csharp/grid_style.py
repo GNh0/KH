@@ -36,7 +36,7 @@ def column_edit_properties(mode: str) -> dict[str, str]:
 def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = None,
                      column_edit_modes: Mapping[str, str] | None = None,
                      allowed_property_changes: Iterable[str] = (),
-                     check_required_defaults: bool = True) -> list[Issue]:
+                     check_required_defaults: bool = True, check_style: bool = True) -> list[Issue]:
     issues: list[Issue] = []
     allowed = set(allowed_property_changes)
     modes = dict(column_edit_modes or {})
@@ -49,6 +49,18 @@ def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = N
             issues.append(Issue('column_edit_target_invalid', 'error',
                                 'The requested edit contract requires a GridColumn member.', details={'column': name}))
     before_controls = original.controls if original else {}
+    if not check_style:
+        for name, mode in modes.items():
+            control = model.controls.get(name)
+            if control is None:
+                continue
+            actual = {p: control.properties[p].strip() for p in EDIT_PROPERTIES if p in control.properties}
+            expected = column_edit_properties(mode)
+            if actual != expected:
+                issues.append(Issue('column_edit_mode_mismatch', 'error',
+                                    'Column edit properties do not match the explicitly requested mode.',
+                                    details={'column': name, 'mode': mode, 'expected': expected, 'actual': actual}))
+        return issues
     for name in sorted(set(model.controls) | set(before_controls)):
         control = model.controls.get(name)
         before = before_controls.get(name)

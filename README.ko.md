@@ -1,12 +1,14 @@
 # KH for Codex
 
-KH 3.0.17은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+KH 3.0.18은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
 작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
 새 그리드는 사용자가 제공한 [DataWindowToXml 기본 속성](skills/csharp-designer-style-harness/references/grid-layout.md)을 사용한다. 셀 TextOptions·SpinEdit EditMask·DisplayFormat·OptionsBehavior를 기본으로 덧붙이지 않고, 일반 편집 차단·버튼 동작 유지·편집 가능 컬럼을 구분한다. 기존 화면은 원본과 비교해 현재 설정을 보존한다.
 
-C# 작성은 [사용자 작성 방식](skills/csharp-designer-style-harness/references/coding-style.md)과 [사용자 컨트롤 기본 초기화](skills/csharp-designer-style-harness/references/user-controls.md)를 적용한다. 현재 프로젝트에서 쓸 수 있는 적절한 사용자 컨트롤을 우선하고 초기화 속성을 유지한다. 새 컨트롤은 별도의 컴팩트 크기 요청이 없다면 기본 크기보다 줄이지 않고, 긴 내용에 맞춰 넓힐 수 있다. KoneLib에 한정하지 않으며 기존 Name 규칙과 그리드별 Repository 역할 명명을 함께 사용한다. 선택적 검사는 실제 컨트롤 소스와 같은 프로젝트의 비교 화면으로 크기·버튼·정렬 누락을 검토한다.
+C# 작성은 [사용자 작성 방식](skills/csharp-designer-style-harness/references/coding-style.md)과 [사용자 컨트롤 기본 초기화](skills/csharp-designer-style-harness/references/user-controls.md)를 적용한다. 현재 프로젝트에서 쓸 수 있는 적절한 사용자 컨트롤을 우선하고 초기화 속성을 유지한다. 라벨과 한 줄 입력 컨트롤의 높이는 실제 화면의 비슷한 컨트롤에 맞추며, 라벨의 기본 폰트·정렬을 유지한다. u_Label의 Default 조건식으로 설정되는 Far/Center도 기본 정렬로 인정한다. 긴 내용에 맞춰 폭은 늘릴 수 있다. KoneLib에 한정하지 않으며 기존 Name 규칙과 그리드별 Repository 역할 명명을 함께 사용한다. 선택적 검사는 실제 컨트롤 소스와 같은 프로젝트의 비교 화면으로 폰트·정렬·높이 불일치와 버튼 누락을 검토한다.
+
+개인 GitHub에 의존하지 않는 회사 배포와 직원별 스타일 설정은 별도의 [회사 ZIP 번들](company/README.ko.md)을 사용한다. 회사 검사기는 KH 개인 문법·포맷 선호를 강제하지 않는 project 정책을 적용한다.
 
 화면 명령을 구현하기 전에 같은 프로젝트의 실제 이벤트 흐름과 현재 허용 동작을 확인한다. 선택적 C# 검사에 `--style-reference-csharp`와 반복 `--screen-command`를 지정하면 이벤트 단계의 차이와 요청에서 제외한 명령 연결을 확인한다. AcceptChanges·상태 초기화·화면 이동 자체를 일괄 금지하지 않는다. 슬라이드 기반 화면은 전체 렌더링을 보고 컬럼을 확정한다.
 
