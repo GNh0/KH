@@ -1,6 +1,6 @@
 # KH for Codex
 
-KH 3.0.19는 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+KH 3.0.20은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
 작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
@@ -11,6 +11,8 @@ C# 작성은 [사용자 작성 방식](skills/csharp-designer-style-harness/refe
 개인 GitHub에 의존하지 않는 회사 배포와 직원별 스타일 설정은 별도의 [회사 ZIP 번들](company/README.ko.md)을 사용한다. 회사 검사기는 KH 개인 문법·포맷 선호를 강제하지 않는 project 정책을 적용한다.
 
 PB 스킬에는 PblScripter의 export 스크립트와 x86 추출기가 포함돼 있다. [내장 실행기](skills/pb-to-csharp-migration-harness/references/orca.md)가 설치된 PB 7.0·10.5·12.5를 자동으로 시도해 실제 추출에 성공한 런타임을 선택한다. 외부 PblScripter 설치는 필요 없으며 Python 3.11+, Windows PowerShell과 사용할 수 있는 정식 PB/ORCA 설치는 필요하다. 임시 입력·실패 출력·필요한 추출기 빌드는 소스와 플러그인 폴더 밖에서 처리한다.
+
+보조 파일을 만드는 작업은 [임시 파일 지침](skills/work-execution/references/workspace-files.md)에 따라 최종 전달 전에 정리한다. 요청한 결과물과 재개에 필요한 증거는 보존하고, 남겨야 하는 임시 파일의 경로와 이유를 기존 응답·인계에 적는다. 성공한 분석용 추출 출력은 호출자가 정리해야 하며 임시 폴더에 있다는 이유로 자동 삭제되는 것은 아니다.
 
 화면 명령을 구현하기 전에 같은 프로젝트의 실제 이벤트 흐름과 현재 허용 동작을 확인한다. 선택적 C# 검사에 `--style-reference-csharp`와 반복 `--screen-command`를 지정하면 이벤트 단계의 차이와 요청에서 제외한 명령 연결을 확인한다. AcceptChanges·상태 초기화·화면 이동 자체를 일괄 금지하지 않는다. 슬라이드 기반 화면은 전체 렌더링을 보고 컬럼을 확정한다.
 

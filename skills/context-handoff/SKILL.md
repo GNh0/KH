@@ -7,6 +7,8 @@ description: Capture or restore a compact checkpoint for an ongoing task when th
 
 Briefly record the current objective, authorized scope, latest corrections, changed files, validation results, and next steps. Link the relevant actual files and error locations instead of copying long tool outputs.
 
+For pending scratch, record only the paths and purpose still needed for continuation; clean disposable items using [workspace files](../work-execution/references/workspace-files.md).
+
 On resumption, check current files/processes and the paused state. Do not repeat completed steps; incorporate new feedback into the existing objective. Honor the user's stop request and scheduled resumption time.
 
 Check skill names and versioned cache paths in the handoff against the current session's skill list. Use the current paths when supplied. Do not add searches for removed harnesses or skill-use tables to the handoff procedure.

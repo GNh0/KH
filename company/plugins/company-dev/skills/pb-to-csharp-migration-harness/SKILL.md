@@ -13,4 +13,4 @@ For analysis or extraction, deliver only the requested scope. PBL extraction use
 
 Prefer applicable target user controls and verified initialization. Missing controls require a behavior-preserving mapping to available target components, not a claim that the source cannot be migrated.
 
-Put analysis exports and probes in an explicit task-specific temporary directory outside source trees. Distinguish static mappings, executed results and unverified UI/DB behavior. Do not require a migration plan for simple SQL extraction.
+Follow [workspace files](../work-execution/references/workspace-files.md) for temporary analysis exports/probes and cleanup after use. Distinguish static mappings, executed results and unverified UI/DB behavior. Do not require a migration plan for simple SQL extraction.

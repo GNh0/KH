@@ -11,4 +11,4 @@ For formatting only, preserve JOIN types/order, conditions, aliases unless expli
 
 For semantic changes and generated procedures, trace actual callers, keys, NULL/duplicate behavior, XML/state mapping, parameters and returned fields. Use [procedure contracts](references/contracts.md) where applicable.
 
-Optional comparison: `python -B <plugin-root>/scripts/company_check.py sql <absolute-before.sql> <absolute-after.sql> --preserve-aliases`. This compares reported lexical/source items, not DB equivalence. The company checker supplies no universal SQL formatter or personal style score. Keep scratch outside source trees.
+Optional comparison: `python -B <plugin-root>/scripts/company_check.py sql <absolute-before.sql> <absolute-after.sql> --preserve-aliases`. This compares reported lexical/source items, not DB equivalence. The company checker supplies no universal SQL formatter or personal style score. Follow [workspace files](../work-execution/references/workspace-files.md) for scratch and cleanup.
