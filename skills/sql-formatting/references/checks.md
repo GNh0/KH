@@ -4,7 +4,11 @@ Run `python <plugin-root>/scripts/kh_check.py sql <absolute-original.sql> <absol
 
 For a standalone check of new SQL, use `sql <absolute-candidate.sql>`. Passing the same file as both original and candidate is an input error. Without a pre-change original, do not manufacture a baseline from a post-change copy. `comparison_baselines.sql=false` means no preservation comparison against the original was performed.
 
-`--normalize-layout` normalizes supported derived FROM/JOIN queries, JOIN/EXISTS whitespace, and clause line breaks, returning the result on stdout without overwriting files. Codex determines alias business roles from the current query and user instructions. `src.sql.aliases` mechanically applies only explicitly specified scope/alias changes.
+`--normalize-layout` normalizes supported derived FROM/JOIN queries, JOIN/EXISTS whitespace, clause line breaks and simple grouped INSERT/SELECT columns, returning the result on stdout without overwriting files. Input alignment tabs expand at four-column stops before anchor-based formatting; final alignment padding uses spaces. Tabs inside strings, comments and quoted identifiers remain intact. Codex determines alias business roles from the current query and user instructions. `src.sql.aliases` mechanically applies only explicitly specified scope/alias changes.
+
+`tab_indentation_not_allowed` reviews alignment tabs between SQL tokens as well as leading indentation; protected token content is excluded. `insert_select_column_alignment_invalid` compares actual text columns of wide grouped target and SELECT lists and their separators. Shared starts fit the longest item across both lists, while already aligned roomier columns remain valid. This is a source-text check for fixed-width layout, not an editor pixel measurement.
+
+`insert_select_alignment_unverified` identifies unsupported wide mappings such as multiline/commented expressions, SELECT modifiers or differing row groups. Normalization preserves these lists for direct review. VALUES lists and complete UNION mapping coverage are not implemented by this helper; inspect their final columns directly. No layout result verifies the semantic target/value mapping.
 
 Errors include token-preservation failures and violations of explicit alignment contracts under inspection. Warnings identify separate style/disfavored-pattern checks. Mark unsupported syntax or semantic changes as unverified, not successful. There is no separate retry procedure to obtain signatures, provider receipts, or hashes.
 
