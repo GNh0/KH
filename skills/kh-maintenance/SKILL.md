@@ -7,7 +7,7 @@ description: Maintain or audit this KH plugin, its SQL/C#/PB checkers, scoped pr
 
 Use this skill for requests about KH's own skills, checkers, package, or conversation audits. Do not run it as a prerequisite for ordinary work.
 
-Apply the current skill-creator guidance to skill changes. Do not turn a single past error or example name into a global prohibition. Distinguish actual source/APIs, user requirements, validated profiles, and checker results.
+Apply the current skill-creator guidance to skill changes. For a reported bad addition, identify whether the existing path already meets the request and what concrete gap the addition resolves. Fix that decision criterion rather than turning the cited API/property/name into a global rule or automatic finding by itself. Add checks for observable contracts with relevant inputs; absence from an example alone does not establish unnecessary code. Distinguish actual source/APIs, user requirements, validated profiles, and checker results.
 
 - Package validation: `python <plugin-root>/scripts/kh_check.py package <absolute-plugin-root>`.
 - Type/regression validation for checker changes: [development checks](../../docs/development.md).

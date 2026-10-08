@@ -21,12 +21,10 @@ _ACTIONS = {
     'control_protection': re.compile(r'\bUsr_ControlsProtect\s*\('),
     'program_navigation': re.compile(r'\bOpenMenuProgram\s*\('),
     'search_command': re.compile(r'\bCallCommand\s*\(\s*(?:[\w]+\s*\.\s*)*BizCommand\s*\.\s*Search\s*\)'),
-    'report_page_break': re.compile(r'\.\s*PageBreak\s*=(?!=)'),
 }
 _REVIEW_ACTIONS = {
     'save': ('AcceptChanges', 'default_edit_mode', 'control_protection'),
     'new': ('program_navigation',),
-    'print': ('report_page_break',),
 }
 
 
@@ -85,7 +83,7 @@ def check_command_flow(candidate: str, *, original: str | None = None,
     if allowed is not None and not allowed <= COMMANDS:
         raise ValueError('screen commands must be search, new, edit, save, delete, clear, or print')
     result = CheckResult(not_checked=[
-        'command branch feasibility, indirect calls/subscriptions, inherited toolbar availability, expression-bodied handlers and XML/SP behavior'])
+        'command branch feasibility, indirect calls/subscriptions, inherited toolbar availability, expression-bodied handlers, report behavior and XML/SP behavior'])
     if allowed is None and style_reference is None:
         result.not_checked.extend([
             'allowed screen commands; no explicit command scope supplied',
@@ -124,7 +122,7 @@ def check_command_flow(candidate: str, *, original: str | None = None,
     if style_reference is None:
         result.not_checked.append('project command-phase comparison; no same-project C# style reference supplied')
     else:
-        result.checked.append('recognizable Save/New/Print phase operations against supplied C# command bodies')
+        result.checked.append('recognizable Save/New phase operations against supplied C# command bodies')
         for command in commands:
             if command.kind not in _REVIEW_ACTIONS:
                 continue
@@ -144,7 +142,7 @@ def check_command_flow(candidate: str, *, original: str | None = None,
                 other_phases = sorted({reference.kind for reference in references
                     if reference.kind != command.kind and _counts(reference)[action]})
                 result.issues.append(Issue('command_phase_drift_review', 'warning',
-                    'This command adds an operation absent from the supplied project command body. Inspect its actual phase, row states, report defaults and requested behavior; the operation is not globally prohibited.',
+                    'This command adds an operation absent from the supplied project command body. Inspect its actual phase, row states and requested behavior; the operation is not globally prohibited.',
                     line=command.line, details={'command': command.kind, 'method': command.name,
                         'operation': action, 'candidate_count': current[action],
                         'reference_count': expected[action], 'reference_other_phases': other_phases}))
