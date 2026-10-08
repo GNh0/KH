@@ -131,6 +131,10 @@ class CompanyBundleTests(unittest.TestCase):
                 self.assertEqual('local', marketplace['plugins'][0]['source']['source'])
                 self.assertEqual('./plugins/company-dev', marketplace['plugins'][0]['source']['path'])
                 self.assertEqual(9, len([n for n in names if n.endswith('/SKILL.md')]))
+                exporter_root = 'plugins/company-dev/skills/pb-to-csharp-migration-harness/scripts/'
+                for name in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
+                             'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):
+                    self.assertIn(exporter_root + name, names)
                 self.assertFalse(any('kh-maintenance' in n or '.git/' in n or 'temp_output' in n or '__pycache__' in n or 'docs/kh' in n for n in names))
                 self.assertTrue(all(b'GNh0' not in bundle.read(n) and b'KONEIT' not in bundle.read(n) for n in names))
                 bundle.extractall(Path(folder) / 'installed-source')
@@ -143,3 +147,10 @@ class CompanyBundleTests(unittest.TestCase):
             result = json.loads(runtime.stdout)
             self.assertEqual('project', result['style_policy'])
             self.assertNotIn('expression_body_preference', {i['code'] for i in result['issues']})
+            launcher = plugin / 'skills/pb-to-csharp-migration-harness/scripts/export_pbl.py'
+            extraction = subprocess.run([sys.executable, '-B', str(launcher), 'probe', '--pbl', str(Path(folder) / 'missing.pbl')],
+                                         cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(0, extraction.returncode, extraction.stdout + extraction.stderr)
+            capability = json.loads(extraction.stdout)
+            self.assertEqual('pbl_not_found', capability['reason_code'])
+            self.assertTrue(Path(capability['tool_script']).is_relative_to(plugin))

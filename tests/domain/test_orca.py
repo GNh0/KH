@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import struct
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from src.pb.orca import (
     FALLBACK_ORDER,
@@ -13,6 +17,9 @@ from src.pb.orca import (
     OrcaVersionConfig,
     PbOrcaRuntime,
     X86_PE_MACHINE,
+    bundled_tool_root,
+    default_version_configs,
+    helper_matches_bundle,
     read_pe_machine,
 )
 
@@ -251,6 +258,8 @@ class PbOrcaRuntimeTests(unittest.TestCase):
 
         self.assertEqual(global_path_before, os.environ.get("PATH"))
         self.assertEqual("yes", runner.calls[0][1]["env"]["KEEP"])
+        self.assertEqual("utf-8", runner.calls[0][1]["encoding"])
+        self.assertEqual("replace", runner.calls[0][1]["errors"])
 
     def test_pb7_korean_path_is_preserved_when_ansi_round_trip_is_lossless(self) -> None:
         runner = RecordingRunner()
@@ -378,9 +387,123 @@ class PbOrcaRuntimeTests(unittest.TestCase):
     def test_pbl_header_number_is_not_used_as_orca_version(self):
         self.pbl_path.write_bytes(b'0600')
         runner = RecordingRunner()
-        result = self.runtime(runner).convert(self.request(None))
-        self.assertEqual('version_not_selected_or_unsupported', result.reason_code)
+        decision = self.runtime(runner).probe(self.request(None))
+        self.assertTrue(decision.ready)
+        self.assertEqual(('125', '105', '70'), decision.candidate_versions)
         self.assertEqual([], runner.calls)
+
+    def test_automatic_selection_retries_failed_version_and_publishes_only_success(self):
+        class CompatibleRunner(RecordingRunner):
+            def __call__(self, command, **kwargs):
+                result = super().__call__(command, **kwargs)
+                version = command[command.index('-Version') + 1]
+                if version == '125':
+                    result.returncode = 5
+                    result.stderr = 'PBORCA_LibraryDirectory failed: bad library'
+                return result
+
+        runner = CompatibleRunner()
+        original = self.pbl_path.read_bytes()
+        result = self.runtime(runner).convert(self.request(None))
+        self.assertEqual('completed', result.status)
+        self.assertEqual('105', result.probe.selected_version)
+        self.assertEqual(['125', '105'], [r.probe.selected_version for r in result.version_attempts])
+        self.assertEqual({'object-105.srw'}, {p.name for p in self.output_directory.iterdir()})
+        self.assertEqual(original, self.pbl_path.read_bytes())
+        for command, _ in runner.calls:
+            staged_path = Path(command[command.index('-PblPath') + 1])
+            self.assertNotEqual(self.pbl_path, staged_path)
+            self.assertFalse(staged_path.exists())
+
+    def test_auto_checks_fresh_source_instead_of_exit_code_alone(self):
+        class NoSourceFirstRunner(RecordingRunner):
+            def __call__(self, command, **kwargs):
+                result = super().__call__(command, **kwargs)
+                if command[command.index('-Version') + 1] == '125':
+                    output = Path(command[command.index('-OutputDirectory') + 1])
+                    (output / 'object-125.srw').write_text('invalid export')
+                return result
+        result = self.runtime(NoSourceFirstRunner()).convert(self.request('auto'))
+        self.assertEqual('105', result.probe.selected_version)
+        self.assertEqual('incomplete', result.version_attempts[0].status)
+
+    def test_auto_all_fail_leaves_requested_output_untouched_and_reports_attempts(self):
+        self.output_directory.mkdir()
+        existing = self.output_directory / 'existing.srw'
+        existing.write_text('global type existing from window')
+        result = self.runtime(RecordingRunner(returncode=37)).convert(self.request(None))
+        self.assertEqual('no_compatible_runtime', result.reason_code)
+        self.assertIsNone(result.probe.selected_version)
+        self.assertEqual(37, result.exit_code)
+        self.assertEqual(3, len(result.to_dict()['version_attempts']))
+        self.assertEqual({'existing.srw'}, {p.name for p in self.output_directory.iterdir()})
+
+    def test_auto_skips_missing_runtime_without_starting_it(self):
+        self.configs['125'].orca_dll.unlink()
+        runner = RecordingRunner()
+        result = self.runtime(runner).convert(self.request(None))
+        self.assertEqual('105', result.probe.selected_version)
+        self.assertEqual(1, len(runner.calls))
+
+    def test_auto_without_output_directory_does_not_execute(self):
+        runner = RecordingRunner()
+        result = self.runtime(runner).convert(replace(self.request(None), output_directory=None))
+        self.assertEqual('output_directory_required', result.reason_code)
+        self.assertEqual([], runner.calls)
+
+    def test_bundle_hash_pair_survives_git_or_zip_timestamp_changes(self):
+        hashes = {name: hashlib.sha256((self.tool_root / name).read_bytes()).hexdigest()
+                  for name in ('Export-PBL.ps1', 'PblExporter.exe')}
+        (self.tool_root / 'bundle.json').write_text(json.dumps({'sha256': hashes}))
+        os.utime(self.tool_root / 'PblExporter.exe', (1, 1))
+        self.assertTrue(self.runtime(RecordingRunner()).probe(self.request('125')).ready)
+        (self.tool_root / 'Export-PBL.ps1').write_text('# changed source')
+        self.assertEqual('x86_helper_unavailable', self.runtime(RecordingRunner()).probe(self.request('125')).reason_code)
+
+    def test_mismatched_helper_hash_is_not_accepted_even_with_newer_timestamp(self):
+        hashes = {name: hashlib.sha256((self.tool_root / name).read_bytes()).hexdigest()
+                  for name in ('Export-PBL.ps1', 'PblExporter.exe')}
+        (self.tool_root / 'bundle.json').write_text(json.dumps({'sha256': hashes}))
+        with (self.tool_root / 'PblExporter.exe').open('ab') as helper:
+            helper.write(b'changed')
+        self.assertFalse(helper_matches_bundle(self.tool_root))
+        self.assertEqual('x86_helper_unavailable', self.runtime(RecordingRunner()).probe(self.request('125')).reason_code)
+
+    def test_helper_build_targets_temp_without_changing_exporter_directory(self):
+        helper = self.tool_root / 'PblExporter.exe'
+        original = helper.read_bytes()
+        (self.tool_root / 'bundle.json').write_text('{"sha256": {}}')
+        compiler = self.root / 'csc.exe'
+        compiler.write_bytes(b'compiler')
+        runner = RecordingRunner()
+        result = self.runtime(runner, csc_candidates=(compiler,)).convert(
+            replace(self.request('125'), compile_helper=True))
+        self.assertEqual('completed', result.status)
+        command = runner.calls[0][0]
+        helper_path = Path(command[command.index('-HelperPath') + 1])
+        self.assertFalse(helper_path.is_relative_to(self.tool_root))
+        self.assertFalse(helper_path.parent.exists())
+        self.assertEqual(original, helper.read_bytes())
+
+
+class BundledExporterTests(unittest.TestCase):
+    def test_shipped_exporter_is_matched_x86_pair(self):
+        root = bundled_tool_root()
+        self.assertTrue(helper_matches_bundle(root))
+        self.assertEqual(X86_PE_MACHINE, read_pe_machine(root / 'PblExporter.exe'))
+
+    def test_runtime_discovery_finds_matching_orca_and_vm_outside_standard_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'PBORC125.DLL').write_bytes(b'dll')
+            (root / 'PBVM125.DLL').write_bytes(b'vm')
+            real_is_file = Path.is_file
+            with patch.dict(os.environ, {'PATH': str(root)}), patch(
+                    'src.pb.orca.Path.is_file', autospec=True,
+                    side_effect=lambda path: real_is_file(path) if path.is_relative_to(root) else False):
+                config = default_version_configs()['125']
+            self.assertEqual(root / 'PBORC125.DLL', config.orca_dll)
+            self.assertEqual((root,), config.runtime_directories)
 
 
 if __name__ == "__main__":

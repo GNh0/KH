@@ -1,6 +1,6 @@
 {
   "name": "company-dev",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Shared SQL, PowerBuilder and C# development skills with separate personal style settings.",
   "author": { "name": "Development Team" },
   "skills": "./skills/",

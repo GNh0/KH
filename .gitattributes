@@ -2,6 +2,8 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 *.ps1 text eol=crlf
+skills/pb-to-csharp-migration-harness/scripts/pbl-exporter/*.ps1 text eol=lf
+skills/pb-to-csharp-migration-harness/scripts/pbl-exporter/*.exe binary
 
 test_cli_project/ export-ignore
 test_project/ export-ignore

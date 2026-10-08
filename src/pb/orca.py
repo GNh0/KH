@@ -66,6 +66,7 @@ class OrcaCapabilityDecision:
     ascii_stage_root: Path | None
     executed_process_count: int = 0
     fallback_order: tuple[str, ...] = FALLBACK_ORDER
+    candidate_versions: tuple[str, ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -92,6 +93,7 @@ class OrcaCapabilityDecision:
             ),
             "executed_process_count": self.executed_process_count,
             "fallback_order": list(self.fallback_order),
+            "candidate_versions": list(self.candidate_versions),
         }
 
 
@@ -108,6 +110,7 @@ class OrcaConversionResult:
     path_prefix: tuple[str, ...]
     staged_input: bool
     probe: OrcaCapabilityDecision
+    version_attempts: tuple[OrcaConversionResult, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -122,11 +125,35 @@ class OrcaConversionResult:
             "path_prefix": list(self.path_prefix),
             "staged_input": self.staged_input,
             "probe": self.probe.to_dict(),
+            "version_attempts": [
+                {"version": attempt.probe.selected_version,
+                 "status": attempt.status, "reason_code": attempt.reason_code,
+                 "exit_code": attempt.exit_code, "stdout": attempt.stdout,
+                 "stderr": attempt.stderr}
+                for attempt in self.version_attempts
+            ],
         }
 
 
+def bundled_tool_root() -> Path:
+    return (Path(__file__).resolve().parents[2] / "skills" /
+            "pb-to-csharp-migration-harness" / "scripts" / "pbl-exporter")
+
+
+def helper_matches_bundle(tool_root: Path) -> bool:
+    """Check the released source/binary pair without relying on ZIP/Git timestamps."""
+    try:
+        manifest = json.loads((tool_root / "bundle.json").read_text(encoding="utf-8"))
+        for name in ("Export-PBL.ps1", "PblExporter.exe"):
+            if hashlib.sha256((tool_root / name).read_bytes()).hexdigest() != manifest["sha256"][name]:
+                return False
+        return True
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def default_version_configs() -> dict[str, OrcaVersionConfig]:
-    return {
+    configs = {
         "70": OrcaVersionConfig(
             version="70",
             orca_dll=Path(
@@ -162,6 +189,17 @@ def default_version_configs() -> dict[str, OrcaVersionConfig]:
             api_mode="unicode",
         ),
     }
+    # Search standard install roots and child-process PATH, never the source tree.
+    environment_paths = tuple(Path(item) for item in os.environ.get("PATH", "").split(os.pathsep) if item)
+    for version, config in tuple(configs.items()):
+        directories = tuple(dict.fromkeys((*config.runtime_directories, *environment_paths)))
+        match = next((directory for directory in directories
+                      if (directory / config.orca_dll.name).is_file()
+                      and all((directory / name).is_file() for name in config.runtime_dll_names)), None)
+        if match is not None:
+            configs[version] = replace(config, orca_dll=match / config.orca_dll.name,
+                                       runtime_directories=(match,))
+    return configs
 
 
 def read_pe_machine(path: Path) -> int | None:
@@ -310,12 +348,25 @@ class PbOrcaRuntime:
 
     def probe(self, request: OrcaRequest) -> OrcaCapabilityDecision:
         version = (request.version or "").strip()
+        if not version or version.lower() == "auto":
+            decisions = [self.probe(replace(request, version=key))
+                         for key in sorted(self._version_configs, key=lambda key: int(key), reverse=True)]
+            ready = [decision for decision in decisions if decision.ready]
+            if ready:
+                return replace(ready[0], candidate_versions=tuple(
+                    str(decision.selected_version) for decision in ready),
+                    message="Installed runtime candidates found without executing ORCA; conversion will verify PBL compatibility.")
+            available = next((decision for decision in decisions
+                              if decision.reason_code != "orca_dll_not_found"), None)
+            return available or self._fallback(
+                request, reason_code="runtime_version_unavailable",
+                message="No supported installed ORCA runtime is available (70, 105, 125).")
         config = self._version_configs.get(version)
         if config is None:
             return self._fallback(
                 request,
                 reason_code="version_not_selected_or_unsupported",
-                message="Select exactly one configured ORCA version before conversion.",
+                message="The requested ORCA version is unsupported; omit version for automatic selection.",
             )
 
         tool_script = request.tool_root / "Export-PBL.ps1"
@@ -399,7 +450,9 @@ class PbOrcaRuntime:
         helper_is_current_x86 = (
             helper_path.is_file()
             and read_pe_machine(helper_path) == X86_PE_MACHINE
-            and helper_path.stat().st_mtime_ns >= tool_script.stat().st_mtime_ns
+            and (helper_matches_bundle(request.tool_root)
+                 if (request.tool_root / "bundle.json").exists()
+                 else helper_path.stat().st_mtime_ns >= tool_script.stat().st_mtime_ns)
         )
         if helper_is_current_x86:
             helper_mode = "existing_x86"
@@ -563,6 +616,8 @@ class PbOrcaRuntime:
                 env=base_environment,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
         except OSError as exc:
@@ -633,6 +688,16 @@ class PbOrcaRuntime:
                 probe=decision,
             )
 
+        if decision.candidate_versions:
+            return self._convert_automatic(request, decision)
+        if decision.helper_mode == "compile_x86":
+            with tempfile.TemporaryDirectory(prefix="kh-pb-helper-") as folder:
+                return self._convert_ready(request, replace(
+                    decision, helper_path=Path(folder) / "PblExporter.exe"))
+        return self._convert_ready(request, decision)
+
+    def _convert_ready(self, request: OrcaRequest,
+                       decision: OrcaCapabilityDecision) -> OrcaConversionResult:
         if not decision.ascii_staging_required:
             return self._execute(
                 request,
@@ -653,6 +718,40 @@ class PbOrcaRuntime:
                 staged_path,
                 staged_input=True,
             )
+
+    def _convert_automatic(self, request: OrcaRequest,
+                           decision: OrcaCapabilityDecision) -> OrcaConversionResult:
+        assert request.output_directory is not None
+        attempts: list[OrcaConversionResult] = []
+        # Wrong-version attempts use a disposable copy and isolated output. Nothing
+        # from a failed/partial extraction is published to the requested directory.
+        with tempfile.TemporaryDirectory(prefix="kh-pb-version-",
+                                         dir=str(decision.ascii_stage_root) if decision.ascii_stage_root else None) as folder:
+            stage = Path(folder)
+            staged_input = stage / "input.pbl"
+            for version in decision.candidate_versions:
+                shutil.copyfile(request.pbl_path, staged_input)
+                candidate_output = stage / version
+                result = self.convert(replace(request, version=version,
+                                             pbl_path=staged_input,
+                                             output_directory=candidate_output))
+                attempts.append(result)
+                if result.status == "completed":
+                    if request.action != "list":
+                        request.output_directory.mkdir(parents=True, exist_ok=True)
+                        for source in sorted(candidate_output.rglob("*")):
+                            if source.is_file():
+                                target = request.output_directory / source.relative_to(candidate_output)
+                                target.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copyfile(source, target)
+                    return replace(result, staged_input=True,
+                                   probe=replace(result.probe, output_directory=request.output_directory),
+                                   version_attempts=tuple(attempts))
+        message = "No installed runtime completed the requested PBL operation; inspect version_attempts for native diagnostics."
+        return replace(attempts[-1], reason_code="no_compatible_runtime", message=message,
+                       probe=replace(decision, status="fallback", selected_version=None,
+                                     reason_code="no_compatible_runtime", message=message),
+                       version_attempts=tuple(attempts))
 
 
 def _build_request(arguments: argparse.Namespace) -> OrcaRequest:
@@ -675,8 +774,10 @@ def _build_request(arguments: argparse.Namespace) -> OrcaRequest:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="PB ORCA runtime preflight and runner")
     parser.add_argument("operation", choices=("probe", "convert"))
-    parser.add_argument("--tool-root", default=r"C:\PblScripter")
-    parser.add_argument("--version")
+    parser.add_argument("--tool-root", default=str(bundled_tool_root()), help="optional external PblScripter override")
+    parser.add_argument("--version", help="optional 70/105/125 override; omitted or auto selects a compatible installed runtime")
+    parser.add_argument("--orca-dll", help="ORCA DLL override for a custom installation; requires --version")
+    parser.add_argument("--runtime-directory", action="append", help="runtime PATH directory override; repeat for dependencies")
     parser.add_argument("--pbl", required=True)
     parser.add_argument("--action", default="exportall")
     parser.add_argument("--object-name")
@@ -685,7 +786,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--compile-helper", action="store_true", help="Create a missing x86 helper when necessary for the requested extraction")
     arguments = parser.parse_args(argv)
 
-    runtime = PbOrcaRuntime()
+    configs = default_version_configs()
+    if arguments.orca_dll or arguments.runtime_directory:
+        if arguments.version not in configs:
+            parser.error("custom runtime paths require --version 70, 105 or 125")
+        config = configs[arguments.version]
+        configs[arguments.version] = replace(
+            config,
+            orca_dll=Path(arguments.orca_dll) if arguments.orca_dll else config.orca_dll,
+            runtime_directories=tuple(Path(path) for path in arguments.runtime_directory)
+            if arguments.runtime_directory else ((Path(arguments.orca_dll).parent,) if arguments.orca_dll else config.runtime_directories))
+    runtime = PbOrcaRuntime(version_configs=configs)
     request = _build_request(arguments)
     if arguments.operation == "probe":
         print(json.dumps(runtime.probe(request).to_dict(), ensure_ascii=False, indent=2))

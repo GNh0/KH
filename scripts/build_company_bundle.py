@@ -51,6 +51,10 @@ def build_bundle(output: Path) -> dict:
                 continue
             copy_file(source, plugin / relative)
         copy_file(ROOT / 'scripts/kh_check.py', plugin / 'scripts/kh_check.py')
+        pb_scripts = Path('skills/pb-to-csharp-migration-harness/scripts')
+        for relative in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
+                         'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):
+            copy_file(ROOT / pb_scripts / relative, plugin / pb_scripts / relative)
         for name, (display_name, description) in DISPLAY.items():
             target = plugin / 'skills' / name / 'agents/openai.yaml'
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -68,7 +72,9 @@ def build_bundle(output: Path) -> dict:
             raise ValueError('generated package validation failed: ' + validation.stdout + validation.stderr)
         files = sorted(path for path in stage.rglob('*') if path.is_file())
         for path in files:
-            if 'GNh0' in path.read_text(encoding='utf-8-sig') or 'KONEIT' in path.read_text(encoding='utf-8-sig'):
+            data = path.read_bytes()
+            if any(name.encode(encoding) in data for name in ('GNh0', 'KONEIT')
+                   for encoding in ('utf-8', 'utf-16-le')):
                 raise ValueError('personal account/path leaked into company package: ' + str(path.relative_to(stage)))
         archive = Path(folder) / 'company-dev.zip'
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
