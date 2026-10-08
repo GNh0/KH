@@ -137,6 +137,20 @@ class GridStyleTests(unittest.TestCase):
         result = check_csharp(source, original='', designer=designer, original_designer=designer)
         self.assertTrue({'spin_edit_mask_preference', 'grid_options_behavior_change'} <= {i.code for i in result.issues})
 
+    def test_editor_editformat_changes_need_review_but_existing_and_reports_are_preserved(self):
+        for typename, path in [('RepositoryItemSpinEdit', 'EditFormat'), ('SpinEdit', 'Properties.EditFormat')]:
+            for prop, value in [('FormatString', '"#,##0.##"'), ('FormatType', 'FormatType.Numeric')]:
+                with self.subTest(typename=typename, prop=prop):
+                    source = f'this.numeric = new {typename}(); this.numeric.{path}.{prop} = {value};'
+                    self.assertIn('edit_format_preference', issues(source))
+                    self.assertNotIn('edit_format_preference', issues(source, original=source))
+        result = check_csharp('this.numeric.EditFormat.FormatString = "#,##0.##";', original='',
+            designer='private RepositoryItemSpinEdit numeric;')
+        self.assertIn('edit_format_preference', {item.code for item in result.issues})
+        self.assertNotIn('edit_format_preference', issues('this.report = new XRLabel(); this.report.EditFormat.FormatString = "#,##0.##";'))
+        self.assertNotIn('edit_format_preference', issues('this.numeric = new RepositoryItemSpinEdit(); this.numeric.EditFormat.FormatString = "#,##0.##";',
+            allowed_property_changes=['numeric.EditFormat.FormatString']))
+
     def test_removed_non_grid_member_uses_original_designer_type(self):
         result = check_csharp('class Screen {}', original='this.tree.OptionsBehavior.Editable = false;',
             designer='class Screen {}', original_designer='this.tree = new TreeList();')

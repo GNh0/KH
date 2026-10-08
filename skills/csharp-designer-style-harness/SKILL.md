@@ -11,9 +11,11 @@ Apply to the actual target project. Do not impose WinForms architecture on MAUI/
 
 1. Use the latest request and agreed style. Preserve current user edits and keep the change scoped. A conflicting sample does not weaken an agreed rule.
 2. Read the actual target and a relevant same-project example before writing. Match event responsibilities, data timing and initialization paths. For save changes, trace selected rows, row states/XML, SP calls and refresh within the save path; preserve query and report behavior separately. Migration source defines business behavior; target source defines APIs and implementation patterns. Available APIs alone do not establish the intended workflow.
-3. Before adding code/settings, compare the requested behavior with what the current path already does. Identify the concrete gap or verified dependency the addition resolves. Preserve a path that already meets the request; a feature name or available API alone does not establish a need. Resolve uncertain necessity from actual source/API behavior first.
+3. Before adding code/settings, compare the requested behavior, actual data/result types and what the current path already does. Identify the concrete gap or verified dependency the addition resolves. Preserve a path that already meets the request; a feature name or available API alone does not establish a need. Resolve uncertain necessity from actual source/API behavior first.
 
 Keep these decisions in the working context; no intake form or audit file is required.
+
+For any control or RepositoryItem creation/change, read [user controls](references/user-controls.md) and its actual Designer, library and shared initialization before writing. Preserve effective defaults through properties, callbacks and helpers alike. A display request requires checking the missing behavior and affected editor/report scope before adding an override.
 
 For labels and single-line inputs added or edited, match height and sizing constraints to similar controls in the actual screen. Inherit the selected control's initialized label font, H/V alignment and UseTextOptions; avoid arbitrary overrides. Read a self-property Default fallback from that source rather than imposing one global alignment. Apply needed role/request exceptions with their actual basis. Width may grow for content. Resolve differences before completion.
 

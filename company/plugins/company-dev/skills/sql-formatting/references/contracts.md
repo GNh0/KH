@@ -8,4 +8,6 @@ Check persisted numbering within the full target key scope and real transaction/
 
 Change output columns, Designer bindings and affected XML fields together when the request requires it. A renamed binding is not automatically a renamed procedure parameter. Preserve Unicode and meaningful comments. Keep typed placeholders only when the required UNION/result schema needs them.
 
+Inspect actual result types and caller bindings before adding a conversion. Display formatting alone does not require changing a SQL type. Preserve precision, scale and NULLs; derive required empty-schema placeholder types from the actual result contract. A verified data/API requirement can justify a conversion.
+
 For function/JOIN/APPLY rewrites, inspect definitions, duplicates, NULL behavior and actual query plans/results. Compare timing using the same inputs and row counts. Static token comparison cannot verify schema compatibility, performance, numbering or database deployment.

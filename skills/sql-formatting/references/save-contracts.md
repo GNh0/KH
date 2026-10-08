@@ -22,6 +22,8 @@ For upstream quantity checks, use the full linked key and the correct unit. On E
 
 Use the approved parameter template: in this user's current screen procedures WORKTYPE and ORGDIV are required, while ordinary optional parameters generally default to NULL. Apply actual target types/lengths instead of copied literal defaults. Match CUSTCD/CUSTNM to the real master schema. Preserve Unicode when meaningful, including XML and actual password/encrypted-value contracts; do not batch-convert every NVARCHAR to VARCHAR.
 
+Trace actual column/result types and caller bindings before adding conversions. A display-format change alone does not require a different SQL numeric type; preserve actual precision, scale and NULL behavior unless a verified data/API requirement needs the conversion. For required empty-schema or UNION placeholders, derive the type from that real result contract.
+
 Keep FieldName/output-column names distinct from SP parameter names. A request to bind PURNUM does not necessarily rename KEYCODE parameters. Change SELECT output, C# binding and relevant XML/SAVE fields together where required by the request.
 
 Remove excluded source-only output columns and their Designer references. Do not keep them alive as `CAST('' AS VARCHAR(...))` or typed NULL fields merely to make a copied screen compile. A typed placeholder can be valid for a required UNION/result schema; verify that specific need. Return persisted judgment/status codes directly unless a defined fallback is required. Do not synthesize a code from quantities merely to display a plausible default.
