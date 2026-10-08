@@ -37,12 +37,14 @@ class CliTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertEqual('input_error', json.loads(result.stdout)['issues'][0]['code'])
 
-    def test_print_save_contract_comparison_runs_from_another_directory(self):
-        from tests.domain.test_save_contract import BATCH, ROWWISE
+    def test_print_query_and_save_contract_comparison_runs_from_another_directory(self):
+        from tests.domain.test_save_contract import BATCH, ROWWISE, SCALAR_SELECT, XML_SELECT
         with tempfile.TemporaryDirectory() as folder:
             source, reference = Path(folder)/'screen.cs', Path(folder)/'project.cs'
-            source.write_text(ROWWISE, encoding='utf-8')
-            reference.write_text(BATCH, encoding='utf-8')
+            candidate = ROWWISE.replace('class Screen {', 'class Screen {' + XML_SELECT)
+            candidate = candidate.replace('rpt.Print();', 'rpt.Detail.PageBreak = PageBreak.BeforeBand; rpt.Print();')
+            source.write_text(candidate, encoding='utf-8')
+            reference.write_text(BATCH.replace('class Screen {', 'class Screen {' + SCALAR_SELECT), encoding='utf-8')
             before = {path: path.read_bytes() for path in (source, reference)}
             result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'csharp', str(source),
                 '--style-reference-csharp', str(reference), '--screen-command', 'print'],
@@ -51,8 +53,10 @@ class CliTests(unittest.TestCase):
             output = json.loads(result.stdout)
             self.assertEqual(['print'], output['command_flow']['allowed_commands'])
             self.assertTrue(output['save_contract_comparison']['compared'])
+            self.assertTrue(output['select_contract_comparison']['compared'])
             self.assertLessEqual({'save_xml_contract_drift_review', 'save_output_contract_drift_review',
-                                 'rowwise_save_contract_drift_review'},
+                                 'rowwise_save_contract_drift_review', 'select_xml_contract_drift_review',
+                                 'command_phase_drift_review'},
                                 {issue['code'] for issue in output['issues']})
             self.assertEqual('needs_review', output['review_status'])
             self.assertTrue(all(path.read_bytes() == content for path, content in before.items()))

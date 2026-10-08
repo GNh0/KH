@@ -48,7 +48,7 @@ LINQ candidates and changes between transaction-method name families are review 
 
 ### Comparing project command phases and requested operations
 
-Supply `--style-reference-csharp <absolute-same-project-screen.cs>` to compare recognizable Save/New operations and CallSaveProcedure transport with the actual reference bodies. This is separate from `--original`, which establishes change provenance. Read the reference first and select one with a matching screen flow; the checker cannot verify its project, relevance or provenance. It does not make one screen's pattern universal.
+Supply `--style-reference-csharp <absolute-same-project-screen.cs>` to compare recognizable Save/New/Print operations and SELECT/SAVE transport with the actual reference bodies. This is separate from `--original`, which establishes change provenance. Read the reference first and select one with a matching screen flow; the checker cannot verify its project, relevance or provenance. It does not make one screen's pattern universal. Different query/print and save examples may need separate comparisons; missing reference bodies remain unverified.
 
 Repeat `--screen-command` for the operations permitted by the latest request. For a modify-only screen with search, edit, save and cancel, use:
 
@@ -59,7 +59,7 @@ python <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --style-reference
 `print` is also supported as an explicit screen operation.
 
 - `screen_command_out_of_scope`: a direct subscription to an excluded screen command is an error. Check inherited toolbar availability separately. Nonempty recognizable handlers without such a subscription produce `screen_command_body_out_of_scope` review warnings; an empty unwired handler does not imply an implemented feature.
-- `command_phase_drift_review`: Save adds AcceptChanges, DEFAULT mode assignment or Usr_ControlsProtect, or New adds OpenMenuProgram, beyond occurrences in the corresponding reference command. Review their purpose and phase; none of these operations is globally prohibited. Other reference phases are reported as context. A legitimate reset already present in reference Save is retained.
+- `command_phase_drift_review`: Save adds AcceptChanges, DEFAULT mode assignment or Usr_ControlsProtect, New adds OpenMenuProgram, or Print adds direct PageBreak assignments beyond occurrences in the corresponding reference command. Review their purpose and phase; none is globally prohibited. Inspect actual report defaults and generated pages before retaining a pagination override. Other reference phases are reported as context. A legitimate reset already present in reference Save is retained.
 - `save_refresh_drift_review`: the reference Save dispatches Search but the candidate Save does not. Trace valid indirect refresh/tab paths before changing code.
 
 `command_flow` reports the supplied operation scope, reference command kinds and compared phases; `comparison_baselines.command_style_reference` records reference availability. Missing or ambiguous reference bodies, unsupported expression-bodied handlers, indirect calls/subscriptions and XML/SP behavior remain in `not_checked`. Comments, literal strings and uncalled local-function bodies are excluded from recognizable operation counts. General branch feasibility and operation arguments are not resolved.
@@ -73,6 +73,8 @@ The same reference also compares a uniquely recognizable CallSaveProcedure body:
 - `save_output_contract_drift_review`: the candidate save adds Output/InputOutput directions beyond the reference. Verify actual value ownership and refresh needs.
 
 `save_contract_comparison` reports available bodies and comparison coverage. Unchanged original methods, comments, strings and uncalled local functions are excluded from new findings. Missing/ambiguous or expression-bodied save methods, indirect helper calls, XML contents/row-state correctness and SP behavior remain unverified. These are review differences, not universal bans on scalar saves, loops or outputs.
+
+`select_xml_contract_drift_review` independently flags direct DataTableToXml serialization added to CallSelectProcedure when its supplied query reference has none. `select_contract_comparison` reports reference/body availability and unchanged-body exclusions. SAVE XML alone does not justify this query change. Existing required XML queries remain valid; parameter semantics, indirect serialization and SQL results are unverified. A pass against a save example that lacks a relevant query/Print body does not establish those paths.
 
 C# checks compare current methods with originals and warn about these candidates. Unchanged existing handling is preserved; calls moved to another event or reintroduced are also reviewed.
 

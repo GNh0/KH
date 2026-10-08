@@ -1,6 +1,6 @@
 # KH for Codex
 
-KH 3.0.21은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+KH 3.0.22은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
 작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
@@ -14,7 +14,7 @@ PB 스킬에는 PblScripter의 export 스크립트와 x86 추출기가 포함돼
 
 보조 파일을 만드는 작업은 [임시 파일 지침](skills/work-execution/references/workspace-files.md)에 따라 최종 전달 전에 정리한다. 요청한 결과물과 재개에 필요한 증거는 보존하고, 남겨야 하는 임시 파일의 경로와 이유를 기존 응답·인계에 적는다. 성공한 분석용 추출 출력은 호출자가 정리해야 하며 임시 폴더에 있다는 이유로 자동 삭제되는 것은 아니다.
 
-화면 명령을 구현하기 전에 같은 프로젝트의 실제 이벤트 흐름과 현재 허용 동작을 확인한다. 선택적 C# 검사에 `--style-reference-csharp`와 반복 `--screen-command`(`print` 포함)를 지정하면 이벤트 단계, 제외한 명령 연결, 저장 예제와 다른 XML·반복문 안의 SAVE·OUTPUT 방향을 확인한다. AcceptChanges·상태 초기화·화면 이동·스칼라 저장·OUTPUT 자체를 일괄 금지하지 않는다. 슬라이드 기반 화면은 전체 렌더링을 보고 컬럼을 확정한다.
+화면 명령을 구현하기 전에 같은 프로젝트의 실제 이벤트 흐름과 현재 허용 동작을 확인한다. 선택적 C# 검사에 `--style-reference-csharp`와 반복 `--screen-command`(`print` 포함)를 지정하면 이벤트 단계, 제외한 명령 연결, 저장 예제와 다른 XML·반복문 안의 SAVE·OUTPUT 방향을 확인한다. SELECT의 XML 추가와 Print의 PageBreak 추가는 별도로 비교하며, SAVE 수정만으로 조회·리포트 변경을 정당화하지 않는다. AcceptChanges·상태 초기화·화면 이동·스칼라 저장·XML 조회·OUTPUT·페이지 설정 자체를 일괄 금지하지 않는다. 슬라이드 기반 화면은 전체 렌더링을 보고 컬럼을 확정한다.
 
 ## 스킬
 

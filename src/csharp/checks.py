@@ -12,7 +12,7 @@ from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
 from .flow_review import check_project_flow
 from .command_flow import check_command_flow
-from .save_contract import check_save_contract
+from .save_contract import check_save_contract, check_select_contract
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .label_style import check_label_style
@@ -86,6 +86,11 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     result.checked.extend(save_contract.checked)
     result.not_checked.extend(save_contract.not_checked)
     result.metadata.update(save_contract.metadata)
+    select_contract = check_select_contract(candidate, original=original, style_reference=style_reference_csharp)
+    result.issues.extend(select_contract.issues)
+    result.checked.extend(select_contract.checked)
+    result.not_checked.extend(select_contract.not_checked)
+    result.metadata.update(select_contract.metadata)
     for call in ("PostEditor", "UpdateCurrentRow"):
         if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
             result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))
