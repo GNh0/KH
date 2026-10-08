@@ -81,6 +81,8 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
                 continue
             result.issues.append(Issue(item.code, "warning", item.message,
                                       details={"evidence": item.evidence, "scope": "KH SQL style"}))
+            if item.code == 'insert_select_alignment_unverified':
+                result.not_checked.append('unsupported horizontal INSERT/SELECT alignment listed in insert_select_alignment_unverified')
     if check_delta:
         result.checked.append("DELETE/INSERT replacement shapes")
         before = {r["shape_sha256"] for r in _full_replace_records(original or "")}

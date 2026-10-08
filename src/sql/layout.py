@@ -22,6 +22,10 @@ from .scopes import (
     _SourceDeclaration,
     _build_sql_scopes,
 )
+from .insert_alignment import (
+    _expand_layout_tabs, _text_columns,
+    check_insert_select_alignment, normalize_insert_select_alignment,
+)
 
 
 _INSERT_SELECT_LAYOUT_CONTRACT = {
@@ -102,9 +106,10 @@ _JOIN_PREDICATE_BOUNDARIES = {
 
 
 def normalize_sql_join_layout(sql: str) -> str:
-    """Normalize supported JOIN predicates and FROM/JOIN/EXISTS query blocks."""
+    """Normalize supported query blocks and horizontal INSERT/SELECT columns."""
     if not isinstance(sql, str):
         raise TypeError("sql must be a string")
+    sql = _expand_layout_tabs(sql)
     sql = _normalize_if_exists_layout(sql)
     sql = _normalize_derived_query_breaks(sql)
     tokens, integrity_issues = _analyze_sql_integrity(sql, check_kind="join_layout")
@@ -169,7 +174,8 @@ def normalize_sql_join_layout(sql: str) -> str:
     lines = sql.splitlines(keepends=True)
     for line_number, indent in directives.items():
         lines[line_number - 1] = re.sub(r"^[ \t]*", " " * indent, lines[line_number - 1], count=1)
-    return "".join(lines)
+    result = "".join(lines)
+    return normalize_insert_select_alignment(result, _extract_insert_select_ranges(result))
 
 
 def _derived_query_bounds(
@@ -563,10 +569,16 @@ def _check_if_exists_layout(
 
 
 def _check_tab_indentation(formatted_sql: str) -> List[SqlFormattingIssue]:
+    masked = list(formatted_sql)
+    for token in _scan_sql_tokens(formatted_sql)[0]:
+        if token.kind in {'string', 'unicode_string', 'line_comment', 'block_comment', 'bracket_identifier', 'quoted_identifier'}:
+            for index in range(token.start, token.end):
+                if masked[index] not in '\r\n':
+                    masked[index] = ' '
     conflicts = [
-        f"line {line_number}: tab used in leading indentation"
-        for line_number, line in enumerate(formatted_sql.splitlines(), start=1)
-        if "\t" in line[: len(line) - len(line.lstrip(" \t"))]
+        f"line {line_number}: tab used in SQL alignment whitespace"
+        for line_number, line in enumerate(''.join(masked).splitlines(), start=1)
+        if "\t" in line
     ]
     if not conflicts:
         return []
@@ -574,7 +586,7 @@ def _check_tab_indentation(formatted_sql: str) -> List[SqlFormattingIssue]:
         SqlFormattingIssue(
             code="tab_indentation_not_allowed",
             severity="error",
-            message="SQL layout indentation must use spaces; leading tabs are not accepted.",
+            message="Align actual SQL text columns with spaces, including within lists; equal tab counts do not establish alignment. Literal, identifier and comment content is preserved.",
             evidence=conflicts[:16],
             check_kind="style",
         )
@@ -1023,7 +1035,7 @@ def _is_join_predicate_boundary(
 def _token_line_position(sql: str, token: _SqlToken) -> Tuple[int, int, bool]:
     line_start = sql.rfind("\n", 0, token.start) + 1
     prefix = sql[line_start:token.start]
-    return sql.count("\n", 0, token.start) + 1, len(prefix), not prefix.strip()
+    return sql.count("\n", 0, token.start) + 1, _text_columns(prefix), not prefix.strip()
 
 
 def _check_alias_style(tokens: Sequence[_SqlToken]) -> List[SqlFormattingIssue]:
@@ -1298,6 +1310,7 @@ def _check_insert_select_layout(sql: str) -> List[SqlFormattingIssue]:
                 )
             )
     issues.extend(_check_insert_select_value_layout(sql))
+    issues.extend(check_insert_select_alignment(sql, _extract_insert_select_ranges(sql)))
     return issues
 
 
@@ -1426,6 +1439,11 @@ def _extract_insert_column_blocks(sql: str) -> List[str]:
 
 
 def _extract_insert_select_statements(sql: str) -> List[Dict[str, str]]:
+    return [{"target_block": sql[target_start:target_end], "select_block": sql[select_start:select_end]}
+            for target_start, target_end, select_start, select_end in _extract_insert_select_ranges(sql)]
+
+
+def _extract_insert_select_ranges(sql: str) -> List[Tuple[int, int, int, int]]:
     masked = _masked_sql(sql)
     statements = []
     for match in re.finditer(r"\bINSERT\s+INTO\b", masked, flags=re.IGNORECASE):
@@ -1470,12 +1488,7 @@ def _extract_insert_select_statements(sql: str) -> List[Dict[str, str]]:
         )
         if projection_end < 0:
             projection_end = statement_end
-        statements.append(
-            {
-                "target_block": sql[open_index + 1 : close_index],
-                "select_block": sql[select_start:projection_end],
-            }
-        )
+        statements.append((open_index + 1, close_index, select_start, projection_end))
     return statements
 
 

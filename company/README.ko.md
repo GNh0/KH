@@ -75,7 +75,7 @@ python -B "C:\CompanyTools\company-dev\plugins\company-dev\scripts\company_check
 현재 KH 개발 원본에서 최초 회사 ZIP을 만드는 명령은 다음과 같다. `company` 폴더는 배포용 템플릿이며, 빌더가 공통 Python 실행 모듈과 UI 메타데이터를 합쳐 완전한 패키지를 만든다.
 
 ```powershell
-python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.0.6.zip"
+python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.0.7.zip"
 ```
 
 ZIP에는 실행에 필요한 공통 소스가 함께 들어 있다. 이후 회사 소유 원본으로 복사해 유지보수할 수 있고, 직원 PC에서 원래 KH 저장소를 조회하거나 Git 인증을 할 필요가 없다. 배포 버전은 회사 manifest에서 별도로 관리한다.

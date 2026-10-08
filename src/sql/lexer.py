@@ -401,7 +401,7 @@ def _masked_sql(sql: str) -> str:
     tokens, _ = _scan_sql_tokens(sql)
     chars = list(sql)
     for token in tokens:
-        if token.kind not in {"string", "line_comment", "block_comment"}:
+        if token.kind not in {"string", "unicode_string", "line_comment", "block_comment"}:
             continue
         for index in range(token.start, token.end):
             if chars[index] not in "\r\n":
