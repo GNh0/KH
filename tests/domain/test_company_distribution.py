@@ -153,4 +153,4 @@ class CompanyBundleTests(unittest.TestCase):
             self.assertEqual(0, extraction.returncode, extraction.stdout + extraction.stderr)
             capability = json.loads(extraction.stdout)
             self.assertEqual('pbl_not_found', capability['reason_code'])
-            self.assertTrue(Path(capability['tool_script']).is_relative_to(plugin))
+            self.assertTrue(Path(capability['tool_script']).resolve().is_relative_to(plugin.resolve()))
