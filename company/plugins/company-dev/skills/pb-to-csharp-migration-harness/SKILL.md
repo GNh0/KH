@@ -9,7 +9,7 @@ Read the [selected personal PB style](../../references/personal-style.md) and ex
 
 For PB maintenance, edit the actual object/event in the available project or export workflow. Preserve relevant ancestor calls, event order, DataWindow buffers/states and database contracts. Distinguish an edited export from changes imported and verified in the actual PBL/application.
 
-For analysis or extraction, deliver only the requested scope. For migration, preserve relevant source behavior while following the actual target APIs, SQL/C# skills and employee style. Distinguish display keys from raw components, row states, selected/focused records, save order and report bands. Use [extraction and validation](references/tools.md) when needed.
+For analysis or extraction, deliver only the requested scope. PBL extraction uses the bundled `scripts/export_pbl.py` with automatic installed-runtime selection; read [extraction and validation](references/tools.md). For migration, preserve relevant source behavior while following the actual target APIs, SQL/C# skills and employee style. Distinguish display keys from raw components, row states, selected/focused records, save order and report bands.
 
 Prefer applicable target user controls and verified initialization. Missing controls require a behavior-preserving mapping to available target components, not a claim that the source cannot be migrated.
 
