@@ -1,0 +1,19 @@
+{
+  "name": "gnho-labs",
+  "owner": {
+    "name": "GNho Labs"
+  },
+  "plugins": [
+    {
+      "name": "kh-skills",
+      "source": {
+        "source": "github",
+        "repo": "GNh0/KH",
+        "ref": "release"
+      },
+      "version": "3.0.26",
+      "description": "KH Skills for SQL, C#/Designer and PowerBuilder."
+    }
+  ],
+  "description": "GNho Labs development skills for Claude and Codex."
+}

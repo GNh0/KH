@@ -1,0 +1,20 @@
+{
+  "name": "kh-skills",
+  "displayName": "KH Skills",
+  "version": "3.0.26",
+  "description": "Shared SQL, C#/Designer and PowerBuilder development skills with optional local checks.",
+  "author": {
+    "name": "GNho Labs",
+    "url": "https://github.com/GNh0"
+  },
+  "homepage": "https://gnholabs.com",
+  "repository": "https://github.com/GNh0/KH",
+  "keywords": [
+    "claude",
+    "codex",
+    "skills",
+    "sql",
+    "csharp",
+    "powerbuilder"
+  ]
+}
