@@ -48,13 +48,15 @@ LINQ candidates and changes between transaction-method name families are review 
 
 ### Comparing project command phases and requested operations
 
-Supply `--style-reference-csharp <absolute-same-project-screen.cs>` to compare recognizable Save/New operations with the actual reference command bodies. This is separate from `--original`, which establishes change provenance. Read the reference first and select one with a matching screen flow; the checker cannot verify its project, relevance or provenance. It does not make one screen's pattern universal.
+Supply `--style-reference-csharp <absolute-same-project-screen.cs>` to compare recognizable Save/New operations and CallSaveProcedure transport with the actual reference bodies. This is separate from `--original`, which establishes change provenance. Read the reference first and select one with a matching screen flow; the checker cannot verify its project, relevance or provenance. It does not make one screen's pattern universal.
 
 Repeat `--screen-command` for the operations permitted by the latest request. For a modify-only screen with search, edit, save and cancel, use:
 
 ```text
 python <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --style-reference-csharp <same-project-screen.cs> --screen-command search --screen-command edit --screen-command save --screen-command clear
 ```
+
+`print` is also supported as an explicit screen operation.
 
 - `screen_command_out_of_scope`: a direct subscription to an excluded screen command is an error. Check inherited toolbar availability separately. Nonempty recognizable handlers without such a subscription produce `screen_command_body_out_of_scope` review warnings; an empty unwired handler does not imply an implemented feature.
 - `command_phase_drift_review`: Save adds AcceptChanges, DEFAULT mode assignment or Usr_ControlsProtect, or New adds OpenMenuProgram, beyond occurrences in the corresponding reference command. Review their purpose and phase; none of these operations is globally prohibited. Other reference phases are reported as context. A legitimate reset already present in reference Save is retained.
@@ -63,6 +65,14 @@ python <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --style-reference
 `command_flow` reports the supplied operation scope, reference command kinds and compared phases; `comparison_baselines.command_style_reference` records reference availability. Missing or ambiguous reference bodies, unsupported expression-bodied handlers, indirect calls/subscriptions and XML/SP behavior remain in `not_checked`. Comments, literal strings and uncalled local-function bodies are excluded from recognizable operation counts. General branch feasibility and operation arguments are not resolved.
 
 With `--original`, unchanged command bodies are excluded from phase-style review, while explicit command scope still applies. New imports/full style corrections also need standalone inspection. Without the corresponding inputs, neither requested operation scope nor project command phases are verified. Resolve warnings against the current user request and actual helper/base path; do not add exemptions or blindly copy the reference to get a pass.
+
+The same reference also compares a uniquely recognizable CallSaveProcedure body:
+
+- `save_xml_contract_drift_review`: the reference directly serializes DataTable XML while the candidate save does not.
+- `rowwise_save_contract_drift_review`: an XML reference has fewer direct CallSaveProcedure calls inside loops than the candidate, including Print handlers.
+- `save_output_contract_drift_review`: the candidate save adds Output/InputOutput directions beyond the reference. Verify actual value ownership and refresh needs.
+
+`save_contract_comparison` reports available bodies and comparison coverage. Unchanged original methods, comments, strings and uncalled local functions are excluded from new findings. Missing/ambiguous or expression-bodied save methods, indirect helper calls, XML contents/row-state correctness and SP behavior remain unverified. These are review differences, not universal bans on scalar saves, loops or outputs.
 
 C# checks compare current methods with originals and warn about these candidates. Unchanged existing handling is preserved; calls moved to another event or reintroduced are also reviewed.
 

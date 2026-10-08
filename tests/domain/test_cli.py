@@ -37,6 +37,27 @@ class CliTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertEqual('input_error', json.loads(result.stdout)['issues'][0]['code'])
 
+    def test_print_save_contract_comparison_runs_from_another_directory(self):
+        from tests.domain.test_save_contract import BATCH, ROWWISE
+        with tempfile.TemporaryDirectory() as folder:
+            source, reference = Path(folder)/'screen.cs', Path(folder)/'project.cs'
+            source.write_text(ROWWISE, encoding='utf-8')
+            reference.write_text(BATCH, encoding='utf-8')
+            before = {path: path.read_bytes() for path in (source, reference)}
+            result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'csharp', str(source),
+                '--style-reference-csharp', str(reference), '--screen-command', 'print'],
+                cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(0, result.returncode, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual(['print'], output['command_flow']['allowed_commands'])
+            self.assertTrue(output['save_contract_comparison']['compared'])
+            self.assertLessEqual({'save_xml_contract_drift_review', 'save_output_contract_drift_review',
+                                 'rowwise_save_contract_drift_review'},
+                                {issue['code'] for issue in output['issues']})
+            self.assertEqual('needs_review', output['review_status'])
+            self.assertTrue(all(path.read_bytes() == content for path, content in before.items()))
+            self.assertEqual({'screen.cs', 'project.cs'}, {path.name for path in Path(folder).iterdir()})
+
     def test_standalone_csharp_reports_save_and_input_contract_review(self):
         with tempfile.TemporaryDirectory() as folder:
             source, designer = Path(folder)/'screen.cs', Path(folder)/'screen.Designer.cs'

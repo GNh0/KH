@@ -10,8 +10,8 @@ from .lexer import _scan_csharp, balanced_close
 from .source import _method_declaration_matches
 
 
-COMMANDS = frozenset({'search', 'new', 'edit', 'save', 'delete', 'clear'})
-_KINDS = r'Search|New|Edit|Save|Delete|Clear'
+COMMANDS = frozenset({'search', 'new', 'edit', 'save', 'delete', 'clear', 'print'})
+_KINDS = r'Search|New|Edit|Save|Delete|Clear|Print'
 _WIRING = re.compile(
     rf'(?<![\w.])(?P<receiver>(?:[A-Za-z_]\w*\s*\.\s*)*)'
     rf'(?P<kind>{_KINDS})Command\s*\+=')
@@ -81,7 +81,7 @@ def check_command_flow(candidate: str, *, original: str | None = None,
     """Style differences need review; explicit unsupported commands are errors."""
     allowed = set(allowed_commands) if allowed_commands is not None else None
     if allowed is not None and not allowed <= COMMANDS:
-        raise ValueError('screen commands must be search, new, edit, save, delete, or clear')
+        raise ValueError('screen commands must be search, new, edit, save, delete, clear, or print')
     result = CheckResult(not_checked=[
         'command branch feasibility, indirect calls/subscriptions, inherited toolbar availability, expression-bodied handlers and XML/SP behavior'])
     if allowed is None and style_reference is None:
