@@ -106,6 +106,8 @@ def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = N
             for prop in props:
                 if re.search(r'(^|\.)DisplayFormat(?:\.|$)', prop) and not prop.startswith('SummaryItem.') and changed(prop):
                     warn('display_format_preference', 'Omit unnecessary DisplayFormat settings, including FormatType and FormatString. Trace effective common initialization and current user instructions. A Spin binding complaint alone is insufficient; an explicit request to reproduce verified formatting in a target missing that initialization can justify these specific settings.', prop)
+                if is_editor and re.search(r'(^|\.)EditFormat(?:\.|$)', prop) and changed(prop):
+                    warn('edit_format_preference', 'Review this edit-format override against the actual editor defaults and shared initialization. A display requirement alone does not establish a need to change editing behavior; retain a verified current input requirement.', prop)
         if type_name in {'SpinEdit', 'RepositoryItemSpinEdit'}:
             for prop in props:
                 if prop.endswith('Mask.EditMask') and changed(prop):

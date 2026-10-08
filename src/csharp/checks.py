@@ -13,6 +13,7 @@ from .numeric_format import check_numeric_formats
 from .flow_review import check_project_flow
 from .command_flow import check_command_flow
 from .save_contract import check_save_contract, check_select_contract
+from .editor_display import check_editor_display
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .label_style import check_label_style
@@ -110,6 +111,23 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                          original=with_control_base_types(baseline_model, defaults) if baseline_model else None,
                          column_edit_modes=column_edit_modes if designer is None else None,
                          allowed_property_changes=allowed_property_changes, check_required_defaults=False, check_style=check_style))
+    display_types = {name: control.type_name for name, control in
+                     with_control_base_types(parse_designer_source(designer or ''), defaults).controls.items()}
+    display_types.update({name: control.type_name for name, control in
+                          with_control_base_types(candidate_model, defaults).controls.items() if control.type_name})
+    display_original_designer = remap_members(original_designer, member_renames or {}) if original_designer is not None else None
+    old_display_types = {name: control.type_name for name, control in
+                         with_control_base_types(parse_designer_source(display_original_designer if display_original_designer is not None else designer or ''), defaults).controls.items()}
+    if baseline_model is not None:
+        old_display_types.update({name: control.type_name for name, control in
+                                  with_control_base_types(baseline_model, defaults).controls.items() if control.type_name})
+    display = check_editor_display(candidate, original=original, designer=designer,
+        original_designer=display_original_designer,
+        control_types=display_types, original_control_types=old_display_types)
+    result.issues.extend(display.issues)
+    result.checked.extend(display.checked)
+    result.not_checked.extend(display.not_checked)
+    result.metadata.update(display.metadata)
     if not code.strip():
         result.incomplete = True
         result.issues.append(Issue('csharp_code_missing', 'warning', 'No executable/declarative C# text is available for the requested source checks.'))

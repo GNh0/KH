@@ -8,6 +8,8 @@ Follow current SearchCommand/NewCommand/DeleteCommand and m_Editmode flow. Do no
 
 Trace header/detail population timing and state before copying an event body. Use the target call paths to determine whether separate queries, rebinding or validation are needed.
 
+For numeric display/input changes, trace the actual DB type, SELECT expression, DataColumn type, editor binding and report conversion. Validation inputs must reflect observed result types; identify additional edge cases separately. A display requirement does not itself establish a need to change stored or returned types. Add a conversion only for the verified schema/API requirement it resolves, and preserve precision, NULLs and caller behavior. Required empty-schema fields need the actual target types too.
+
 | Task | Current contract to inspect first | Implementation rule |
 | --- | --- | --- |
 | Enter new mode | Existing DataTable schema and InitControl's actual scope | Use current initialization. Do not conventionally add an empty DETAIL query. Distinguish targets without a schema that actually need the query. |

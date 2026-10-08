@@ -39,14 +39,15 @@ class _Command:
 
 def _without_local_functions(body: str) -> str:
     chars = list(body)
+    code, _ = _scan_csharp(body)
     previous_end = -1
-    for match in _method_declaration_matches(body):
+    for match in _method_declaration_matches(code):
         if match.start() < previous_end:
             continue
         if match['body'] == '{':
-            end = balanced_close(body, match.end() - 1, '{', '}')
+            end = balanced_close(code, match.end() - 1, '{', '}')
         else:
-            end = body.find(';', match.end())
+            end = code.find(';', match.end())
         if end < 0:
             continue
         previous_end = end + 1

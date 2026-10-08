@@ -125,4 +125,10 @@ Unknown format variables, concatenations, custom formatters, and actual overload
 
 SummaryItem.DisplayFormat is a summary format and is distinguished from ordinary-cell display_format_preference checks. Column/Repository DisplayFormat still undergoes default-property review even with a # format. --allow-property-change excludes a property's default-style check only; it does not create a requirement for N formats, and numeric-notation review remains separate.
 
+`edit_format_preference` reviews new/changed EditFormat assignments on actual editor/RepositoryItem types, in Designer or code-behind. Unchanged settings and verified exact property exceptions remain preserved. A display request alone does not establish an edit-format requirement.
+
+`editor_display_override_review` identifies a typed editor/RepositoryItem's wired CustomDisplayText callback that writes its event argument's DisplayText, directly or through recognizable local helpers. Named handlers, explicit delegates and parenthesized lambdas are supported. New connections, changed callback/helper bodies and standalone findings require review against actual initialization and current requests. Unchanged existing rewrites remain preserved. An event name, unwired method or connection without a recognized display write is not a finding; legitimate custom display and report formatting remain valid.
+
+`editor_display_callbacks` reports recognized rewrites, unchanged comparisons and unresolved bindings. This source-behavior review also runs in the neutral company mode. It does not resolve aliases, external helpers, ambiguous handlers, all local-function paths, general branch execution or complete editor defaults. Compare the actual original and initialization path; a warning is not a universal callback prohibition and a property exemption does not verify a separate callback.
+
 Do not report style compliance from status=passed and exit code 0 alone. For display_format_preference, compare current user exclusions, setting locations, and actual initialization. Spin-connection or decimal-display issues do not arbitrarily justify adding properties.
