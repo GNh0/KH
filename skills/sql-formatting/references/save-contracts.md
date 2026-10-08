@@ -12,6 +12,8 @@ Separate removal of detail rows from deletion of persisted master documents. Mul
 
 For other selected-row actions, including saving print status, trace the comparable caller's XML/state selection and save boundary before designing the signature. Preserve its set-based keys and applicable MOD branch; per-record printed pages alone do not establish per-record SP calls.
 
+A SAVE XML requirement does not itself change SELECT transport. Keep the existing scalar/key lookup when that is the actual query contract; introduce SELECT XML only for a query-specific requirement or verified dependency.
+
 Assign persisted sequence numbers within the real target key scope. XML row order/SEQ is not automatically the persisted detail key. When appending to an existing parent, verify its current maximum plus deterministic ROW_NUMBER/order and the actual transaction/concurrency path; test multiple new rows and another append to that same parent. Do not add UPDLOCK/HOLDLOCK routinely to compensate for an untraced numbering path. Use hints when the current requirement or verified concurrency behavior actually needs them.
 
 For upstream quantity checks, use the full linked key and the correct unit. On EDIT, exclude the current document's old contribution from already-processed totals before comparing proposed values. Inspect Added/Modified/Deleted together and aggregate duplicate linked keys in the proposed batch. Preserve restrictions already required by the source; do not invent new zero/count/required-value rules or duplicate SP-owned validation in C#.

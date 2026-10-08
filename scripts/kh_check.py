@@ -23,7 +23,7 @@ def main(argv=None):
     cs.add_argument("--designer")
     cs.add_argument('--designer-original')
     cs.add_argument('--style-reference-csharp', metavar='ABSOLUTE_COMPARISON_CS',
-                    help='actual same-project screen used to compare command phases and save transport')
+                    help='actual same-project screen used to compare command phases and query/save transport')
     cs.add_argument('--screen-command', action='append', choices=('search', 'new', 'edit', 'save', 'delete', 'clear', 'print'),
                     help='explicitly allowed screen operation from the current request; repeat for each operation')
     designer = commands.add_parser('designer', help='compare explicit Designer properties with a supplied baseline')

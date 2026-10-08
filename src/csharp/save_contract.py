@@ -1,4 +1,4 @@
-"""Compare recognizable save transport with an explicitly supplied project example."""
+"""Compare recognizable query/save transport with an explicitly supplied project example."""
 from collections import Counter
 from dataclasses import dataclass
 import re
@@ -103,4 +103,36 @@ def check_save_contract(candidate: str, *, original: str | None = None,
                         'CallSaveProcedure runs inside a loop beyond the supplied XML save example. Compare one selected-row XML save with this per-iteration save, including printing, failure handling and refresh. Keep per-row saving when the actual contract requires it.',
                         line=candidate.count('\n', 0, offset) + 1, details={'method': method.name,
                             'candidate_count': candidate_calls, 'reference_count': reference_calls}))
+    return result
+
+
+def check_select_contract(candidate: str, *, original: str | None = None,
+                          style_reference: str | None = None) -> CheckResult:
+    """Review query serialization independently of the SAVE transport choice."""
+    result = CheckResult(not_checked=[
+        'SELECT parameter/field semantics, indirect XML creation, SQL branches and query results'])
+    metadata: dict[str, object] = {'style_reference_supplied': style_reference is not None,
+                                  'compared': False}
+    result.metadata['select_contract_comparison'] = metadata
+    if style_reference is None:
+        result.not_checked.append('SELECT transport comparison; no same-project C# style reference supplied')
+        return result
+    selects = [method for method in _bodies(candidate) if method.name == 'CallSelectProcedure']
+    references = [method for method in _bodies(style_reference) if method.name == 'CallSelectProcedure']
+    metadata.update(candidate_select_bodies=len(selects), reference_select_bodies=len(references))
+    if len(selects) != 1 or len(references) != 1:
+        result.not_checked.append(
+            f'SELECT transport comparison; candidate/reference contain {len(selects)}/{len(references)} CallSelectProcedure bodies')
+        return result
+    current, expected = selects[0], references[0]
+    current_xml, reference_xml = bool(_XML.search(current.body)), bool(_XML.search(expected.body))
+    unchanged = any(method.name == current.name and method.fingerprint == current.fingerprint
+                    for method in _bodies(original or ''))
+    metadata.update(compared=True, candidate_xml=current_xml, reference_xml=reference_xml,
+                    unchanged_body_skipped=unchanged)
+    result.checked.append('direct CallSelectProcedure XML serialization against the supplied query body, independently of SAVE')
+    if current_xml and not reference_xml and not unchanged:
+        result.issues.append(Issue('select_xml_contract_drift_review', 'warning',
+            'This query adds DataTable XML serialization absent from the supplied SELECT example. A request to use XML in SAVE does not authorize changing SELECT or print lookup transport. Verify the query-specific requirement and SP signature; XML queries remain valid when actually required.',
+            line=candidate.count('\n', 0, current.offset) + 1, details={'method': current.name}))
     return result

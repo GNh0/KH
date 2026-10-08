@@ -10,7 +10,7 @@ Apply to the actual target project. Do not impose WinForms architecture on MAUI/
 ## Working basis
 
 1. Use the latest request and agreed style. Preserve current user edits and keep the change scoped. A conflicting sample does not weaken an agreed rule.
-2. Read the actual target and a relevant same-project example before writing. Match event responsibilities, data timing and initialization paths; for selected-row actions, carry selection → row states/XML → SP calls → refresh through the implementation. Migration source defines business behavior; target source defines APIs and implementation patterns. Available APIs alone do not establish the intended workflow.
+2. Read the actual target and a relevant same-project example before writing. Match event responsibilities, data timing and initialization paths. For save changes, trace selected rows, row states/XML, SP calls and refresh within the save path; preserve query and report behavior separately. Migration source defines business behavior; target source defines APIs and implementation patterns. Available APIs alone do not establish the intended workflow.
 3. Add or change behavior/settings only for the requested function or a concrete implementation need. Reuse the established path. Resolve differences against actual source before completion; necessary departures require a concrete reason.
 
 Keep these decisions in the working context; no intake form or audit file is required.
@@ -27,7 +27,7 @@ Read the needed sections, not every reference. Inspect relevant source bodies co
 | Control selection, defaults, dimensions and initialization | [User controls](references/user-controls.md) |
 | Layout, import preservation, Designer/resx and slides | [Designer](references/designer.md); for grids, [HTML defaults](references/grid-layout.md) |
 | Query/save, XML, row handling, selection and binding | [Data and event contracts](references/data-flow.md) |
-| Monitoring, repeated queries or rebinding | [Screen behavior](references/screen-behavior.md) |
+| Reports/printing, monitoring, repeated queries or rebinding | [Screen behavior](references/screen-behavior.md) |
 | Optional automated comparison | [Checks](references/checks.md) and the [scoped profile](references/default-profile.json) |
 
 Use the [necessity criteria](../work-execution/references/preferences.md) for LINQ, intermediate tables and builds. Keep auxiliary files outside project/source trees using [workspace files](../work-execution/references/workspace-files.md).

@@ -1,7 +1,7 @@
 import unittest
 
 from src.csharp.checks import check_csharp
-from src.csharp.save_contract import check_save_contract
+from src.csharp.save_contract import check_save_contract, check_select_contract
 
 
 XML_SAVE = '''bool CallSaveProcedure() {
@@ -34,6 +34,18 @@ ROWWISE = '''class Screen {
         dr["PRINTDATE"] = stamp.Value;
         return true;
     }
+}'''
+SCALAR_SELECT = '''DataSet CallSelectProcedure(SelectType type, int? idx = null) {
+    return db.GetDataSetFromSP("sp_SELECT", new DbParameter("@IDX", idx));
+}'''
+XML_SELECT = '''DataSet CallSelectProcedure(SelectType type) {
+    string xml = null;
+    if (type == SelectType.PRINT) {
+        DataTable dt = grdList.DataSource as DataTable;
+        dt.TableName = "ROWS";
+        xml = DataUtil.DataTableToXml(dt, DataRowState.Unchanged | DataRowState.Modified);
+    }
+    return db.GetDataSetFromSP("sp_SELECT", new DbParameter("@XML", xml));
 }'''
 
 
@@ -130,6 +142,52 @@ class SaveContractTests(unittest.TestCase):
                 self.assertTrue(any('save transport comparison' in item for item in result.not_checked))
         result = check_save_contract('class Empty {}', style_reference=BATCH)
         self.assertFalse(result.metadata['save_contract_comparison']['compared'])
+
+
+class SelectContractTests(unittest.TestCase):
+    def test_save_xml_does_not_authorize_select_xml(self):
+        reference = 'class Screen {' + SCALAR_SELECT + XML_SAVE + '}'
+        candidate = 'class Screen {' + XML_SELECT + XML_SAVE + '}'
+        result = check_csharp(candidate, style_reference_csharp=reference)
+        self.assertIn('select_xml_contract_drift_review', codes(result))
+        self.assertNotIn('save_xml_contract_drift_review', codes(result))
+        self.assertTrue(result.metadata['select_contract_comparison']['compared'])
+        self.assertTrue(result.metadata['save_contract_comparison']['compared'])
+
+    def test_scalar_select_and_batch_xml_save_are_independent(self):
+        source = 'class Screen {' + SCALAR_SELECT + XML_SAVE + '}'
+        self.assertEqual([], check_select_contract(source, style_reference=source).issues)
+
+    def test_existing_xml_query_is_not_globally_prohibited(self):
+        candidate = XML_SELECT.replace('"sp_SELECT"', '"sp_OTHER_SELECT"')
+        self.assertEqual([], check_select_contract(candidate, style_reference=XML_SELECT).issues)
+
+    def test_unchanged_query_is_skipped_only_in_differential_review(self):
+        result = check_select_contract(XML_SELECT, original=XML_SELECT, style_reference=SCALAR_SELECT)
+        self.assertEqual([], result.issues)
+        self.assertTrue(result.metadata['select_contract_comparison']['unchanged_body_skipped'])
+        self.assertEqual({'select_xml_contract_drift_review'},
+                         codes(check_select_contract(XML_SELECT, style_reference=SCALAR_SELECT)))
+
+    def test_comments_strings_and_uncalled_locals_do_not_add_serialization(self):
+        candidate = SCALAR_SELECT.replace('return db.', '''
+            string sample = "DataUtil.DataTableToXml(dt, DataRowState.Modified)";
+            // DataUtil.DataTableToXml(dt, DataRowState.Modified);
+            void Deferred() { DataUtil.DataTableToXml(dt, DataRowState.Modified); }
+            return db.''')
+        self.assertEqual([], check_select_contract(candidate, style_reference=SCALAR_SELECT).issues)
+
+    def test_missing_ambiguous_or_expression_bodied_query_stays_unverified(self):
+        for reference in (None, XML_SAVE, SCALAR_SELECT + SCALAR_SELECT,
+                          'DataSet CallSelectProcedure() => Query();'):
+            with self.subTest(reference=reference):
+                result = check_select_contract(XML_SELECT, style_reference=reference)
+                self.assertEqual([], result.issues)
+                self.assertFalse(result.metadata['select_contract_comparison']['compared'])
+
+    def test_query_comparison_does_not_require_a_save_body(self):
+        result = check_select_contract(XML_SELECT, style_reference=SCALAR_SELECT)
+        self.assertEqual({'select_xml_contract_drift_review'}, codes(result))
 
 
 if __name__ == '__main__':

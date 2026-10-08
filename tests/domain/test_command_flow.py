@@ -121,3 +121,29 @@ class CommandFlowTests(unittest.TestCase):
         result = check_command_flow(candidate, allowed_commands=['search'])
         self.assertEqual(['screen_command_out_of_scope'], [issue.code for issue in result.issues])
         self.assertEqual('print', result.issues[0].details['command'])
+
+    def test_added_print_pagebreak_requires_reference_review(self):
+        reference = 'void Screen_PrintCommand(object s, PrintCommandEventArgs e) { '
+        reference += 'using (Report rpt = new Report(data)) { rpt.Print(); } }'
+        candidate = reference.replace('rpt.Print();',
+            'rpt.Bands[BandKind.Detail].PageBreak = PageBreak.BeforeBandExceptFirstEntry; rpt.Print();')
+        result = check_command_flow(candidate, style_reference=reference)
+        self.assertEqual(['command_phase_drift_review'], [issue.code for issue in result.issues])
+        self.assertEqual('report_page_break', result.issues[0].details['operation'])
+        self.assertEqual(['print'], result.metadata['command_flow']['compared_commands'])
+        self.assertEqual([], check_command_flow(candidate, original=candidate, style_reference=reference).issues)
+
+    def test_existing_pagebreak_and_unrelated_phase_are_not_banned(self):
+        reference = 'void OnPrint(object s, PrintCommandEventArgs e) { rpt.Detail.PageBreak = PageBreak.AfterBand; rpt.Print(); }'
+        self.assertEqual([], check_command_flow(reference, style_reference=reference).issues)
+        candidate = reference + ' void InitReport() { rpt.Detail.PageBreak = PageBreak.BeforeBand; }'
+        self.assertEqual([], check_command_flow(candidate, style_reference=reference).issues)
+
+    def test_print_comments_strings_and_uncalled_locals_are_not_settings(self):
+        reference = 'void OnPrint(object s, PrintCommandEventArgs e) { rpt.Print(); }'
+        candidate = reference.replace('rpt.Print();', '''
+            string sample = "rpt.Detail.PageBreak = PageBreak.AfterBand;";
+            // rpt.Detail.PageBreak = PageBreak.AfterBand;
+            void Deferred() { rpt.Detail.PageBreak = PageBreak.AfterBand; }
+            rpt.Print();''')
+        self.assertEqual([], check_command_flow(candidate, style_reference=reference).issues)

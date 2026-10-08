@@ -37,6 +37,10 @@ Check the specified comparison screen's actual procedures and current mode. Comp
 
 Calculate an overall ratio from the required numerator total and denominator total, not the simple average or sum of row ratios. Check actual zero-denominator handling, rounding, integer/decimal types, and minute/hour units. Do not reconvert in the screen values already converted by SQL. Distinguish Footer, final total-column, and header locations and percent signs as requested. Do not duplicate in C# display fields or calculations the DB is contracted to return.
 
+## Existing reports and printing
+
+When reusing a PrintCommand/report, read the actual report constructor, data binding, paper size, margins, Detail height and print helper before adding pagination settings. A report that already yields one page per record does not need a new PageBreak assignment merely because one page was requested. Keep query/print iteration separate from a batch SAVE; preserve the existing pagination unless the request or actual generated pages show a gap. Verify page count and record identity on the final implementation without assuming that a new setting establishes them.
+
 ## Exceptions and final verification
 
 --allow-property-change excludes default-style checks for exact, justified properties; it does not create user authorization or necessity. Do not automatically exempt changed properties to remove warnings. Trying one convenient solution does not satisfy the criteria for an exception to a disfavored approach. Current explicit prohibitions still apply; general preferences follow the existing necessity criteria.
