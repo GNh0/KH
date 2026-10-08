@@ -11,7 +11,7 @@ Apply to the actual target project. Do not impose WinForms architecture on MAUI/
 
 1. Use the latest request and agreed style. Preserve current user edits and keep the change scoped. A conflicting sample does not weaken an agreed rule.
 2. Read the actual target and a relevant same-project example before writing. Match event responsibilities, data timing and initialization paths. For save changes, trace selected rows, row states/XML, SP calls and refresh within the save path; preserve query and report behavior separately. Migration source defines business behavior; target source defines APIs and implementation patterns. Available APIs alone do not establish the intended workflow.
-3. Add or change behavior/settings only for the requested function or a concrete implementation need. Reuse the established path. Resolve differences against actual source before completion; necessary departures require a concrete reason.
+3. Before adding code/settings, compare the requested behavior with what the current path already does. Identify the concrete gap or verified dependency the addition resolves. Preserve a path that already meets the request; a feature name or available API alone does not establish a need. Resolve uncertain necessity from actual source/API behavior first.
 
 Keep these decisions in the working context; no intake form or audit file is required.
 

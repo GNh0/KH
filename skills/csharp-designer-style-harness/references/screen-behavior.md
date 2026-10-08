@@ -39,7 +39,7 @@ Calculate an overall ratio from the required numerator total and denominator tot
 
 ## Existing reports and printing
 
-When reusing a PrintCommand/report, read the actual report constructor, data binding, paper size, margins, Detail height and print helper before adding pagination settings. A report that already yields one page per record does not need a new PageBreak assignment merely because one page was requested. Keep query/print iteration separate from a batch SAVE; preserve the existing pagination unless the request or actual generated pages show a gap. Verify page count and record identity on the final implementation without assuming that a new setting establishes them.
+For a reused report, trace its definition, data binding and print helper against the requested output. Keep working behavior and add code only for an identified gap or dependency. Check the final output relevant to the change.
 
 ## Exceptions and final verification
 

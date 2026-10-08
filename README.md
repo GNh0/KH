@@ -1,6 +1,6 @@
 # KH for Codex
 
-KH 3.0.22 provides ten focused skills and optional local checks for SQL, C#/Designer and PowerBuilder work. [한국어 및 상세 사용법](README.ko.md)
+KH 3.0.23 provides ten focused skills and optional local checks for SQL, C#/Designer and PowerBuilder work. [한국어 및 상세 사용법](README.ko.md)
 
 Use current user instructions, exact source and real project APIs. Small clear requests run directly. Load only the skills useful for the task. LINQ, intermediate tables and builds are disfavored; use them only when avoidance makes implementation difficult or the alternative has an extreme performance disadvantage. A current explicit prohibition still applies.
 
@@ -16,7 +16,7 @@ The PB skill includes PblScripter's export script and x86 helper. Its [launcher]
 
 For tasks that create auxiliary files, [workspace files](skills/work-execution/references/workspace-files.md) covers cleanup before handover, preserving requested deliverables and recording evidence still needed for continuation. Successful analysis exports remain the caller's cleanup responsibility; temporary storage alone does not imply automatic deletion.
 
-Before implementing screen commands, read the actual same-project event flow and current permitted operations. Optional C# checks accept `--style-reference-csharp` and repeated `--screen-command` arguments, including `print`, to review command phases, excluded subscriptions and save transport differences: XML, loop save calls and output directions. Query XML and Print PageBreak additions are compared separately; SAVE changes do not authorize changing query or report behavior. These comparisons do not globally ban row-state acceptance, resets, navigation, scalar saves, XML queries, outputs or pagination settings. Slide-based layouts require the full rendered slide before deriving columns.
+Before implementing screen commands, read the actual same-project event flow and current permitted operations. Preserve paths that already satisfy the request; add code/settings only for an identified gap or verified dependency. Optional C# checks accept `--style-reference-csharp` and repeated `--screen-command` arguments, including `print`, to review Save/New phases, excluded subscriptions and query/save transport differences. SAVE changes do not authorize changing query or report behavior. Report settings require actual source/output review rather than a property-name rule. Slide-based layouts require the full rendered slide before deriving columns.
 
 Optional Python 3.11+ standard-library checks run from any directory:
 

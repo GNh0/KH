@@ -42,7 +42,6 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             source, reference = Path(folder)/'screen.cs', Path(folder)/'project.cs'
             candidate = ROWWISE.replace('class Screen {', 'class Screen {' + XML_SELECT)
-            candidate = candidate.replace('rpt.Print();', 'rpt.Detail.PageBreak = PageBreak.BeforeBand; rpt.Print();')
             source.write_text(candidate, encoding='utf-8')
             reference.write_text(BATCH.replace('class Screen {', 'class Screen {' + SCALAR_SELECT), encoding='utf-8')
             before = {path: path.read_bytes() for path in (source, reference)}
@@ -55,8 +54,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(output['save_contract_comparison']['compared'])
             self.assertTrue(output['select_contract_comparison']['compared'])
             self.assertLessEqual({'save_xml_contract_drift_review', 'save_output_contract_drift_review',
-                                 'rowwise_save_contract_drift_review', 'select_xml_contract_drift_review',
-                                 'command_phase_drift_review'},
+                                 'rowwise_save_contract_drift_review', 'select_xml_contract_drift_review'},
                                 {issue['code'] for issue in output['issues']})
             self.assertEqual('needs_review', output['review_status'])
             self.assertTrue(all(path.read_bytes() == content for path, content in before.items()))
