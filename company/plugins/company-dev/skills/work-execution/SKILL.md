@@ -5,7 +5,7 @@ description: Carry out an approved multi-step task using current host tools, sco
 
 # Work execution
 
-Continue through the authorized outcome, incorporating new corrections and current user edits. Consult [personal work preferences](../../references/personal-style.md) when relevant. Keep auxiliary files outside source projects; write actual changes and final deliverables to their intended destinations.
+Continue through the authorized outcome, incorporating new corrections and current user edits. Consult [personal work preferences](../../references/personal-style.md) when relevant. Follow [workspace files](references/workspace-files.md) for auxiliary files and their cleanup before final handover; write actual changes and final deliverables to their intended destinations.
 
 Use native Goal tools only when requested. Follow current tool contracts for collaboration, scheduling, stopping, permissions and completion. Do not create a parallel KH state store, automatic history audit or role simulation. Delegation requires the current host's authorization and a useful independent scope.
 

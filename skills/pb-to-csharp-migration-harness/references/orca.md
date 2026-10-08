@@ -4,6 +4,8 @@ Verify the exact PBL, selected ORCA DLL, bitness, dependent DLLs, child-process 
 
 PblScripter's export script and x86 helper are bundled under `scripts/pbl-exporter`; no `C:\PblScripter` installation is needed. PowerBuilder's vendor DLLs remain part of the local licensed installation. Standard Sybase paths and PATH directories are checked for matching ORCA/runtime DLLs. `convert` requires an explicit export output directory; use a task-specific system temporary directory for analysis exports unless the user specifies a final destination. Automatic selection uses a temporary PBL copy and isolated output per candidate; failed/partial outputs are discarded. `probe` only inspects capability, not actual library compatibility.
 
+The exporter automatically cleans its internal staging and helper-build directories, but successful `--output-directory` files remain for the caller to use. For analysis-only extraction, place that output in a caller-owned scoped temporary directory and clean it after reading the required source. Preserve exports requested as final deliverables or still needed for continuation; follow [workspace files](../../work-execution/references/workspace-files.md).
+
 Even with exit code 0, Session open failed, Bad library, SySAM/license errors, or empty output mean failure. One issue fixed by changing PATH does not explain every later error. Inspect actual output and target exports. If extraction fails, continue with supplied exports/pasted source and identify missing evidence.
 # Local tool usage
 

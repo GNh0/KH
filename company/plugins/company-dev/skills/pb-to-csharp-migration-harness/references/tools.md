@@ -6,6 +6,8 @@ Check the exact PBL, chosen DLL, bitness, dependencies, child-process PATH and l
 
 Exit zero alone is insufficient: inspect error text and actual newly created nonempty exports. Session-open, bad-library, SySAM/license failures and missing output cannot be reported as completed extraction. Helper builds follow the current task's instructions and concrete necessity.
 
+Internal staging/helper-build folders are cleaned automatically. Successful `--output-directory` files remain caller-owned: remove analysis-only exports after reading them, while retaining requested final exports and still-needed continuation evidence. Use a scoped temporary output directory and follow [workspace files](../../work-execution/references/workspace-files.md).
+
 `python -B <plugin-root>/scripts/company_check.py pb <absolute-export> --encoding cp949` inspects supported export structure. Choose the actual source encoding. `sp-call <absolute-caller.cs> <absolute-procedure.sql>` compares a selected call and actual signature. Neither command executes a PBL or database.
 
 For a migration plan, connect actual screens, events, DataWindows, tables, inputs/outputs, keys, row states and implementation dependencies only to the detail the request needs. Compare query/edit/protection/save/requery and reports using the same inputs.

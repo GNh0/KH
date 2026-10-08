@@ -11,4 +11,4 @@ Preserve current edits and change only the requested scope. Trace relevant contr
 
 Use [source and Designer contracts](references/contracts.md) for affected paths. Optional static comparison: `python -B <plugin-root>/scripts/company_check.py csharp <absolute-after.cs> --original <absolute-before.cs> --designer <absolute-screen.Designer.cs>`. Supply separate originals and actual control/reference source when the comparison needs them.
 
-Resolve reported warnings against actual source; inspect `not_checked`. A pass is neither full style verification nor a build, Designer load, UI rendering or DB execution. Keep scratch outside source trees.
+Resolve reported warnings against actual source; inspect `not_checked`. A pass is neither full style verification nor a build, Designer load, UI rendering or DB execution. Follow [workspace files](../work-execution/references/workspace-files.md) for scratch and cleanup.

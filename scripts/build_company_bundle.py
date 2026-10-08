@@ -51,6 +51,8 @@ def build_bundle(output: Path) -> dict:
                 continue
             copy_file(source, plugin / relative)
         copy_file(ROOT / 'scripts/kh_check.py', plugin / 'scripts/kh_check.py')
+        workspace_reference = Path('skills/work-execution/references/workspace-files.md')
+        copy_file(ROOT / workspace_reference, plugin / workspace_reference)
         pb_scripts = Path('skills/pb-to-csharp-migration-harness/scripts')
         for relative in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
                          'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):

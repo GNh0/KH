@@ -20,6 +20,8 @@
 
 PowerBuilder 스킬에는 export 스크립트와 x86 추출기를 함께 넣었다. 별도의 PblScripter 설치 없이 설치된 PB 7.0·10.5·12.5에서 실제 추출이 되는 런타임을 자동 선택한다. Python 3.11+, Windows PowerShell과 사용 가능한 정식 PB/ORCA 설치가 필요하며, PB의 vendor DLL은 ZIP에 포함하지 않는다. 사용법은 스킬의 `references/tools.md`를 따른다.
 
+공통 `skills/work-execution/references/workspace-files.md` 지침은 빌더가 ZIP에 함께 넣는다. 작업 완료 전 분석용 추출·검증·렌더링 임시 파일을 정리하고, 최종 결과물과 재개에 필요한 증거는 보존한다. 정리 실패나 보관이 필요한 파일은 경로와 이유를 전달한다.
+
 ## 직원 설치
 
 1. ZIP을 소스 프로젝트 밖의 고정 폴더(예: `C:\CompanyTools\company-dev`)에 압축 해제한다. 그 폴더에 `.agents`와 `plugins`가 있어야 한다.
@@ -73,7 +75,7 @@ python -B "C:\CompanyTools\company-dev\plugins\company-dev\scripts\company_check
 현재 KH 개발 원본에서 최초 회사 ZIP을 만드는 명령은 다음과 같다. `company` 폴더는 배포용 템플릿이며, 빌더가 공통 Python 실행 모듈과 UI 메타데이터를 합쳐 완전한 패키지를 만든다.
 
 ```powershell
-python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.0.1.zip"
+python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.0.2.zip"
 ```
 
 ZIP에는 실행에 필요한 공통 소스가 함께 들어 있다. 이후 회사 소유 원본으로 복사해 유지보수할 수 있고, 직원 PC에서 원래 KH 저장소를 조회하거나 Git 인증을 할 필요가 없다. 배포 버전은 회사 manifest에서 별도로 관리한다.

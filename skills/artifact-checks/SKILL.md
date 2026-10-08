@@ -10,3 +10,5 @@ Compare final deliverables with the user's requested formats, locations, and con
 For file-structure checks alone, optionally run `python <plugin-root>/scripts/kh_check.py artifact <absolute-file>`. ZIP/XML/header checks do not establish content correctness or successful rendering. If no renderer is available, report that only structure was checked.
 
 Inspect the actual format-specific results: tables, formulas, groups, report H/D/F bands, pages, and Korean text readability. Create a requirements mapping only when useful; do not require a fixed outline or multiple separate status files.
+
+After verifying the final deliverables, clean task-owned temporary render/validation output using [workspace files](../work-execution/references/workspace-files.md).
