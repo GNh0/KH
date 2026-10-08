@@ -1,62 +1,117 @@
-# KH for Codex
+# KH Skills
 
-KH 3.0.23은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+**Claude와 Codex에서 사용하는 SQL·C#/Designer·PowerBuilder 개발 스킬.**
 
-작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
+KH 3.0.26은 스킬 10개와 선택형 로컬 검사기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
 
-새 그리드는 사용자가 제공한 [DataWindowToXml 기본 속성](skills/csharp-designer-style-harness/references/grid-layout.md)을 사용한다. 셀 TextOptions·SpinEdit EditMask·DisplayFormat·OptionsBehavior를 기본으로 덧붙이지 않고, 일반 편집 차단·버튼 동작 유지·편집 가능 컬럼을 구분한다. 기존 화면은 원본과 비교해 현재 설정을 보존한다.
+[English](README.md) · [스킬](#스킬) · [로컬 검사](#선택형-로컬-검사) · [개발 검사](docs/development.md)
 
-C# 작성은 [사용자 작성 방식](skills/csharp-designer-style-harness/references/coding-style.md)과 [사용자 컨트롤 기본 초기화](skills/csharp-designer-style-harness/references/user-controls.md)를 적용한다. 현재 프로젝트에서 쓸 수 있는 적절한 사용자 컨트롤을 우선하고 초기화 속성을 유지한다. 라벨과 한 줄 입력 컨트롤의 높이는 실제 화면의 비슷한 컨트롤에 맞추며, 라벨의 기본 폰트·정렬을 유지한다. u_Label의 Default 조건식으로 설정되는 Far/Center도 기본 정렬로 인정한다. 긴 내용에 맞춰 폭은 늘릴 수 있다. KoneLib에 한정하지 않으며 기존 Name 규칙과 그리드별 Repository 역할 명명을 함께 사용한다. 선택적 검사는 실제 컨트롤 소스와 같은 프로젝트의 비교 화면으로 폰트·정렬·높이 불일치와 버튼 누락을 검토한다.
+## 설치
 
-개인 GitHub에 의존하지 않는 회사 배포와 직원별 스타일 설정은 별도의 [회사 ZIP 번들](company/README.ko.md)을 사용한다. 회사 검사기는 KH 개인 문법·포맷 선호를 강제하지 않는 project 정책을 적용한다.
+### Claude Code
 
-PB 스킬에는 PblScripter의 export 스크립트와 x86 추출기가 포함돼 있다. [내장 실행기](skills/pb-to-csharp-migration-harness/references/orca.md)가 설치된 PB 7.0·10.5·12.5를 자동으로 시도해 실제 추출에 성공한 런타임을 선택한다. 외부 PblScripter 설치는 필요 없으며 Python 3.11+, Windows PowerShell과 사용할 수 있는 정식 PB/ORCA 설치는 필요하다. 임시 입력·실패 출력·필요한 추출기 빌드는 소스와 플러그인 폴더 밖에서 처리한다.
+Claude Code 대화에서 다음 명령을 실행합니다.
 
-보조 파일을 만드는 작업은 [임시 파일 지침](skills/work-execution/references/workspace-files.md)에 따라 최종 전달 전에 정리한다. 요청한 결과물과 재개에 필요한 증거는 보존하고, 남겨야 하는 임시 파일의 경로와 이유를 기존 응답·인계에 적는다. 성공한 분석용 추출 출력은 호출자가 정리해야 하며 임시 폴더에 있다는 이유로 자동 삭제되는 것은 아니다.
+```text
+/plugin marketplace add GNh0/KH
+/plugin install kh-skills@gnho-labs
+```
 
-화면 명령을 구현하기 전에 같은 프로젝트의 실제 이벤트 흐름과 현재 허용 동작을 확인한다. 기존 처리로 요구를 충족하면 유지하고, 부족한 동작이나 구현 의존성이 확인될 때만 코드·설정을 추가한다. 선택적 C# 검사에 `--style-reference-csharp`와 반복 `--screen-command`(`print` 포함)를 지정하면 Save/New 단계, 제외한 명령 연결, 조회·저장 전달 방식의 차이를 확인한다. SAVE 수정만으로 조회·리포트 변경을 정당화하지 않는다. 리포트 설정은 속성 이름으로 판정하지 않고 실제 소스·출력으로 판단한다. 슬라이드 기반 화면은 전체 렌더링을 보고 컬럼을 확정한다.
+설치 후 스킬 이름으로 호출할 수 있습니다.
+
+```text
+/kh-skills:sql-formatting
+/kh-skills:csharp-designer-style-harness
+/kh-skills:pb-to-csharp-migration-harness
+```
+
+로컬 소스를 시험하려면 저장소를 복제한 뒤 `claude --plugin-dir /absolute/path/to/KH`로 실행합니다. Claude용 설치 정보는 `.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`에 있습니다.
+
+Claude Code 터미널과 Desktop의 로컬 Code 세션은 사용자 범위의 플러그인 설정을 공유합니다. 다른 Claude 화면은 사용할 수 있는 플러그인 구성요소가 다르며, Python/PB 검사기는 로컬 파일을 실행할 수 있는 환경이 필요합니다. 화면·요금제별 조건은 [Anthropic 공식 문서](https://code.claude.com/docs/en/plugins)를 참고하세요.
+
+### Codex
+
+기존 저장소 marketplace를 등록합니다.
+
+```sh
+codex plugin marketplace add GNh0/KH
+```
+
+앱의 플러그인 목록에서 **KH Skills**를 선택해 설치합니다. 기술 식별자 `kh-uaf`와 marketplace 이름 `kh-uaf-marketplace`는 유지하고, Claude와 Codex 모두 공통 `release` 브랜치에서 설치합니다. 이전 설치를 업데이트할 때는 marketplace를 먼저 새로 고칩니다.
+
+`$sql-formatting`처럼 필요한 스킬을 지정하거나 작업을 자연어로 요청합니다. Codex가 스킬 설명을 보고 관련 지침을 읽습니다. marketplace 등록과 설치 흐름은 [OpenAI 공식 문서](https://developers.openai.com/plugins/build/plugins)를 참고하세요.
+
+### 필요한 스킬만 사용
+
+전체 플러그인을 쓰지 않으려면 `skills/`에서 필요한 폴더를 해당 에이전트의 스킬 위치에 복사할 수 있습니다. 일부 참고 파일과 검사기는 저장소 루트 기준 상대 경로를 사용하므로 연결된 자료도 유지해야 합니다. SQL·C#·PB 도메인 스킬은 전체 플러그인 설치를 권장합니다.
+
+KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 있지는 않습니다. 사용할 Claude·Codex 계정과 해당 환경의 권한이 필요합니다.
 
 ## 스킬
 
 | 스킬 | 적용할 작업 |
 | --- | --- |
+| [sql-formatting](skills/sql-formatting/SKILL.md) | SQL/T-SQL 생성·정리·비교, 별칭 보존 |
+| [csharp-designer-style-harness](skills/csharp-designer-style-harness/SKILL.md) | WinForms·DevExpress·프로젝트 컨트롤·Designer |
+| [pb-to-csharp-migration-harness](skills/pb-to-csharp-migration-harness/SKILL.md) | PBL·DataWindow 분석과 원본에 근거한 C#/SQL 이관 |
 | [work-planning](skills/work-planning/SKILL.md) | 규모가 크거나 중요한 선택이 남은 작업의 계획 |
-| [work-execution](skills/work-execution/SKILL.md) | 승인된 다단계 작업, 중단·재개, 현재 호스트 도구 사용 |
-| [code-review](skills/code-review/SKILL.md) | 실제 변경과 요구 동작의 검토 |
-| [systematic-debugging](skills/systematic-debugging/SKILL.md) | 실제 오류 단계와 경로의 원인 분석 |
-| [sql-formatting](skills/sql-formatting/SKILL.md) | SQL 생성·정리·비교·수정과 최종 텍스트 확인 |
-| [csharp-designer-style-harness](skills/csharp-designer-style-harness/SKILL.md) | WinForms/DevExpress/KoneLib 코드와 Designer |
-| [pb-to-csharp-migration-harness](skills/pb-to-csharp-migration-harness/SKILL.md) | PB/PBL/DataWindow 분석 및 C#/SQL 이관 |
-| [artifact-checks](skills/artifact-checks/SKILL.md) | 요청한 전달물의 내용·구조·렌더링 확인 |
-| [context-handoff](skills/context-handoff/SKILL.md) | 현재 작업을 이어가기 위한 간결한 인계 |
-| [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH 자체 수정, 패키지·프로필·명시적 로그 감사 |
+| [work-execution](skills/work-execution/SKILL.md) | 승인된 다단계 작업과 진행·중단·재개 |
+| [code-review](skills/code-review/SKILL.md) | 실제 변경, 요구 동작과 회귀 검토 |
+| [systematic-debugging](skills/systematic-debugging/SKILL.md) | 오류 재현과 실제 실행 경로의 원인 분석 |
+| [artifact-checks](skills/artifact-checks/SKILL.md) | 전달물 내용·파일 구조·렌더링 확인 |
+| [context-handoff](skills/context-handoff/SKILL.md) | 진행 중인 작업을 이어가기 위한 간결한 인계 |
+| [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH 패키지·검사기·프로필·요청한 소스 로그 감사 |
 
-LINQ·중간 테이블·빌드는 비선호다. 피하면 구현이 어렵거나 대안의 성능이 극단적으로 불리한 경우에만 구체적 이유로 사용한다. 단순 코드 단축·편의·의례적인 검증은 예외 이유가 아니다. 현재 작업에서 사용자가 명시적으로 금지하면 그 지시를 따른다.
+## 작업 방식
 
-## 선택적 검사
+현재 요청, 원본 소스, 실제 프로젝트 API와 사용자의 정정을 기준으로 작업합니다. 작고 명확한 수정은 직접 처리하고, 계획·검토는 해당 작업에 도움이 될 때 사용합니다. 공유 스킬은 현재 에이전트 환경에서 제공하는 도구를 따릅니다.
 
-Python 3.11 이상 표준 라이브러리를 사용한다. 서버 실행, API 키, DB 연결 또는 별도 Python 패키지 설치가 필요하지 않다. 명령의 `<...>`는 실제 절대 경로로 바꾼다.
+C# 작업은 같은 화면의 이벤트 흐름, 컨트롤 기본값, 이름과 조회·저장 계약을 유지합니다. 새 DevExpress 그리드는 사용자가 제공한 [DataWindowToXml 기본 속성](skills/csharp-designer-style-harness/references/grid-layout.md)을 사용하며, [코딩 방식](skills/csharp-designer-style-harness/references/coding-style.md)과 [컨트롤 초기화](skills/csharp-designer-style-harness/references/user-controls.md)를 함께 적용합니다. 기존 화면은 실제 원본을 비교 기준으로 삼습니다.
 
-```powershell
-python -B <plugin-root>/scripts/kh_check.py sql <original.sql> <candidate.sql>
-python -B <plugin-root>/scripts/kh_check.py sql <source.sql> --preserve-aliases
-python -B <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --original <original.cs> --designer <screen.Designer.cs>
-python -B <plugin-root>/scripts/kh_check.py designer <after.Designer.cs> --original <before.Designer.cs> --preserve-property btn.Visible
-python -B <plugin-root>/scripts/kh_check.py pb <source.srw> --encoding cp949
-python -B <plugin-root>/scripts/kh_check.py artifact <document.docx>
-python -B <plugin-root>/scripts/kh_check.py package <plugin-root>
+SQL 검사기는 지원하는 토큰과 배치를 확인하고, 업무 의미는 쿼리와 사용자 지시를 바탕으로 판단합니다. PB 이관은 원본 이벤트·상태·DataWindow·SP 매개변수와 결과를 먼저 연결합니다.
+
+포함된 프로젝트 스타일에서 LINQ·중간 테이블·빌드는 비선호입니다. 피하면 구현이 어렵거나 대안의 성능이 극단적으로 불리할 때 구체적인 이유로 사용합니다. 현재 사용자의 명시적 지시가 우선합니다.
+
+## 선택형 로컬 검사
+
+Python 3.11 이상 표준 라이브러리만 사용합니다. API 키, 서버, DB 연결 또는 추가 Python 패키지 설치는 필요하지 않습니다. `<...>`를 실제 절대 경로로 바꿉니다.
+
+```sh
+python -B <KH-root>/scripts/kh_check.py sql <original.sql> <candidate.sql>
+python -B <KH-root>/scripts/kh_check.py sql <source.sql> --preserve-aliases
+python -B <KH-root>/scripts/kh_check.py csharp <candidate.cs> --original <original.cs> --designer <screen.Designer.cs>
+python -B <KH-root>/scripts/kh_check.py designer <after.Designer.cs> --original <before.Designer.cs> --preserve-property btn.Visible
+python -B <KH-root>/scripts/kh_check.py pb <source.srw> --encoding cp949
+python -B <KH-root>/scripts/kh_check.py artifact <document.docx>
+python -B <KH-root>/scripts/kh_check.py package <KH-root>
 ```
 
-일반 결과의 종료 코드는 0=수행한 검사 통과, 1=검사 오류 발견, 2=입력/검사 범위 미완성이다. 비선호·스타일 경고는 별도로 표시한다. `checked`, `not_checked`를 함께 읽는다. SQL 토큰 비교는 DB 의미 동등성 증명이 아니며, C# 정적 검사는 컴파일·UI 실행이 아니다. 파일 구조 검사는 실제 렌더링을 대신하지 않는다. `--normalize-layout`은 지원하는 FROM/JOIN/EXISTS 배치만 stdout으로 출력하며 원본을 쓰지 않는다.
+일반 검사의 종료 코드는 **0=수행한 검사 통과**, **1=오류 발견**, **2=입력 또는 검사 범위 미완성**입니다. `checked`와 `not_checked`를 함께 확인합니다. 정적 검사는 SQL 실행, C# 컴파일, Designer 동작, 전체 이관이나 실제 렌더링을 증명하지 않습니다. `sql --normalize-layout`은 지원하는 배치 변경을 stdout으로 출력합니다.
 
-PB의 ORCA probe/추출, DataWindow XML·Designer 초안, 이벤트/상태·SP 매개변수·결과 측정 비교는 [PB 참고 자료](skills/pb-to-csharp-migration-harness/SKILL.md)에 있다. 도구 출력이 실제 실행·전체 이관을 증명하지 않는 부분을 구분한다.
+PB 스킬에는 PblScripter export 스크립트와 x86 추출기가 포함되어 있습니다. [내장 실행기](skills/pb-to-csharp-migration-harness/references/orca.md)가 설치된 PB 7.0·10.5·12.5를 시도하고 실제 추출에 성공한 런타임을 선택합니다. Windows PowerShell과 사용할 수 있는 정식 PB/ORCA 설치가 필요합니다.
 
-개발 검증은 저장소 루트에서 `python -B -m unittest discover -s tests/domain`으로 실행한다. [개발 검사](docs/development.md)는 고정 버전 Pyright로 전체 실행 모듈을 검사하고 입력 검증·공유 lexer에는 엄격한 타입 검사를 적용한다. Node/Pyright는 개발 검사에만 쓰며 KH 실행 의존성이 아니다. [시나리오 평가](skills/kh-maintenance/references/scenario-evaluation.md)는 실제 호스트 평가와 단위/모의 검사를 구분한다.
+개인 GitHub 의존성을 없애고 직원별 스타일을 적용하는 회사 배포는 별도의 [회사 ZIP 번들](company/README.ko.md)을 사용합니다. 회사 번들은 KH의 개인 스타일 기본값과 다른 project 정책을 적용하며, 현재 Codex marketplace 형식으로 제공합니다.
 
-## 2.9에서 변경
+## 패키지와 검증
 
-필수 front door/intake, Python 호스트 실행 루프, 메타데이터만 만드는 역할 DAG, 중복 Goal/메모리/상태 저장소, HMAC·실행 영수증·자기평가 점수 체계와 관련 테스트를 제거했다. Goal·협업·예약·권한·중단은 현재 호스트 도구 계약과 사용자 요청을 따른다.
+```text
+.codex-plugin/plugin.json        Codex 설치 정보; 기존 kh-uaf 식별자
+.agents/plugins/marketplace.json Codex marketplace; release 배포
+.claude-plugin/plugin.json       Claude 설치 정보; kh-skills 식별자
+.claude-plugin/marketplace.json  Claude marketplace; gnho-labs, release 배포
+skills/                         공통 스킬과 참고 자료
+src/ + scripts/                 공통 선택형 검사기
+```
 
-기존 `cli.py`, FastAPI 서버, root `plugin.json` 및 오래된 workflow API는 더 이상 제공하지 않는다. 유지한 순수 함수 일부만 `src/skills`의 작은 import 연결로 남겼다. 신규 API는 `src/sql`, `src/csharp`, `src/pb`, `src/common`, `src/artifacts`, `src/maintenance`에 있다. 자세한 변경과 검증 범위는 [문서 목록](docs/README.md)을 확인한다.
+두 플랫폼 manifest는 같은 버전과 같은 스킬 트리를 사용합니다. 저장소 검증은 다음과 같이 실행합니다.
 
-정식 manifest는 `.codex-plugin/plugin.json`이다. 원격 marketplace의 `kh-uaf` 이름과 `codex-runtime` ref는 유지한다. 이 작업 트리의 수정과 현재 설치된 캐시는 별개다. 설치·배포 요청이 있을 때 현재 plugin-creator 흐름으로 배포 대상을 확인하고 적용한다.
+```sh
+python -B -m unittest discover -s tests/domain
+python -B scripts/kh_check.py package /absolute/path/to/KH
+claude plugin validate /absolute/path/to/KH/.claude-plugin/plugin.json --strict
+claude plugin validate /absolute/path/to/KH/.claude-plugin/marketplace.json --strict
+```
+
+[개발 검사](docs/development.md)는 고정 버전 Pyright와 CI도 실행합니다. 단위 검사·manifest 검증은 수행한 패키지 검사 범위를 확인하며, 모델의 실제 작업과 목표 환경은 별도로 검증해야 합니다. GitHub 공개와 이미 설치된 플러그인 캐시 갱신도 별도 단계입니다.
+
+과거의 필수 intake, Python 호스트 루프, 역할 DAG 모의 실행, 중복 Goal·메모리·상태 저장소는 제거되었습니다. Goal·협업·권한·중단은 현재 호스트 도구를 따릅니다. [역사 문서](docs/README.md)는 이전 버전의 자료이며 현재 실행 지침으로 쓰지 않습니다.

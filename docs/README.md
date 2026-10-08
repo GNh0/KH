@@ -19,7 +19,7 @@
 
 ## GitHub 배포
 
-`main`과 `codex-runtime`은 같은 소스 패키지를 제공하며 버전은 `.codex-plugin/plugin.json`을 기준으로 확인한다. 기존 마켓플레이스 이름 `kh-uaf-marketplace`, 플러그인 이름 `kh-uaf`, 설치 대상 ref `codex-runtime`을 유지한다. GitHub 다운로드에도 현재 문서와 테스트 입력을 포함한다. 원격 게시와 사용 중인 Codex 설치 캐시의 갱신은 별도 단계다.
+`main`과 `release`은 같은 소스 패키지를 제공하며 버전은 `.codex-plugin/plugin.json`과 `.claude-plugin/plugin.json`에서 확인한다. 기존 마켓플레이스 이름 `kh-uaf-marketplace`, 플러그인 이름 `kh-uaf`, 설치 대상 ref `release`을 유지한다. GitHub 다운로드에도 현재 문서와 테스트 입력을 포함한다. Claude는 같은 저장소의 `.claude-plugin/marketplace.json`에서 `kh-skills@gnho-labs`를 설치한다. 두 플랫폼은 같은 스킬·검사기를 공유한다. 원격 게시와 사용 중인 플러그인 설치 캐시의 갱신은 별도 단계다.
 
 ## 역사 자료
 

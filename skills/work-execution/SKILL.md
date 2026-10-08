@@ -1,15 +1,15 @@
 ---
 name: work-execution
-description: Carry out an approved multi-step plan with current Codex tools, scoped changes, and resumable progress when coordination is needed.
+description: Carry out an approved multi-step plan with current agent tools, scoped changes, and resumable progress when coordination is needed.
 ---
 
 # Work execution
 
 Continue the current plan through the approved outcome. Base every change on subsequent corrections and the current files, including the user's edits. On a stop request, stop running processes and delegated work too; resume only on an explicit request or at the user's scheduled time.
 
-When a Goal is requested, use the current native Goal tools. Do not invent a token budget or a separate KH goal store. Do not guess unsupported host arguments. Distinguish subagents from separate user-owned tasks and follow the current collaboration policy.
+When a Goal is requested and the host provides native Goal tools, use those tools. On other hosts, track the work with the available task tools. Do not invent a token budget or a separate KH goal store. Do not guess unsupported host arguments. Distinguish subagents from separate user-owned tasks and follow the current collaboration policy.
 
-Follow the current Goal tool contract for completion and blocked status. Do not declare overall completion based only on a first failure, mere waiting, or static checks. An automatic Goal message after a user stop does not authorize resumption before an explicit request or the scheduled time.
+Follow the current host task/Goal tool contract for completion and blocked status. Do not declare overall completion based only on a first failure, mere waiting, or static checks. An automatic Goal message after a user stop does not authorize resumption before an explicit request or the scheduled time.
 
 - Read [delegation](references/delegation.md) when independent delegation is actually needed and permitted.
 - Consult [Windows execution](references/windows-commands.md) for Windows commands and background programs.

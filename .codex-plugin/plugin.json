@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "3.0.25",
-  "description": "KH skills for Codex: scoped SQL, C#/Designer and PowerBuilder work, practical review and optional local checks.",
+  "version": "3.0.26",
+  "description": "KH Skills for Claude and Codex: SQL, C#/Designer and PowerBuilder development with optional local checks.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -9,6 +9,7 @@
   "repository": "https://github.com/GNh0/KH",
   "keywords": [
     "codex",
+    "claude",
     "skills",
     "sql",
     "csharp",
@@ -16,7 +17,7 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "KH for Codex",
+    "displayName": "KH Skills",
     "shortDescription": "SQL, C#/Designer and PB skills with scoped local checks.",
     "longDescription": "Ten focused skills preserve current source, user corrections and project patterns. Optional Python checks compare SQL, inspect C#/Designer and PB exports, and validate artifact/package structure. Planning, execution, review and handoff use the current host tools. No mandatory intake, parallel role simulation, duplicate Goal ledger or signed receipt workflow.",
     "developerName": "KH UAF",

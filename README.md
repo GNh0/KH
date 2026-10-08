@@ -1,38 +1,117 @@
-# KH for Codex
+# KH Skills
 
-KH 3.0.25 provides ten focused skills and optional local checks for SQL, C#/Designer and PowerBuilder work. [한국어 및 상세 사용법](README.ko.md)
+**SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-Use current user instructions, exact source and real project APIs. Small clear requests run directly. Load only the skills useful for the task. LINQ, intermediate tables and builds are disfavored; use them only when avoidance makes implementation difficult or the alternative has an extreme performance disadvantage. A current explicit prohibition still applies.
+KH 3.0.26 packages ten focused development skills and optional local Python checks in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
-The skill entrypoints are `work-planning`, `work-execution`, `code-review`, `systematic-debugging`, `sql-formatting`, `csharp-designer-style-harness`, `pb-to-csharp-migration-harness`, `artifact-checks`, `context-handoff` and `kh-maintenance`.
+[한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
-New DevExpress grids use the user-supplied [DataWindowToXml layout defaults](skills/csharp-designer-style-harness/references/grid-layout.md). Column edit modes distinguish ordinary read-only, action-enabled and editable columns. Checks review added cell TextOptions, SpinEdit masks, DisplayFormat and view behavior changes while preserving existing settings when a baseline is supplied.
+## Install
 
-C# work uses the [user coding style](skills/csharp-designer-style-harness/references/coding-style.md) and [user-control initialization](skills/csharp-designer-style-harness/references/user-controls.md). Prefer suitable controls available in the target project, retain their defaults, and use the agreed semantic names. Match label and single-line input heights to similar controls in the actual screen; preserve constructor label font/alignment, including a self-property Default fallback to Far/Center. Width may grow for content. Optional checks use actual control sources and a same-project Designer to flag proved font/alignment/height mismatches; no universal font/height table is required.
+### Claude Code
 
-For company distribution with employee-owned styles and no personal GitHub dependency, use the separate [company ZIP bundle](company/README.ko.md). Its checks use project policy rather than enforcing KH's personal syntax and format preferences.
+Run these commands inside a Claude Code session:
 
-The PB skill includes PblScripter's export script and x86 helper. Its [launcher](skills/pb-to-csharp-migration-harness/references/orca.md) automatically tries installed PB 7.0/10.5/12.5 runtimes and selects one after actual extraction. No external PblScripter installation is needed. Python 3.11+, Windows PowerShell and a compatible licensed PB/ORCA installation are required. Temporary input, failed output and necessary helper builds stay outside source and plugin folders.
-
-For tasks that create auxiliary files, [workspace files](skills/work-execution/references/workspace-files.md) covers cleanup before handover, preserving requested deliverables and recording evidence still needed for continuation. Successful analysis exports remain the caller's cleanup responsibility; temporary storage alone does not imply automatic deletion.
-
-Before implementing screen commands, read the actual same-project event flow and current permitted operations. Preserve paths that already satisfy the request; add code/settings only for an identified gap or verified dependency. Optional C# checks accept `--style-reference-csharp` and repeated `--screen-command` arguments, including `print`, to review Save/New phases, excluded subscriptions and query/save transport differences. SAVE changes do not authorize changing query or report behavior. Report settings require actual source/output review rather than a property-name rule. Slide-based layouts require the full rendered slide before deriving columns.
-
-Optional Python 3.11+ standard-library checks run from any directory:
-
-```powershell
-python -B <plugin-root>/scripts/kh_check.py sql <absolute-original.sql> <absolute-candidate.sql>
-python -B <plugin-root>/scripts/kh_check.py csharp <absolute-source.cs> --designer <absolute-screen.Designer.cs>
-python -B <plugin-root>/scripts/kh_check.py designer <absolute-after.Designer.cs> --original <absolute-before.Designer.cs> --preserve-property btn.Visible
-python -B <plugin-root>/scripts/kh_check.py pb <absolute-export.srw>
-python -B <plugin-root>/scripts/kh_check.py artifact <absolute-document.docx>
-python -B <plugin-root>/scripts/kh_check.py package <absolute-plugin-root>
+```text
+/plugin marketplace add GNh0/KH
+/plugin install kh-skills@gnho-labs
 ```
 
-Results distinguish errors, warnings and incomplete input, and list both `checked` and `not_checked`. No DB, build, API key, server or package installation is needed. Static source/container checks do not establish runtime behavior or visual quality. `sql --normalize-layout` only normalizes supported FROM/JOIN/EXISTS layout to stdout.
+Then invoke a skill by its namespaced command:
 
-Run `python -B -m unittest discover -s tests/domain` from this repository for local tests. The [development checks](docs/development.md) also run pinned Pyright across all active Python modules, with strict checking on input validation and the shared lexers. Node/Pyright are development tools only. See [documentation and migration notes](docs/README.md).
+```text
+/kh-skills:sql-formatting
+/kh-skills:csharp-designer-style-harness
+/kh-skills:pb-to-csharp-migration-harness
+```
 
-The mandatory intake/front door, Python host loop, simulated role DAG, duplicate Goal/memory/state stores and signed receipt protocols were removed. Use the current Codex host tools within their actual schemas and the user's request. The old root CLI/server/workflow APIs are breaking removals; a few pure helper imports remain under `src/skills`.
+For local development, clone this repository and launch `claude --plugin-dir /absolute/path/to/KH`. The Claude manifest is `.claude-plugin/plugin.json`; the marketplace catalog is `.claude-plugin/marketplace.json`.
 
-The canonical manifest is `.codex-plugin/plugin.json`. The remote marketplace name and `codex-runtime` ref are retained. A modified source tree does not update an installed cache by itself; installation/deployment is a separate requested operation. Historical documents are reference material, not current operating instructions.
+Claude Code in the terminal and its local Desktop Code sessions share user-level plugin settings. Other Claude surfaces load different plugin components; this repository's optional Python/PB helpers need an environment that can execute their local files. See [Anthropic's plugin documentation](https://code.claude.com/docs/en/plugins) for the current surface and plan requirements.
+
+### Codex
+
+Register the existing repository marketplace:
+
+```sh
+codex plugin marketplace add GNh0/KH
+```
+
+Open the app's plugin directory, select **KH Skills**, and install it. The existing technical identifiers remain `kh-uaf` and `kh-uaf-marketplace`; both platforms install from the shared `release` branch. Refresh the marketplace before upgrading a previously installed version.
+
+Invoke a skill by name, for example `$sql-formatting`, or ask for the relevant work. Codex discovers skill descriptions and loads the useful guidance. See [OpenAI's plugin packaging documentation](https://developers.openai.com/plugins/build/plugins) for marketplace registration and installation.
+
+### Individual skills
+
+If you do not want the complete plugin, copy only the required folders from `skills/` into your agent's supported skill directory. Keep their referenced resources available: several references and checkers use paths relative to this repository root. The complete plugin is the recommended option for the domain skills.
+
+KH does not provide a model, an agent runtime, or API credits. Your Claude or Codex account and that host's permissions still apply.
+
+## Skills
+
+| Skill | Use it for |
+| --- | --- |
+| [sql-formatting](skills/sql-formatting/SKILL.md) | SQL/T-SQL layout, alias-preserving edits and source comparison |
+| [csharp-designer-style-harness](skills/csharp-designer-style-harness/SKILL.md) | WinForms, DevExpress, project controls and Designer contracts |
+| [pb-to-csharp-migration-harness](skills/pb-to-csharp-migration-harness/SKILL.md) | PBL/DataWindow analysis and source-grounded C#/SQL migration |
+| [work-planning](skills/work-planning/SKILL.md) | Substantial work with unresolved choices or dependencies |
+| [work-execution](skills/work-execution/SKILL.md) | Approved multi-step work, progress and stop/resume handling |
+| [code-review](skills/code-review/SKILL.md) | Actual changes, behavior regressions and verification |
+| [systematic-debugging](skills/systematic-debugging/SKILL.md) | Reproducing a failure and tracing its actual cause |
+| [artifact-checks](skills/artifact-checks/SKILL.md) | Deliverable content, file structure and rendered output |
+| [context-handoff](skills/context-handoff/SKILL.md) | A compact checkpoint for continuing an ongoing task |
+| [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH's package, checkers, profiles and requested source-log audits |
+
+## How KH works
+
+Start from the current request, original source, actual project APIs and the user's corrections. Small clear changes run directly; planning and review are used when they improve the task. The shared skills use the tools available in the current host.
+
+C# guidance preserves the actual screen's event flow, control defaults, names and save/query contracts. New DevExpress grids use the supplied [DataWindowToXml defaults](skills/csharp-designer-style-harness/references/grid-layout.md), together with the [coding style](skills/csharp-designer-style-harness/references/coding-style.md) and [control initialization](skills/csharp-designer-style-harness/references/user-controls.md). Existing screens are compared against their own baseline.
+
+SQL checks compare supported source tokens and layout; the agent determines business meaning from the query and user instructions. PB work maps the source's events, state, DataWindows and stored-procedure parameters before migration.
+
+LINQ, intermediate tables and builds are disfavored by the included project style. Use them when avoiding them makes implementation difficult or causes an extreme performance disadvantage, with a concrete reason. Current user instructions take precedence.
+
+## Optional local checks
+
+The checkers use the Python 3.11+ standard library. They need no API key, server, database connection or extra Python package. Replace the placeholders with actual absolute paths:
+
+```sh
+python -B <KH-root>/scripts/kh_check.py sql <original.sql> <candidate.sql>
+python -B <KH-root>/scripts/kh_check.py sql <source.sql> --preserve-aliases
+python -B <KH-root>/scripts/kh_check.py csharp <candidate.cs> --original <original.cs> --designer <screen.Designer.cs>
+python -B <KH-root>/scripts/kh_check.py designer <after.Designer.cs> --original <before.Designer.cs> --preserve-property btn.Visible
+python -B <KH-root>/scripts/kh_check.py pb <source.srw> --encoding cp949
+python -B <KH-root>/scripts/kh_check.py artifact <document.docx>
+python -B <KH-root>/scripts/kh_check.py package <KH-root>
+```
+
+For ordinary checks, exit codes are **0** for the checks performed passing, **1** for errors found, and **2** for incomplete input or scope. Read both `checked` and `not_checked`. Static checks do not establish SQL execution, C# compilation, Designer behavior, complete migration or rendered quality. `sql --normalize-layout` writes supported layout changes to stdout.
+
+The PB skill includes PblScripter's export script and x86 helper. The [bundled launcher](skills/pb-to-csharp-migration-harness/references/orca.md) tries installed PB 7.0/10.5/12.5 runtimes and selects one after actual extraction. It requires Windows PowerShell and a compatible licensed PB/ORCA installation.
+
+For company distribution with employee-owned styles, use the separate [company ZIP bundle](company/README.ko.md). Its project policy differs from KH's personal style defaults; it currently uses the Codex marketplace format.
+
+## Package and validation
+
+```text
+.codex-plugin/plugin.json        Codex metadata; existing kh-uaf identity
+.agents/plugins/marketplace.json Codex marketplace; release source
+.claude-plugin/plugin.json       Claude metadata; kh-skills identity
+.claude-plugin/marketplace.json  Claude marketplace; gnho-labs, release source
+skills/                         Shared guidance and resources
+src/ + scripts/                 Shared optional checkers
+```
+
+The two platform manifests have the same release version and point to the same skill tree. To validate a checkout:
+
+```sh
+python -B -m unittest discover -s tests/domain
+python -B scripts/kh_check.py package /absolute/path/to/KH
+claude plugin validate /absolute/path/to/KH/.claude-plugin/plugin.json --strict
+claude plugin validate /absolute/path/to/KH/.claude-plugin/marketplace.json --strict
+```
+
+[Development checks](docs/development.md) include pinned Pyright and CI. Passing tests and manifest validation establish the package checks performed; model behavior and target environments need their own evaluation. GitHub publication does not update an installed cache automatically.
+
+The old mandatory intake, Python host loop, simulated role DAG and duplicate Goal/memory/state stores were removed. Goal, collaboration, permissions and interruption follow the current host. [Historical documents](docs/README.md) describe earlier versions and are not current operating instructions.
