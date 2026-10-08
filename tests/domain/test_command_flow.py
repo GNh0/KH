@@ -112,4 +112,12 @@ class CommandFlowTests(unittest.TestCase):
 
     def test_invalid_operation_scope_is_rejected(self):
         with self.assertRaises(ValueError):
-            check_command_flow('class Screen {}', allowed_commands=['print'])
+            check_command_flow('class Screen {}', allowed_commands=['export'])
+
+    def test_print_handler_and_subscription_use_explicit_scope(self):
+        candidate = 'class Screen { void Init() { this.PrintCommand += OnPrint; } '
+        candidate += 'void OnPrint(object s, PrintCommandEventArgs e) { PrintPages(); } }'
+        self.assertEqual([], check_command_flow(candidate, allowed_commands=['print']).issues)
+        result = check_command_flow(candidate, allowed_commands=['search'])
+        self.assertEqual(['screen_command_out_of_scope'], [issue.code for issue in result.issues])
+        self.assertEqual('print', result.issues[0].details['command'])
