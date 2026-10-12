@@ -52,6 +52,8 @@ Keep static control declarations, creation, layout, and properties in Designer. 
 
 Keep queries/saves in existing `CallSelectProcedure`/`CallSaveProcedure` methods and connect screen-command events to that flow. Reuse existing helpers with actual roles, such as `fnFocusedRowChanged`, `SetEditMode`, and `PopUpItems`. Do not create a new helper or generic layer for every short code fragment.
 
+Match complete save/delete callers, including ordinary button events. When the agreed project pattern uses `if (CallSaveProcedure())` for a single success decision, preserve it instead of adding a one-use result variable and an unconditional edit-mode reset. In this project's corrected flow, Search owns default-mode/protection resets in the refresh path; do not move them into Save/Delete or before success handling. Preserve failed-save state. A result used for another required purpose, or a different approved target lifecycle, can justify a different shape.
+
 Name new handlers from the actual control/event and the current project's casing. A shared handler is appropriate when the target actually uses that pattern; do not invent a generic event layer merely to combine a few lines. Check constructor and Designer subscriptions together, especially Repository ButtonClick plus grid RowCellClick routes that could open the same popup twice.
 
 ## Database and row handling

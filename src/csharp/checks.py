@@ -14,6 +14,7 @@ from .flow_review import check_project_flow
 from .command_flow import check_command_flow
 from .save_contract import check_save_contract, check_select_contract
 from .editor_display import check_editor_display
+from .view_appearance import check_view_appearance
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .label_style import check_label_style
@@ -77,7 +78,9 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     result.checked.append('recognizable UI/data helpers, entry queries, save gates, save-mode literals, original-row comparisons, input Tag values, action codes and focus-guard ordering')
     result.not_checked.append('necessity of validation, dynamic edit-mode values, indirect event order, XML/SP field ownership and project-wide coding-style compliance')
     command_flow = check_command_flow(candidate, original=original,
-        style_reference=style_reference_csharp, allowed_commands=screen_commands)
+        style_reference=style_reference_csharp, allowed_commands=screen_commands,
+        designer=designer,
+        original_designer=remap_members(original_designer, member_renames or {}) if original_designer is not None else None)
     result.issues.extend(command_flow.issues)
     result.checked.extend(command_flow.checked)
     result.not_checked.extend(command_flow.not_checked)
@@ -121,6 +124,12 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     if baseline_model is not None:
         old_display_types.update({name: control.type_name for name, control in
                                   with_control_base_types(baseline_model, defaults).controls.items() if control.type_name})
+    appearance = check_view_appearance(candidate, original=original, control_types=display_types,
+        original_control_types=old_display_types, defaults=defaults, allowed_property_changes=allowed_property_changes)
+    result.issues.extend(appearance.issues)
+    result.checked.extend(appearance.checked)
+    result.not_checked.extend(appearance.not_checked)
+    result.metadata.update(appearance.metadata)
     display = check_editor_display(candidate, original=original, designer=designer,
         original_designer=display_original_designer,
         control_types=display_types, original_control_types=old_display_types)
@@ -180,6 +189,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                 result.metadata[key] = ui.metadata[key]
         if 'label_style' in ui.metadata:
             result.metadata['label_style_designer'] = ui.metadata['label_style']
+        if 'view_appearance' in ui.metadata:
+            result.metadata['view_appearance_designer'] = ui.metadata['view_appearance']
     elif control_sources:
         result.checked.append('supplied user-control types and direct parameterless-constructor assignments')
         result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')
