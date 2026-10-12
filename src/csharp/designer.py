@@ -11,6 +11,7 @@ from .numeric_format import check_numeric_formats
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .control_names import known_control_kind
 from .label_style import check_label_style
+from .view_appearance import check_view_appearance
 from .source_preservation import compare_existing_properties, remap_members, validate_designer_renames
 
 
@@ -80,6 +81,15 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         result.not_checked.append('personal naming, numeric-format and KH grid-layout preferences')
     baseline = parse_designer_source(original) if original is not None else None
     defaults = read_control_defaults(control_sources)
+    allowed_property_changes = tuple(allowed_property_changes)
+    appearance = check_view_appearance(designer, original=original,
+        control_types={name: control.type_name for name, control in model.controls.items()},
+        original_control_types={name: control.type_name for name, control in baseline.controls.items()} if baseline else {},
+        defaults=defaults, allowed_property_changes=allowed_property_changes)
+    result.issues.extend(appearance.issues)
+    result.checked.extend(appearance.checked)
+    result.not_checked.extend(appearance.not_checked)
+    result.metadata.update(appearance.metadata)
     if baseline is not None:
         before_buttons = _editor_button_paths(baseline.source)
         after_buttons = _editor_button_paths(model.source)
@@ -104,7 +114,6 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     elif any(known_control_kind(control.type_name) in {'LookUpEdit', 'DateEdit', 'SpinEdit', 'RepositoryItemLookUpEdit', 'RepositoryItemDateEdit', 'RepositoryItemSpinEdit', 'LabelControl'}
              for control in with_control_base_types(model, defaults).controls.values()):
         result.not_checked.append('lookup/date/spin button and label text-option comparison; no same-project comparison Designer supplied')
-    allowed_property_changes = tuple(allowed_property_changes)
     numeric_columns = tuple(numeric_columns)
     if allowed_property_changes:
         result.metadata['style_exemptions'] = sorted(set(allowed_property_changes))

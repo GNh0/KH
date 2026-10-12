@@ -77,20 +77,22 @@ def _same_type(left: str, right: str) -> bool:
     return left == right or ('.' not in left and left == right.split('.')[-1]) or ('.' not in right and right == left.split('.')[-1])
 
 
+def control_base_type(type_name: str, defaults: Sequence[ControlDefaults]) -> str:
+    """Resolve a unique explicit inheritance chain; do not guess from a name."""
+    seen: set[str] = set()
+    while type_name not in seen:
+        seen.add(type_name)
+        matching = [item for item in defaults if _same_type(type_name, item.type_name)]
+        if len(matching) != 1:
+            break
+        type_name = matching[0].base_type
+    return type_name
+
+
 def with_control_base_types(model: DesignerModel, defaults: Sequence[ControlDefaults]) -> DesignerModel:
     """Resolve only the explicit inheritance chain in the supplied control sources."""
-    controls = {}
-    for name, control in model.controls.items():
-        type_name = control.type_name
-        seen: set[str] = set()
-        while type_name not in seen:
-            seen.add(type_name)
-            matching = [item for item in defaults if _same_type(type_name, item.type_name)]
-            if len(matching) != 1:
-                break
-            type_name = matching[0].base_type
-        controls[name] = replace(control, type_name=type_name)
-    return replace(model, controls=controls)
+    return replace(model, controls={name: replace(control, type_name=control_base_type(control.type_name, defaults))
+                                   for name, control in model.controls.items()})
 
 
 def _inherited_defaults(control: ControlDefaults, defaults: Sequence[ControlDefaults],
