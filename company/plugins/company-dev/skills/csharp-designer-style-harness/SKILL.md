@@ -13,4 +13,6 @@ Keep required property changes at their actual control/member scope. Column sett
 
 Use [source and Designer contracts](references/contracts.md) for affected paths. Optional static comparison: `python -B <plugin-root>/scripts/company_check.py csharp <absolute-after.cs> --original <absolute-before.cs> --designer <absolute-screen.Designer.cs>`. Supply separate originals and actual control/reference source when the comparison needs them.
 
+Before completion, compare each changed C# body and Designer block with the selected style and relevant project source. Correct unsupported differences; justify necessary departures from actual behavior or API constraints and preserve the surrounding style. Reading the references alone does not complete this comparison.
+
 Resolve reported warnings against actual source; inspect `not_checked`. A pass is neither full style verification nor a build, Designer load, UI rendering or DB execution. Follow [workspace files](../work-execution/references/workspace-files.md) for scratch and cleanup.

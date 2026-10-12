@@ -36,6 +36,8 @@ Read the needed sections, not every reference. Inspect relevant source bodies co
 
 Use the [necessity criteria](../work-execution/references/preferences.md) for LINQ, intermediate tables and builds. Keep auxiliary files outside project/source trees using [workspace files](../work-execution/references/workspace-files.md).
 
+Before completion, compare each changed C# body and Designer block with the agreed style and relevant project source. Correct unsupported differences; justify necessary departures from actual behavior or API constraints and preserve the surrounding style. Reading the references alone does not complete this comparison.
+
 Static checks cover only their reported items. Use actual comparison inputs, resolve relevant warnings and inspect `not_checked`; a pass or build is not project-style verification. New imports/full style corrections also need standalone inspection so unchanged foreign mistakes are not hidden.
 
 With snippets only, perform the clear scoped edit. Mark unavailable project APIs, inherited paths and registration as unverified; seek missing information only when it determines the implementation. Do not substitute another project.

@@ -23,12 +23,9 @@ _ACTIONS = {
     'search_command': re.compile(r'\bCallCommand\s*\(\s*(?:[\w]+\s*\.\s*)*BizCommand\s*\.\s*Search\s*\)'),
 }
 _SAVE_CALL = re.compile(r'(?<![\w.])(?:(?:this|base)\s*\.\s*)?CallSaveProcedure\s*\(')
-_TEMP_SAVE = re.compile(
-    r'(?<![\w.])(?:bool|Boolean|System\.Boolean|var)\s+(?P<name>[A-Za-z_]\w*)\s*=\s*'
-    r'(?:(?:this|base)\s*\.\s*)?CallSaveProcedure\s*\(\s*\)\s*;')
 _REVIEW_ACTIONS = {
-    'save': ('AcceptChanges', 'default_edit_mode', 'control_protection', 'save_result_temporary'),
-    'delete': ('AcceptChanges', 'default_edit_mode', 'control_protection', 'save_result_temporary'),
+    'save': ('AcceptChanges', 'default_edit_mode', 'control_protection'),
+    'delete': ('AcceptChanges', 'default_edit_mode', 'control_protection'),
     'new': ('program_navigation',),
 }
 
@@ -87,16 +84,7 @@ def _commands(source: str, *, designer: str | None = None,
 
 
 def _counts(command: _Command) -> dict[str, int]:
-    counts = {name: len(pattern.findall(command.body)) for name, pattern in _ACTIONS.items()}
-    temporary = 0
-    for match in _TEMP_SAVE.finditer(command.body):
-        name = re.escape(match['name'])
-        remaining = command.body[match.end():]
-        uses = re.findall(r'(?<![\w.])' + name + r'\b', remaining)
-        if len(uses) == 1 and re.search(r'\bif\s*\(\s*!?\s*' + name + r'\s*\)', remaining):
-            temporary += 1
-    counts['save_result_temporary'] = temporary
-    return counts
+    return {name: len(pattern.findall(command.body)) for name, pattern in _ACTIONS.items()}
 
 
 def check_command_flow(candidate: str, *, original: str | None = None,
@@ -109,7 +97,7 @@ def check_command_flow(candidate: str, *, original: str | None = None,
     if allowed is not None and not allowed <= COMMANDS:
         raise ValueError('screen commands must be search, new, edit, save, delete, clear, or print')
     result = CheckResult(not_checked=[
-        'command branch feasibility, save-result local necessity/types/aliases, indirect calls/subscriptions, inherited toolbar availability, expression-bodied handlers, report behavior and XML/SP behavior'])
+        'caller expression style, return-value handling and branch feasibility; other save APIs in ordinary events, indirect calls/subscriptions, inherited toolbar availability, expression-bodied handlers, report behavior and XML/SP behavior'])
     if allowed is None and style_reference is None:
         result.not_checked.extend([
             'allowed screen commands; no explicit command scope supplied',
@@ -174,7 +162,7 @@ def check_command_flow(candidate: str, *, original: str | None = None,
                 other_phases = sorted({reference.kind for reference in references
                     if reference.kind != command.kind and _counts(reference)[action]})
                 result.issues.append(Issue('command_phase_drift_review', 'warning',
-                    'This command adds an operation or one-use save-result local absent from the supplied project command body. Inspect caller responsibilities, state resets, failure handling and the current request; this is not a global API or boolean-variable prohibition.',
+                    'This command adds an operation absent from the supplied project command body. Inspect caller responsibilities, state resets, failure handling and the current request; this does not prescribe a save expression or globally prohibit the operation.',
                     line=command.line, details={'command': command.kind, 'method': command.name,
                         'operation': action, 'candidate_count': current[action],
                         'reference_count': expected[action], 'reference_other_phases': other_phases}))
