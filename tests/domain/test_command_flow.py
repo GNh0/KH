@@ -27,7 +27,7 @@ def screen(save_body, extra=''):
 
 
 class CommandFlowTests(unittest.TestCase):
-    def test_repeated_temporary_save_result_and_early_reset_in_wired_button(self):
+    def test_early_reset_in_wired_button_requires_phase_review(self):
         candidate = '''class Screen {
             void Init() { btnREQ.Click += BtnREQ_Click; }
             void BtnREQ_Click(object sender, EventArgs e) {
@@ -38,7 +38,7 @@ class CommandFlowTests(unittest.TestCase):
             }
         }'''
         result = check_command_flow(candidate, style_reference=REFERENCE, allowed_commands=['search'])
-        self.assertEqual({'default_edit_mode', 'save_result_temporary'},
+        self.assertEqual({'default_edit_mode'},
                          {issue.details['operation'] for issue in result.issues})
         self.assertEqual(['BtnREQ_Click'], result.metadata['command_flow']['save_action_handlers'])
         self.assertTrue(all(issue.severity == 'warning' for issue in result.issues))
@@ -63,18 +63,32 @@ class CommandFlowTests(unittest.TestCase):
         designer = 'this.btnREQ.Click += this.OnRequest;'
         result = check_csharp(candidate, designer=designer, style_reference_csharp=REFERENCE)
         found = [issue for issue in result.issues if issue.code == 'command_phase_drift_review']
-        self.assertEqual({'default_edit_mode', 'save_result_temporary'},
+        self.assertEqual({'default_edit_mode'},
                          {issue.details['operation'] for issue in found})
         unchanged = check_command_flow(candidate, original=candidate, designer=designer,
                                        original_designer=designer, style_reference=REFERENCE)
         self.assertFalse(unchanged.issues)
 
-    def test_boolean_reused_for_another_purpose_is_not_single_use_style_drift(self):
-        candidate = screen('bool saved = CallSaveProcedure(); LogResult(saved); '
-                           'if (saved) { CallCommand(BizCommand.Search); }')
-        self.assertEqual([], check_command_flow(candidate, style_reference=REFERENCE).issues)
-        reference = screen('bool saved = CallSaveProcedure(); if (saved) { CallCommand(BizCommand.Search); }')
-        self.assertEqual([], check_command_flow(reference, style_reference=reference).issues)
+    def test_result_expression_alone_does_not_prescribe_fixed_save_syntax(self):
+        for body in (
+            'bool saved = CallSaveProcedure(); if (saved) { CallCommand(BizCommand.Search); }',
+            'bool saved = CallSaveProcedure(); LogResult(saved); if (saved) { CallCommand(BizCommand.Search); }',
+            'if (!CallSaveProcedure()) { return; } CallCommand(BizCommand.Search);',
+            'if (CallSaveSP(dtList)) { CallCommand(BizCommand.Search); }',
+            'SaveRows(dtList); CallCommand(BizCommand.Search);',
+            'SaveStatus status = SaveRows(dtList); if (status == SaveStatus.Success) { CallCommand(BizCommand.Search); }',
+        ):
+            with self.subTest(body=body):
+                result = check_command_flow(screen(body), style_reference=REFERENCE)
+                self.assertEqual([], result.issues)
+                self.assertEqual(['save'], result.metadata['command_flow']['compared_commands'])
+                self.assertTrue(any('caller expression style' in item for item in result.not_checked))
+
+    def test_alternate_save_api_still_reviews_added_state_reset_in_command(self):
+        reference = screen('bool saved = CallSaveSP(dtList); if (saved) { CallCommand(BizCommand.Search); }')
+        candidate = reference.replace('if (saved)', 'm_Editmode = DataEditMode.DEFAULT; if (saved)')
+        result = check_command_flow(candidate, style_reference=reference)
+        self.assertEqual(['default_edit_mode'], [issue.details['operation'] for issue in result.issues])
 
     def test_delete_uses_its_own_complete_project_phase(self):
         reference = '''void Project_DeleteCommand(object s, DeleteCommandEventArgs e) {
@@ -84,7 +98,7 @@ class CommandFlowTests(unittest.TestCase):
         candidate = reference.replace('if (CallSaveProcedure())',
             'bool result = CallSaveProcedure(); m_Editmode = DataEditMode.DEFAULT; if (result)')
         result = check_command_flow(candidate, style_reference=reference)
-        self.assertEqual({'default_edit_mode', 'save_result_temporary'},
+        self.assertEqual({'default_edit_mode'},
                          {issue.details['operation'] for issue in result.issues})
 
     def test_unwired_helper_and_other_objects_save_do_not_become_button_actions(self):
@@ -96,9 +110,9 @@ class CommandFlowTests(unittest.TestCase):
             with self.subTest(candidate=candidate):
                 self.assertFalse(check_command_flow(candidate, style_reference=REFERENCE).issues)
 
-    def test_uncalled_local_and_literals_do_not_invent_temporary_result(self):
-        candidate = screen('string text = "bool saved = CallSaveProcedure(); if (saved) {}"; '
-            'void Local() { bool saved = CallSaveProcedure(); if (saved) { Reset(); } } '
+    def test_uncalled_local_and_literals_do_not_invent_state_reset(self):
+        candidate = screen('string text = "m_Editmode = DataEditMode.DEFAULT;"; '
+            'void Local() { m_Editmode = DataEditMode.DEFAULT; } '
             'if (CallSaveProcedure()) { CallCommand(BizCommand.Search); }')
         self.assertEqual([], check_command_flow(candidate, style_reference=REFERENCE).issues)
 
