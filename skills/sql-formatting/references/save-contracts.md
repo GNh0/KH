@@ -2,7 +2,7 @@
 
 Use this for generating, migrating or correcting SELECT/SAVE procedures. Ordinary formatting of supplied SQL preserves its existing behavior and does not trigger a schema redesign.
 
-Read the current caller, XML generator, target table keys/types and an approved same-project procedure. Keep the original business behavior within the latest requested scope while adapting the actual target contract. Similar program numbers or foreign schemas are not sufficient evidence. Retain requested commented integrations as their full original bodies rather than activating them, replacing them with placeholder values, or reducing them to explanatory comments.
+Read the current caller, XML generator, target table keys/types and complete approved same-project procedures for the affected operations. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies; choose by actual responsibility, not just a similar name or shared query data. Apply their recurring structure and syntax within the current agreed style while adapting the actual target contract. Keep the original business behavior within the latest requested scope. Retain requested commented integrations as their full original bodies rather than activating them, replacing them with placeholder values, or reducing them to explanatory comments.
 
 ## Save boundary and reuse
 
