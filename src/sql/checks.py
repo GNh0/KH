@@ -6,6 +6,7 @@ from .compare import compare_sql
 from .lexer import _analyze_sql_integrity, _masked_sql, _scan_sql_tokens
 from .layout import _style_lint
 from .delta import _full_replace_records
+from .save_flow import review_xml_dispatch
 
 
 def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]]]:
@@ -97,8 +98,11 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
         if check_preferences and len(re.findall(pattern, masked, re.I)) > len(re.findall(pattern, previous, re.I)):
             result.issues.append(Issue(code, "warning", "Use the preferred existing form unless avoiding this construct makes implementation difficult or the alternative performs extremely worse."))
     result.issues.extend(_review_generation_choices(candidate, original))
+    result.issues.extend(review_xml_dispatch(candidate, original))
     result.checked.append('explicit added locking hints and aliased typed-empty output fields')
+    result.checked.append('OPENXML followed by loop-local FOR XML variable dispatch to a static procedure')
     result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')
+    result.not_checked.append('XML dispatch necessity, row cardinality, callee implementation and transaction/error ownership; nodes(), dynamic EXEC, single-statement loops and indirect/multiple variable assignments')
     result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
     return result
 

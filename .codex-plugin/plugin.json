@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "3.0.28",
+  "version": "3.0.29",
   "description": "KH Skills for Claude and Codex: SQL, C#/Designer and PowerBuilder development with optional local checks.",
   "author": {
     "name": "KH UAF",
