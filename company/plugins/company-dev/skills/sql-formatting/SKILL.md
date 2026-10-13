@@ -11,6 +11,6 @@ For column-aligned SQL, compare actual text columns using space padding rather t
 
 For formatting only, preserve JOIN types/order, conditions, aliases unless explicitly changed, literals, comments, output columns and Korean text. Return the complete requested SQL or exact replacement block. SQL generation does not itself authorize database execution.
 
-For semantic changes and generated procedures, trace actual callers, keys, NULL/duplicate behavior, XML/state mapping, parameters and returned fields. Use [procedure contracts](references/contracts.md) where applicable.
+For semantic changes and generated procedures, read [procedure contracts](references/contracts.md) before choosing the save boundary. Trace actual callers, keys, NULL/duplicate behavior, XML/state mapping, parameters, related writes and returned fields. Before completion, compare the completed structure with the requested operation and approved project pattern, including transaction/error ownership; resolve unnecessary departures.
 
 Optional comparison: `python -B <plugin-root>/scripts/company_check.py sql <absolute-before.sql> <absolute-after.sql> --preserve-aliases`. This compares reported lexical/source items, not DB equivalence. The company checker supplies no universal SQL formatter or personal style score. Follow [workspace files](../work-execution/references/workspace-files.md) for scratch and cleanup.

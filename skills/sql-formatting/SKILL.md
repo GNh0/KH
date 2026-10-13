@@ -13,7 +13,7 @@ For cleanup of supplied SQL alone, deliver the completed SQL directly. Do not re
 
 Read [checker usage](references/checks.md) only when semantic comparison of a cleanup or checks of complex nested JOINs would help. For changes that could alter semantics, such as replacing a function with a JOIN, check actual definitions, NULL behavior, duplicates, row counts, and performance. The checker does not replace database execution.
 
-For generated or migrated procedures, follow [target save contracts](references/save-contracts.md) for caller modes, XML, batch keys, numbering, required/default parameters and retained fields. Formatting alone cannot verify these contracts.
+For generated or migrated procedures, read [target save contracts](references/save-contracts.md) before choosing the save boundary. Compare the completed procedure with the requested operation and approved source pattern, including caller modes, XML, batch keys, numbering, retained fields and transaction/error ownership. Resolve unnecessary structural departures before completion; formatting or passing DB samples alone does not verify the chosen structure.
 
 Keep temporary query files and verification output outside the source project; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
 
