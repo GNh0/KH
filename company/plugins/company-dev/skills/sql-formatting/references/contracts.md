@@ -1,6 +1,6 @@
 # SQL source and procedure contracts
 
-Read the actual caller, XML generator, target schema and approved project procedure before changing a SELECT/SAVE contract. Match input types, lengths, defaults, output names and target keys. Do not infer these from a similar program number or another company's schema.
+Read the actual caller, XML generator, target schema and complete approved project procedures for the affected operations before changing a SELECT/SAVE contract. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies; choose by actual responsibility, not just a similar name or shared query data. Apply their recurring structure and syntax within the selected style. Match input types, lengths, defaults, output names and target keys from the actual target.
 
 Preserve batch keys as a set through XML parsing and updates/deletes. Distinguish a display key from raw key components, persisted sequence numbers from XML row order, and single-header data from multiple selected masters. Trace Added/Modified/Deleted states and the actual caller mode strings to procedure branches.
 
