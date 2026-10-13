@@ -6,11 +6,7 @@ Read the current caller, XML generator, target table keys/types and an approved 
 
 ## Save boundary and reuse
 
-Choose the persistence boundary from the requested operation and approved procedure structure. A screen's query fields or table names do not establish that its save procedure is a reusable service. Compare input cardinality, complete keys, related-table effects, validation, and transaction/error ownership before delegating to it. Read the relevant callee branches completely and resolve material omissions from truncated output.
-
-For batch XML edits/deletes, prefer the compatible direct batch DML path. Identify the concrete requirement that would need a cursor, per-row dispatch, XML re-encoding or an extra wrapper before adding those layers. Use them when required by verified behavior, an approved callable contract, or an alternative that is impractical under the actual constraints. An available procedure alone is insufficient. Adapt required related-table writes and checks to the target keys; a simpler source example does not erase those responsibilities.
-
-Apply validation limits from the actual target requirement and field meaning. A callee's screen-specific time, quantity or process restrictions need review when the caller's scope differs; passing test inputs does not justify importing those restrictions. Do not impose a particular procedure name, parser API or duration constant globally.
+Trace the requested operation through the actual caller and relevant complete procedure bodies. Compare what the existing path already handles with the concrete gap the change must resolve. Select the simplest sufficient implementation that follows the agreed style and preserves input cardinality, full keys, related writes, validation and transaction/error ownership. An available API or familiar technique alone does not establish a need for added code. Justify necessary differences from actual behavior, API constraints or measured performance; classify neither necessity nor correctness from a technique's name or shape. Resolve material omissions from truncated output.
 
 ## Modes and multiple rows
 
@@ -40,4 +36,4 @@ Distinguish application/request dates from result/inspection dates. Trace which 
 
 If the request assigns a save timestamp to GETDATE(), generate it in the SP. Do not add a timestamp input/OUTPUT solely to patch the grid when the caller's established success path requeries. Keep outputs that the actual caller needs.
 
-At completion compare the actual caller, XML shape, SP signature/branches, target keys, related writes, error/transaction path and returned fields with the requested operation and approved structure. The optional checker reviews lexical/layout patterns, new locking hints, typed empty output aliases and recognizable loop-local XML re-encoding/dispatch; it does not prove schema compatibility, correct numbering, concurrency, business validation or actual DB deployment.
+At completion compare the actual caller, XML shape, SP signature/branches, target keys, related writes, error/transaction path and returned fields with the requested operation and approved structure. The optional checker reviews lexical/layout patterns, new locking hints and typed empty output aliases; it does not prove implementation necessity, schema compatibility, correct numbering, concurrency, business validation or actual DB deployment.
