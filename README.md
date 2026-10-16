@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH 3.0.31 packages ten focused development skills and optional local Python checks in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH 3.1.0 packages eleven focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
@@ -56,6 +56,7 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 | [pb-to-csharp-migration-harness](skills/pb-to-csharp-migration-harness/SKILL.md) | PBL/DataWindow analysis and source-grounded C#/SQL migration |
 | [work-planning](skills/work-planning/SKILL.md) | Substantial work with unresolved choices or dependencies |
 | [work-execution](skills/work-execution/SKILL.md) | Approved multi-step work, progress and stop/resume handling |
+| [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | Finished task-owned processes, REPL resources and command-tree lifetimes |
 | [code-review](skills/code-review/SKILL.md) | Actual changes, behavior regressions and verification |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | Reproducing a failure and tracing its actual cause |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | Deliverable content, file structure and rendered output |
@@ -69,6 +70,8 @@ Start from the current request, original source, actual project APIs and the use
 C# guidance preserves the actual screen's event flow, control defaults, names and save/query contracts. New DevExpress grids use the supplied [DataWindowToXml defaults](skills/csharp-designer-style-harness/references/grid-layout.md), together with the [coding style](skills/csharp-designer-style-harness/references/coding-style.md) and [control initialization](skills/csharp-designer-style-harness/references/user-controls.md). Existing screens are compared against their own baseline.
 
 SQL checks compare supported source tokens and layout; the agent determines business meaning from the query and user instructions. PB work maps the source's events, state, DataWindows and stored-procedure parameters before migration.
+
+Runtime cleanup preserves needed work and releases completed task-owned sessions, handles and helpers. The optional [Windows runner](skills/runtime-cleanup/references/windows-runner.md) contains a newly launched command tree and verifies its exit; it cannot dispose Codex-internal MCP caches or existing shared services.
 
 LINQ, intermediate tables and builds are disfavored by the included project style. Use them when avoiding them makes implementation difficult or causes an extreme performance disadvantage, with a concrete reason. Current user instructions take precedence.
 

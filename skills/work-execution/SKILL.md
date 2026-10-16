@@ -14,6 +14,7 @@ Follow the current host task/Goal tool contract for completion and blocked statu
 - Read [delegation](references/delegation.md) when independent delegation is actually needed and permitted.
 - Consult [Windows execution](references/windows-commands.md) for Windows commands and background programs.
 - Follow [workspace files](references/workspace-files.md) when creating auxiliary files, and finish their cleanup before final handover; preserve requested deliverables and still-needed evidence.
+- Apply [runtime cleanup](../runtime-cleanup/SKILL.md) when using command trees, background helpers, persistent REPLs or other runtime resources; release completed task-owned work before final handover.
 - Read [secret handling](references/secret-handling.md) only when handling input containing actual secrets.
 - Read [preferences and exceptions](references/preferences.md) when deciding whether a disfavored approach is necessary.
 

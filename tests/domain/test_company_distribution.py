@@ -130,7 +130,10 @@ class CompanyBundleTests(unittest.TestCase):
                 marketplace = json.loads(bundle.read('.agents/plugins/marketplace.json'))
                 self.assertEqual('local', marketplace['plugins'][0]['source']['source'])
                 self.assertEqual('./plugins/company-dev', marketplace['plugins'][0]['source']['path'])
-                self.assertEqual(9, len([n for n in names if n.endswith('/SKILL.md')]))
+                self.assertEqual(10, len([n for n in names if n.endswith('/SKILL.md')]))
+                self.assertIn('plugins/company-dev/skills/runtime-cleanup/SKILL.md', names)
+                self.assertIn('plugins/company-dev/scripts/kh_runtime.py', names)
+                self.assertIn('plugins/company-dev/src/runtime/windows_job.py', names)
                 exporter_root = 'plugins/company-dev/skills/pb-to-csharp-migration-harness/scripts/'
                 for name in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
                              'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):

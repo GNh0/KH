@@ -21,6 +21,7 @@ DISPLAY = {
     'systematic-debugging': ('Systematic debugging', 'Trace actual failure paths and test the cause'),
     'work-execution': ('Work execution', 'Execute approved work with scoped changes'),
     'work-planning': ('Work planning', 'Plan substantial work and unresolved dependencies'),
+    'runtime-cleanup': ('Runtime cleanup', 'Release finished task-owned processes and runtime resources'),
 }
 
 
@@ -51,6 +52,11 @@ def build_bundle(output: Path) -> dict:
                 continue
             copy_file(source, plugin / relative)
         copy_file(ROOT / 'scripts/kh_check.py', plugin / 'scripts/kh_check.py')
+        copy_file(ROOT / 'scripts/kh_runtime.py', plugin / 'scripts/kh_runtime.py')
+        runtime_skill = Path('skills/runtime-cleanup')
+        for source in sorted((ROOT / runtime_skill).rglob('*')):
+            if source.is_file() and source.suffix in {'.md', '.yaml'}:
+                copy_file(source, plugin / source.relative_to(ROOT))
         workspace_reference = Path('skills/work-execution/references/workspace-files.md')
         copy_file(ROOT / workspace_reference, plugin / workspace_reference)
         pb_scripts = Path('skills/pb-to-csharp-migration-harness/scripts')
@@ -66,7 +72,7 @@ def build_bundle(output: Path) -> dict:
                               '  default_prompt: ' + json.dumps('Use $' + name + ' for this task.') + '\n', encoding='utf-8')
         names = {entry.parent.name for entry in (plugin / 'skills').glob('*/SKILL.md')}
         if names != set(DISPLAY):
-            raise ValueError('employee bundle must contain the selected nine skills')
+            raise ValueError('employee bundle must contain the selected shared skills')
         validation = subprocess.run([sys.executable, '-B', str(plugin / 'scripts/company_check.py'),
                                      'package', str(plugin)], cwd=folder, capture_output=True,
                                     text=True, encoding='utf-8')

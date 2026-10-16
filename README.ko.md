@@ -2,7 +2,7 @@
 
 **Claude와 Codex에서 사용하는 SQL·C#/Designer·PowerBuilder 개발 스킬.**
 
-KH 3.0.31은 스킬 10개와 선택형 로컬 검사기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
+KH 3.1.0은 스킬 11개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
 
 [English](README.md) · [스킬](#스킬) · [로컬 검사](#선택형-로컬-검사) · [개발 검사](docs/development.md)
 
@@ -56,6 +56,7 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 | [pb-to-csharp-migration-harness](skills/pb-to-csharp-migration-harness/SKILL.md) | PBL·DataWindow 분석과 원본에 근거한 C#/SQL 이관 |
 | [work-planning](skills/work-planning/SKILL.md) | 규모가 크거나 중요한 선택이 남은 작업의 계획 |
 | [work-execution](skills/work-execution/SKILL.md) | 승인된 다단계 작업과 진행·중단·재개 |
+| [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | 완료된 작업 소유 프로세스·REPL 자원 정리와 명령 트리 수명 관리 |
 | [code-review](skills/code-review/SKILL.md) | 실제 변경, 요구 동작과 회귀 검토 |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | 오류 재현과 실제 실행 경로의 원인 분석 |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | 전달물 내용·파일 구조·렌더링 확인 |
@@ -69,6 +70,8 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 C# 작업은 같은 화면의 이벤트 흐름, 컨트롤 기본값, 이름과 조회·저장 계약을 유지합니다. 새 DevExpress 그리드는 사용자가 제공한 [DataWindowToXml 기본 속성](skills/csharp-designer-style-harness/references/grid-layout.md)을 사용하며, [코딩 방식](skills/csharp-designer-style-harness/references/coding-style.md)과 [컨트롤 초기화](skills/csharp-designer-style-harness/references/user-controls.md)를 함께 적용합니다. 기존 화면은 실제 원본을 비교 기준으로 삼습니다.
 
 SQL 검사기는 지원하는 토큰과 배치를 확인하고, 업무 의미는 쿼리와 사용자 지시를 바탕으로 판단합니다. PB 이관은 원본 이벤트·상태·DataWindow·SP 매개변수와 결과를 먼저 연결합니다.
+
+자원 정리는 필요한 작업을 유지하고, 필요 없어진 작업 소유 세션·핸들·보조 프로세스를 해제합니다. 선택형 [Windows 실행기](skills/runtime-cleanup/references/windows-runner.md)는 새로 실행한 명령 트리의 종료를 검증합니다. Codex 내부 MCP 캐시나 기존 공유 서비스의 종료를 제어하지는 않습니다.
 
 포함된 프로젝트 스타일에서 LINQ·중간 테이블·빌드는 비선호입니다. 피하면 구현이 어렵거나 대안의 성능이 극단적으로 불리할 때 구체적인 이유로 사용합니다. 현재 사용자의 명시적 지시가 우선합니다.
 
