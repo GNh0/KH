@@ -8,6 +8,41 @@ from .layout import _style_lint
 from .delta import _full_replace_records
 
 
+def _where_subqueries(source: str) -> Counter[str]:
+    """Count direct EXISTS/IN query shapes in recognizable WHERE contexts.
+
+    Parenthesized predicates inherit their clause; an inner SELECT starts its
+    own context. This is not a general T-SQL parser or a necessity judgment.
+    """
+    tokens = [token for token in _scan_sql_tokens(source)[0]
+              if token.kind not in {'line_comment', 'block_comment'}]
+    where = [False]
+    found: Counter[str] = Counter()
+    reset = {'SELECT', 'FROM', 'JOIN', 'ON', 'GROUP', 'ORDER', 'HAVING',
+             'UNION', 'EXCEPT', 'INTERSECT', 'IF', 'WHILE', 'BEGIN',
+             'RETURN', 'DECLARE', 'SET', 'INSERT', 'UPDATE', 'DELETE',
+             'EXEC', 'EXECUTE', 'THROW', 'RAISERROR', 'OPTION'}
+    for index, token in enumerate(tokens):
+        if token.text == '(':
+            where.append(where[-1])
+        elif token.text == ')':
+            if len(where) > 1:
+                where.pop()
+        elif token.text == ';' or token.kind == 'batch_separator':
+            where[-1] = False
+        elif token.kind == 'word':
+            word = token.normalized
+            if word == 'WHERE':
+                where[-1] = True
+            elif word in reset:
+                where[-1] = False
+            elif (where[-1] and word in {'EXISTS', 'IN'} and
+                  index + 2 < len(tokens) and tokens[index + 1].text == '(' and
+                  tokens[index + 2].kind == 'word' and tokens[index + 2].normalized == 'SELECT'):
+                found[word] += 1
+    return found
+
+
 def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]]]:
     """Observe explicit hints and aliased empty CAST results, not their necessity."""
     tokens = [token for token in _scan_sql_tokens(source)[0]
@@ -92,10 +127,18 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
                                           "Confirm the requested NEW/MOD/DEL contract before replacing all related rows.", details=record))
     masked = _masked_sql(candidate)
     previous = _masked_sql(original or "")
-    for code, pattern in [("intermediate_table_preference", r"\b(?:CREATE\s+TABLE\s+#|DECLARE\s+@\w+\s+TABLE|INTO\s+#)"),
-                          ("subquery_preference", r"\b(?:WHERE|AND|OR)\b[^;]*?\b(?:NOT\s+EXISTS|IN\s*\(\s*SELECT)")]:
-        if check_preferences and len(re.findall(pattern, masked, re.I)) > len(re.findall(pattern, previous, re.I)):
-            result.issues.append(Issue(code, "warning", "Use the preferred existing form unless avoiding this construct makes implementation difficult or the alternative performs extremely worse."))
+    if check_preferences:
+        pattern = r"\b(?:CREATE\s+TABLE\s+#|DECLARE\s+@\w+\s+TABLE|INTO\s+#)"
+        if len(re.findall(pattern, masked, re.I)) > len(re.findall(pattern, previous, re.I)):
+            result.issues.append(Issue('intermediate_table_preference', 'warning',
+                'Use the preferred existing form unless avoiding this construct makes implementation difficult or the alternative performs extremely worse.'))
+        added_subqueries = _where_subqueries(candidate) - _where_subqueries(original or '')
+        if added_subqueries:
+            result.issues.append(Issue('subquery_preference', 'warning',
+                'Review added WHERE EXISTS/NOT EXISTS/IN queries against the target JOIN style. Preserve NULL behavior, duplicates and aggregation cardinality; IF EXISTS validation is a separate responsibility. Do not rewrite automatically.',
+                details={'added_where_subqueries': dict(added_subqueries)}))
+        result.checked.append('recognizable WHERE EXISTS/NOT EXISTS/IN query counts')
+        result.not_checked.append('predicate-subquery necessity, general clause grammar and JOIN-rewrite equivalence')
     result.issues.extend(_review_generation_choices(candidate, original))
     result.checked.append('explicit added locking hints and aliased typed-empty output fields')
     result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')

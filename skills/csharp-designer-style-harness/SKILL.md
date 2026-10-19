@@ -15,7 +15,7 @@ Apply to the actual target project. Do not impose WinForms architecture on MAUI/
 
 Keep these decisions in the working context; no intake form or audit file is required.
 
-For any control or RepositoryItem creation/change, read [user controls](references/user-controls.md) and its actual Designer, library and shared initialization before writing. Preserve effective defaults through properties, callbacks and helpers alike. A display request requires checking the missing behavior and affected editor/report scope before adding an override.
+For any control or RepositoryItem creation/change, including a new ColumnEdit assignment, read [user controls](references/user-controls.md) and its actual Designer, library and shared initialization before writing. Preserve effective defaults through properties, callbacks and helpers alike. Determine display versus input behavior first; a data type or display request alone does not justify an editor or override.
 
 Keep required property changes at their actual control/member scope. Column settings do not authorize view-wide Appearance changes or shared-default resets; inspect the relevant initialization and layout-loading paths.
 
