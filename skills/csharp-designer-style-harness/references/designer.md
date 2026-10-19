@@ -24,7 +24,7 @@ Follow [DataWindowToXml rules](grid-layout.md) for grid defaults, Appearance, an
 
 Check default counts, summaries, group footer/merge/EvenRow, and requested display locations. Use current project naming such as colList_, colDetail_, or colTABLE_FIELD. Correct names without bindings are incomplete.
 
-Check the actual referenced DevExpress version/APIs and csproj/.resx registration. Do not apply this UI contract wholesale to MAUI/PDA.
+Check the actual referenced DevExpress version/APIs and csproj/.resx registration. When an existing property is obsolete in that version, use its supported equivalent with the same behavior instead of copying the obsolete assignment or suppressing its warning. Do not add unrelated options during that correction or apply this UI contract wholesale to MAUI/PDA.
 
 Do not add business-manager, DB, or Task cleanup to Designer Dispose. Attach required cleanup to the actual shutdown/cancellation lifecycle in current code-behind without duplicating inherited/partial Dispose implementations. Successfully reopening Designer does not verify Task cleanup during shutdown.
 

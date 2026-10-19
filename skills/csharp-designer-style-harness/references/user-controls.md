@@ -42,6 +42,8 @@ Do not retain auto-generated names such as `gridControl1`, `gridView1`, `gridCol
 
 DateEdit follows the same default-initialization principle. Dates alone do not justify additional DisplayFormat, EditFormat, EditMask, or Mask settings. For requested input behavior such as automatic year → month → day navigation, first check whether the control already implements it; add only properties needed for missing behavior. Do not globally prohibit masks or remove required input behavior while cleaning up display formats.
 
+For a grid column, first distinguish a displayed date/timestamp from an actual editable date input. A DataColumn or SQL result of type DateTime does not justify creating a DateEdit Repository, assigning ColumnEdit, or registering a new RepositoryItem. For display alone, keep the target's existing display path; add only missing display settings actually required by the request. Use a date Repository when its editing, popup or other verified behavior is needed, with the actual project defaults. Review time-bearing audit fields separately from date-only fields, and preserve their values and time precision. Do not turn a display correction into string/DATE conversion in SELECT or remove required date editors elsewhere.
+
 Also apply the user's explicit [grid HTML defaults](grid-layout.md) and three column-editing rules as screen requirements. Do not extend grid rules to property values of every TextEdit, button, or panel.
 
 ## Optional static comparison

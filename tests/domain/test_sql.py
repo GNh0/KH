@@ -108,5 +108,63 @@ class SqlPreservationTests(unittest.TestCase):
             self.assertNotIn('synthetic_result_field_review', {i.code for i in check_sql(source, check_style=False).issues})
 
 
+class WhereSubqueryReviewTests(unittest.TestCase):
+    def findings(self, source, **kwargs):
+        return [issue for issue in check_sql(source, check_style=False, **kwargs).issues
+                if issue.code == 'subquery_preference']
+
+    def test_where_exists_inside_save_validation_is_reviewed(self):
+        source = '''IF EXISTS (
+            SELECT 1 FROM PLANS A
+            WHERE A.QTY > 0 AND EXISTS (
+                SELECT 1 FROM CHANGED T WHERE T.ID = A.ID
+            )
+        ) BEGIN RAISERROR('invalid', 16, 1); RETURN; END'''
+        found = self.findings(source)
+        self.assertEqual(1, len(found))
+        self.assertEqual({'EXISTS': 1}, found[0].details['added_where_subqueries'])
+        self.assertEqual('warning', found[0].severity)
+
+    def test_direct_save_validation_is_not_a_where_subquery(self):
+        for prefix in ['IF', 'IF @MODE = 1 AND NOT', 'WHILE NOT']:
+            with self.subTest(prefix=prefix):
+                self.assertEqual([], self.findings(prefix +
+                    " EXISTS (SELECT 1 FROM PLANS A WHERE A.QTY > 0) BEGIN RETURN; END"))
+
+    def test_positive_negative_in_and_parenthesized_predicates(self):
+        source = '''SELECT A.ID FROM ITEMS A WHERE (
+            EXISTS (SELECT 1 FROM PARTS T WHERE T.ID = A.ID)
+            OR NOT EXISTS (SELECT 1 FROM STOCK T WHERE T.ID = A.ID)
+        ) AND A.ID IN (SELECT T.ID FROM ORDERS T)'''
+        self.assertEqual({'EXISTS': 2, 'IN': 1},
+            self.findings(source)[0].details['added_where_subqueries'])
+
+    def test_prior_where_does_not_leak_into_later_if_or_join(self):
+        source = '''SELECT A.ID FROM ITEMS A WHERE A.ID = 1
+        IF @MODE = 1 AND EXISTS (SELECT 1 FROM PLANS T WHERE T.QTY > 0) RETURN
+        SELECT A.ID FROM ITEMS A INNER JOIN PARTS B
+            ON A.ID = B.ID AND EXISTS (SELECT 1 FROM STOCK T WHERE T.ID = B.ID)'''
+        self.assertEqual([], self.findings(source))
+
+    def test_inner_where_is_reviewed_inside_derived_source(self):
+        source = '''SELECT A.ID FROM (
+            SELECT T.ID FROM ITEMS T WHERE T.ID IN (SELECT T1.ID FROM PARTS T1)
+        ) A'''
+        self.assertEqual({'IN': 1}, self.findings(source)[0].details['added_where_subqueries'])
+
+    def test_literals_comments_identifier_names_and_value_lists_are_not_queries(self):
+        source = '''SELECT 'WHERE EXISTS (SELECT 1)', [WHERE], "EXISTS" FROM ITEMS A
+        WHERE A.ID IN (1, 2) -- AND EXISTS (SELECT 1)
+        AND A.VALUE = 'IN (SELECT 1)' /* WHERE NOT EXISTS (SELECT 1) */'''
+        self.assertEqual([], self.findings(source))
+
+    def test_existing_counts_and_company_preferences_are_preserved(self):
+        source = 'SELECT A.ID FROM ITEMS A WHERE EXISTS (SELECT 1 FROM PARTS T WHERE T.ID = A.ID)'
+        self.assertEqual([], self.findings(source, original=source))
+        self.assertEqual([], self.findings(source, check_preferences=False))
+        before = source.replace('WHERE EXISTS', 'WHERE NOT EXISTS')
+        self.assertEqual([], self.findings(source, original=before))
+
+
 if __name__ == '__main__':
     unittest.main()
