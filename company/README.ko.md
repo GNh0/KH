@@ -2,7 +2,7 @@
 
 개인 GitHub 계정·저장소 연결 없이 배포하는 독립 패키지다. ZIP을 사내 공유폴더로 전달하고 직원은 자기 PC에 압축을 풀어 설치한다. 회사 저장소가 정해지면 이 마켓플레이스 루트를 회사 소유 Git 저장소로 옮길 수 있다. SVN은 ZIP/로컬 폴더 배포본의 원본 관리에 사용할 수 있다.
 
-## 포함하는 10개 스킬
+## 포함하는 11개 스킬
 
 | 분류 | 스킬 | 용도 |
 | --- | --- | --- |
@@ -10,6 +10,7 @@
 | 언어·화면 개발 | C# and Designer | C# 및 WinForms/Designer 작업, 실제 컨트롤/API/바인딩 확인 |
 | 언어·화면 개발 | PowerBuilder | PB/PBL/DataWindow 분석·수정과 필요한 C#/SQL 이관 |
 | 공통 개발 | Code review | 실제 변경과 호출부 검토 |
+| 공통 개발 | Rule audit | 적용한 규칙과 결과 대조, 위반 부분만 수정·재감사 |
 | 공통 개발 | Systematic debugging | 실제 실행 경로에 따른 원인 진단 |
 | 작업 관리 | Work planning | 설계 선택·의존성이 있는 큰 작업의 계획 |
 | 작업 관리 | Work execution | 승인된 작업 실행과 현재 호스트 도구 사용 |
@@ -78,7 +79,7 @@ python -B "C:\CompanyTools\company-dev\plugins\company-dev\scripts\company_check
 현재 KH 개발 원본에서 최초 회사 ZIP을 만드는 명령은 다음과 같다. `company` 폴더는 배포용 템플릿이며, 빌더가 공통 Python 실행 모듈과 UI 메타데이터를 합쳐 완전한 패키지를 만든다.
 
 ```powershell
-python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.1.0.zip"
+python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.1.1.zip"
 ```
 
 ZIP에는 실행에 필요한 공통 소스가 함께 들어 있다. 이후 회사 소유 원본으로 복사해 유지보수할 수 있고, 직원 PC에서 원래 KH 저장소를 조회하거나 Git 인증을 할 필요가 없다. 배포 버전은 회사 manifest에서 별도로 관리한다.

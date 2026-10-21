@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rule audit"
+  short_description: "Audit applied rules and repair confirmed violations"
+  default_prompt: "Use $rule-audit to audit the skills used in this task, repair only confirmed violations, and recheck the affected results."

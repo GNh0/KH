@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH 3.1.1 packages eleven focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH 3.1.2 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
@@ -58,6 +58,7 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 | [work-execution](skills/work-execution/SKILL.md) | Approved multi-step work, progress and stop/resume handling |
 | [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | Finished task-owned processes, REPL resources and command-tree lifetimes |
 | [code-review](skills/code-review/SKILL.md) | Actual changes, behavior regressions and verification |
+| [rule-audit](skills/rule-audit/SKILL.md) | Applied-rule compliance, focused repairs and rechecks |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | Reproducing a failure and tracing its actual cause |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | Deliverable content, file structure and rendered output |
 | [context-handoff](skills/context-handoff/SKILL.md) | A compact checkpoint for continuing an ongoing task |
@@ -66,6 +67,8 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 ## How KH works
 
 Start from the current request, original source, actual project APIs and the user's corrections. Small clear changes run directly; planning and review are used when they improve the task. The shared skills use the tools available in the current host.
+
+Before handing over skill-guided work, [rule-audit](skills/rule-audit/SKILL.md) compares applicable rules with the actual artifacts and execution evidence. Confirmed violations are repaired within scope and affected checks are repeated. Unverified areas remain explicit. This is an agent procedure using the existing checkers; it does not install a host completion hook.
 
 C# guidance preserves the actual screen's event flow, control defaults, names and save/query contracts. New DevExpress grids use the supplied [DataWindowToXml defaults](skills/csharp-designer-style-harness/references/grid-layout.md), together with the [coding style](skills/csharp-designer-style-harness/references/coding-style.md) and [control initialization](skills/csharp-designer-style-harness/references/user-controls.md). Existing screens are compared against their own baseline.
 

@@ -22,6 +22,7 @@ DISPLAY = {
     'work-execution': ('Work execution', 'Execute approved work with scoped changes'),
     'work-planning': ('Work planning', 'Plan substantial work and unresolved dependencies'),
     'runtime-cleanup': ('Runtime cleanup', 'Release finished task-owned processes and runtime resources'),
+    'rule-audit': ('Rule audit', 'Audit applied rules and repair confirmed violations'),
 }
 
 
@@ -53,10 +54,10 @@ def build_bundle(output: Path) -> dict:
             copy_file(source, plugin / relative)
         copy_file(ROOT / 'scripts/kh_check.py', plugin / 'scripts/kh_check.py')
         copy_file(ROOT / 'scripts/kh_runtime.py', plugin / 'scripts/kh_runtime.py')
-        runtime_skill = Path('skills/runtime-cleanup')
-        for source in sorted((ROOT / runtime_skill).rglob('*')):
-            if source.is_file() and source.suffix in {'.md', '.yaml'}:
-                copy_file(source, plugin / source.relative_to(ROOT))
+        for shared_skill in ('runtime-cleanup', 'rule-audit'):
+            for source in sorted((ROOT / 'skills' / shared_skill).rglob('*')):
+                if source.is_file() and source.suffix in {'.md', '.yaml'}:
+                    copy_file(source, plugin / source.relative_to(ROOT))
         workspace_reference = Path('skills/work-execution/references/workspace-files.md')
         copy_file(ROOT / workspace_reference, plugin / workspace_reference)
         pb_scripts = Path('skills/pb-to-csharp-migration-harness/scripts')

@@ -12,3 +12,5 @@ Narrow the reproduction input and execution path, then test the hypothesis with 
 Place temporary probes and diagnostic output outside the source project using [workspace files](../work-execution/references/workspace-files.md).
 
 Once the cause is clear, fix only the affected scope and recheck the failure conditions. Do not treat a user-resolved issue or inability to reproduce as confirmation of a cause. Do not repeat unchanged checks or the same failed hypothesis.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

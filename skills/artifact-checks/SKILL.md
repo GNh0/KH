@@ -12,3 +12,5 @@ For file-structure checks alone, optionally run `python <plugin-root>/scripts/kh
 Inspect the actual format-specific results: tables, formulas, groups, report H/D/F bands, pages, and Korean text readability. Create a requirements mapping only when useful; do not require a fixed outline or multiple separate status files.
 
 After verifying the final deliverables, clean task-owned temporary render/validation output using [workspace files](../work-execution/references/workspace-files.md).
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.
