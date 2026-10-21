@@ -12,3 +12,5 @@ For changes that could regress behavior, run tests of that behavior. Avoid tests
 Keep review probes and temporary test output outside the target project; follow [workspace files](../work-execution/references/workspace-files.md) when generating them.
 
 Explain findings with the file, location, actual impact, and reproduction conditions. A passing build is not evidence of screen layout, database persistence, or actual agent execution. If completion includes applying the result, distinguish file creation from application and finish the authorized application. Clearly identify anything unverified.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

@@ -2,7 +2,7 @@
 
 **Claude와 Codex에서 사용하는 SQL·C#/Designer·PowerBuilder 개발 스킬.**
 
-KH 3.1.1은 스킬 11개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
+KH 3.1.2는 스킬 12개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
 
 [English](README.md) · [스킬](#스킬) · [로컬 검사](#선택형-로컬-검사) · [개발 검사](docs/development.md)
 
@@ -58,6 +58,7 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 | [work-execution](skills/work-execution/SKILL.md) | 승인된 다단계 작업과 진행·중단·재개 |
 | [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | 완료된 작업 소유 프로세스·REPL 자원 정리와 명령 트리 수명 관리 |
 | [code-review](skills/code-review/SKILL.md) | 실제 변경, 요구 동작과 회귀 검토 |
+| [rule-audit](skills/rule-audit/SKILL.md) | 적용 규칙 준수 감사, 위반 부분만 수정·재검사 |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | 오류 재현과 실제 실행 경로의 원인 분석 |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | 전달물 내용·파일 구조·렌더링 확인 |
 | [context-handoff](skills/context-handoff/SKILL.md) | 진행 중인 작업을 이어가기 위한 간결한 인계 |
@@ -66,6 +67,8 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 ## 작업 방식
 
 현재 요청, 원본 소스, 실제 프로젝트 API와 사용자의 정정을 기준으로 작업합니다. 작고 명확한 수정은 직접 처리하고, 계획·검토는 해당 작업에 도움이 될 때 사용합니다. 공유 스킬은 현재 에이전트 환경에서 제공하는 도구를 따릅니다.
+
+스킬을 사용한 작업은 완료 전에 [rule-audit](skills/rule-audit/SKILL.md)로 적용 규칙과 실제 결과물·실행 증거를 대조합니다. 확인된 위반만 범위 안에서 수정하고 관련 검사를 반복하며, 미확인 항목은 구분해 전달합니다. 기존 검사기를 연결하는 에이전트 절차이며 앱의 완료를 강제로 차단하는 훅을 설치하지는 않습니다.
 
 C# 작업은 같은 화면의 이벤트 흐름, 컨트롤 기본값, 이름과 조회·저장 계약을 유지합니다. 새 DevExpress 그리드는 사용자가 제공한 [DataWindowToXml 기본 속성](skills/csharp-designer-style-harness/references/grid-layout.md)을 사용하며, [코딩 방식](skills/csharp-designer-style-harness/references/coding-style.md)과 [컨트롤 초기화](skills/csharp-designer-style-harness/references/user-controls.md)를 함께 적용합니다. 기존 화면은 실제 원본을 비교 기준으로 삼습니다.
 

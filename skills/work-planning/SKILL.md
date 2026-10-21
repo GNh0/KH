@@ -12,3 +12,5 @@ When needed, briefly plan the current structure, change scope, dependency order,
 Select only the skills needed for the task from the currently available list. Do not rerun a preflight based on harness lists in old memories or handoffs. Perform separate skill discovery or create selection tables only when a skill-configuration audit or inventory is requested.
 
 Handle small, clear questions and local edits directly. For plans where input relationships matter, such as PB migration, use the domain skill's source-analysis guidance. Lead the final explanation with the result and evidence.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

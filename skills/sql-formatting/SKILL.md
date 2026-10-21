@@ -18,3 +18,5 @@ For generated or migrated procedures, inspect complete existing target-project p
 Keep temporary query files and verification output outside the source project; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
 
 Do not habitually add unnecessary CTEs, intermediate tables, or WHERE/SELECT subqueries. Apply [preferences and exceptions](../work-execution/references/preferences.md) without mechanically substituting JOINs that change semantics. Return the requested complete SQL or exact replacement block.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

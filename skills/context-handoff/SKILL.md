@@ -14,3 +14,5 @@ On resumption, check current files/processes and the paused state. Do not repeat
 Check skill names and versioned cache paths in the handoff against the current session's skill list. Use the current paths when supplied. Do not add searches for removed harnesses or skill-use tables to the handoff procedure.
 
 This is a handoff for the current task. Do not create automatic persistent memory, an all-session search, a separate Goal ledger, or a snapshot/rollback system. Memory updates and creation of other tasks require the current user's explicit request and must follow the host tool contracts.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules; honor a stop request before starting any audit or repair.

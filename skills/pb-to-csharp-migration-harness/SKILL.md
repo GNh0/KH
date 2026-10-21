@@ -21,3 +21,5 @@ Distinguish raw key components from display keys; do not fix particular ORD/PUR/
 If the migration target has no user controls, preserve behavior using available DevExpress or standard controls. Distinguish verified static scope, execution results, and unverified screen/DB behavior in the handover.
 
 Prefer appropriate available user controls and their initialization defaults. Apply [user-control selection and initialization](../csharp-designer-style-harness/references/user-controls.md) without restricting them to KoneLib. Do not overwrite user-control defaults by adding PB properties or familiar DevExpress options without justification.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

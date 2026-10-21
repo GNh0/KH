@@ -21,3 +21,5 @@ Follow the current host task/Goal tool contract for completion and blocked statu
 Communicate the work and meaningful progress. Do not record errors, interruptions, or unexecuted work as success. Deliver the complete code/SQL or final replacement requested by the user, identifying changed program IDs and the scope verified.
 
 Answer calmly, leading with the conclusion in the user's language and preferred level of detail. Do not force Korean on every user. For model/tool comparisons, identify the verification date, actual products and versions, and supporting evidence.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

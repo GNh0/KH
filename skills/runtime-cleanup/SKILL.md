@@ -29,3 +29,5 @@ Task completion includes this cleanup when runtime resources were used. A task t
 Read process image/path, creation time, parent/child relationships, current session use and sampled CPU/memory. Protect secrets in command lines and environment values. Distinguish command wrappers, interpreter kernels, persistent tool servers and application-owned caches; classify untraceable ownership as unknown. Active-chat count and process count measure different things, but unexplained retained groups still need investigation.
 
 Use supported host/MCP session lifecycle controls for host-managed servers. Skill guidance and the runner cannot dispose arbitrary Codex-internal MCP caches. Establish a concrete host-level remedy before changing configuration or shutting down shared providers. Never sweep by `node`, `node_repl`, `cmd`, memory size or process age, and do not use working-set trimming or forced GC as proof of resource release.
+
+Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.
