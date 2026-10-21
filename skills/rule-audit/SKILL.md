@@ -1,6 +1,6 @@
 ---
 name: rule-audit
-description: Audit the current task against skills actually used, repair confirmed violations within scope, and recheck affected results before completion.
+description: Audit the current task against skills actually used, repair confirmed violations within scope, and check the final change for introduced regressions before completion.
 ---
 
 # Rule audit
@@ -33,6 +33,12 @@ Inspect each repair's diff and rerun affected checks, including preservation of 
 
 Repeat while violations remain and supported repairs are available. Diagnose persistent findings before retrying unchanged instructions. Finish independent corrections and report unresolved evidence/permission limits without calling them compliant. Do not replay DB writes/deployment or expand external-write authorization just to recheck.
 
+## Final regression check
+
+After resolving the rule violations, review the combined final diff against the pre-repair baseline and trace its effects beyond the edited lines. Check relevant callers, shared helpers, initialization, bindings, data/result contracts and other dependent behavior. Verify both the corrected path and previously working related paths, including failure/cancellation where affected. Choose checks from the actual dependency and behavior changes; a clean rule check alone does not establish regression safety.
+
+Reuse relevant tests and direct behavior checks, broadening verification when shared code, contracts or unresolved risk justify it. Preserve user edits and distinguish unrelated pre-existing defects. Honor existing build, execution and write limits. If the repair introduces a regression, fix its cause within scope, then repeat the affected rule audit and final regression check. Any later edit reopens the checks it can affect. Complete only when both the rule findings and introduced regressions are resolved in the verified scope; report unavailable runtime/DB/UI evidence as unverified rather than claiming no regressions everywhere.
+
 ## Handover
 
-Briefly report corrections, actual verification and material unresolved/unverified scope. A build, exit code or self-rating alone is insufficient. An already performed process violation cannot be erased from the record; address its consequences and report accurately. This is an agent procedure, not a host-enforced completion hook.
+Briefly report corrections, final regression checks and material unresolved/unverified scope. A build, exit code or self-rating alone is insufficient. An already performed process violation cannot be erased from the record; address its consequences and report accurately. This is an agent procedure, not a host-enforced completion hook.
