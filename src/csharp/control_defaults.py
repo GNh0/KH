@@ -9,7 +9,7 @@ import re
 
 from src.common.results import Issue
 from .control_style import direct_statement_spans
-from .control_names import control_name_issue, known_control_kind
+from .control_names import SINGLE_LINE_INPUT_KINDS, control_name_issue, known_control_kind
 from .designer_model import DesignerModel, _normalized_csharp_value, _parse_size
 from .lexer import _scan_csharp, balanced_close, string_literal_value
 from .control_values import LABEL_PROPERTIES, label_value_key
@@ -124,8 +124,11 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
             return (f'{name}.{prop}' not in allowed and prop in control.properties and
                     (new_type or prop not in old or _normalized_csharp_value(old[prop]) != _normalized_csharp_value(control.properties[prop])))
 
-        is_date = known_control_kind(base_model.controls[name].type_name) == 'DateEdit'
-        is_label = known_control_kind(base_model.controls[name].type_name) == 'LabelControl'
+        kind = known_control_kind(base_model.controls[name].type_name)
+        is_date = kind == 'DateEdit'
+        is_label = kind == 'LabelControl'
+        screen_height = kind in SINGLE_LINE_INPUT_KINDS and not (
+            kind == 'TextBox' and control.properties.get('Multiline', '').strip() == 'true')
         if check_style and known_control_kind(base_model.controls[name].type_name) in {'SimpleButton', 'Button'} and changed('Tag'):
             value = string_literal_value(control.properties['Tag'])
             if value and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', value) and value != value.upper():
@@ -177,12 +180,13 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
             if check_style and prop == 'Size' and not equal:
                 default_size, screen_size = _parse_size(expected), _parse_size(actual)
                 if default_size is not None and screen_size is not None:
-                    if any(screen < default for screen, default in zip(screen_size, default_size)):
+                    dimensions = zip(screen_size[:1], default_size[:1]) if screen_height else zip(screen_size, default_size)
+                    if any(screen < default for screen, default in dimensions):
                         issues.append(Issue('user_control_size_shrink', 'error',
-                                            'The new control is smaller than its current user-control default. Do not shrink it to fit short text; use the default size or expand it unless the user explicitly requests a compact size.',
+                                            'The new control width (or a non-single-line control dimension) is smaller than its supplied default. Do not shrink for short text; single-line height is reviewed against the actual screen separately.',
                                             details={'property': f'{name}.Size', 'constructor_size': default_size,
                                                      'screen_size': screen_size}))
-                    # Larger controls may be needed for long content or the screen layout.
+                    # Single-line height belongs to the actual screen comparison.
                     continue
             issues.append(Issue('user_control_default_restatement' if equal else 'user_control_default_override',
                                 'info' if equal else 'warning',

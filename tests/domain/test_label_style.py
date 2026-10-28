@@ -171,6 +171,15 @@ class LabelStyleTests(unittest.TestCase):
         self.assertIn('control_height_mismatch', {i.code for i in result.issues})
         self.assertEqual('passed', check_designer(source.replace('100, 23', '100, 25'), style_reference=ref, control_sources=[DATE]).status)
 
+    def test_actual_input_height_can_be_below_constructor_height_without_shrinking_width(self):
+        reference = 'this.ymdReference = new Widgets.DateBox(); this.ymdReference.Size = new Size(100, 21);'
+        source = 'this.ymdDate = new Widgets.DateBox(); this.ymdDate.Size = new Size(100, 21);'
+        result = check_designer(source, style_reference=reference, control_sources=[DATE])
+        self.assertEqual('passed', result.status)
+        narrower = check_designer(source.replace('Size(100, 21)', 'Size(80, 21)'),
+                                 style_reference=reference, control_sources=[DATE])
+        self.assertIn('user_control_size_shrink', {issue.code for issue in narrower.issues})
+
     def test_a_similar_input_can_supply_height_when_no_same_type_label_exists(self):
         source = 'this.lblName = new DevExpress.XtraEditors.LabelControl(); this.lblName.Size = new Size(100, 23);'
         ref = 'this.txtReference = new DevExpress.XtraEditors.TextEdit(); this.txtReference.Size = new Size(150, 25);'

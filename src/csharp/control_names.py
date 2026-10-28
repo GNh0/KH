@@ -4,6 +4,10 @@ import re
 from src.common.results import Issue
 
 
+SINGLE_LINE_INPUT_KINDS = frozenset({'TextEdit', 'DateEdit', 'SpinEdit', 'LookUpEdit', 'GridLookUpEdit',
+                                   'ButtonEdit', 'TimeEdit', 'TextBox'})
+
+
 _KONE_BASES = {
     'u_GridView': 'GridView', 'u_GridControl': 'GridControl',
     'u_SpinEdit': 'SpinEdit', 'u_DateEdit': 'DateEdit', 'u_TextEdit': 'TextEdit',

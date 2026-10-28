@@ -1,6 +1,6 @@
 # User's C# coding style
 
-Apply this when creating or editing WinForms/DevExpress/KoneLib screens. These rules incorporate recurring patterns from seven screens registered in the current solution of the user-specified BA/SA/MA projects. Do not use BACKUP or copied projects outside the solution as the baseline.
+Apply these agreed KH style preferences when creating or editing relevant WinForms/DevExpress screens. Select the current user's named comparison, otherwise approved source in the actual target project. Historical samples, backup/copied trees and previously rejected generated code do not establish the current style baseline. Read the relevant complete source bodies; the examples below illustrate expression style, not a target implementation to copy.
 
 ## Priority of requirements
 
@@ -46,7 +46,7 @@ The example shows expression style only. For an actual screen, check target-tabl
 
 Apply [user-control rules](user-controls.md) first for control selection, default initialization, and naming. Prefer available user controls without limiting them to one library. Use ymd and the actual field name for date inputs.
 
-Follow the existing FrmDevBase screen structure: SelectType enum → state fields/DataTable properties → constructor → screen-command events → query/save and focus/popup helpers. Align enum members and multiline DB arguments with leading commas on subsequent lines, as in current source. Do not reorder all existing members for a local edit.
+Where the target uses FrmDevBase, follow its existing screen structure: SelectType enum → state fields/DataTable properties → constructor → screen-command events → query/save and focus/popup helpers. Follow other target classes' actual structure for reports or other C# components. Align enum members and multiline DB arguments with leading commas on subsequent lines, as in current source. Do not reorder all existing members for a local edit.
 
 Keep static control declarations, creation, layout, and properties in Designer. Follow the actual screen's constructor pattern of subscribing named handlers after `InitializeComponent()`. Do not arbitrarily convert Load/SearchCommand/NewCommand/EditCommand/SaveCommand/DeleteCommand/ClearCommand or grid/button/Repository events to lambdas or move them into Designer. Do not duplicate subscriptions already made in Designer or another initialization path. Honor actual dynamic subscription/unsubscription requirements according to the event's lifetime.
 

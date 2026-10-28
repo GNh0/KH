@@ -78,8 +78,12 @@ python -B "C:\CompanyTools\company-dev\plugins\company-dev\scripts\company_check
 
 현재 KH 개발 원본에서 최초 회사 ZIP을 만드는 명령은 다음과 같다. `company` 폴더는 배포용 템플릿이며, 빌더가 공통 Python 실행 모듈과 UI 메타데이터를 합쳐 완전한 패키지를 만든다.
 
+빌드는 Git 체크아웃에서 실행하며 Git 추적 목록의 파일만 수집한다. 미추적 소스나 템플릿 메모는 포함하지 않는다. 배포할 새 파일은 검토 후 추적 목록에 추가해야 하며, Git 목록을 확인할 수 없으면 폴더 전체 수집으로 우회하지 않고 실패한다. 이 Git 요구는 배포 담당자의 빌드 단계에만 적용된다.
+
+파일 경로는 Git index, 내용은 현재 작업 트리를 기준으로 한다. 커밋된 snapshot만 내보내는 기능이나 추적 파일 내용의 개인정보 검사를 대신하지 않는다.
+
 ```powershell
-python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.2.0.zip"
+python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.2.1.zip"
 ```
 
 ZIP에는 실행에 필요한 공통 소스가 함께 들어 있다. 이후 회사 소유 원본으로 복사해 유지보수할 수 있고, 직원 PC에서 원래 KH 저장소를 조회하거나 Git 인증을 할 필요가 없다. 배포 버전은 회사 manifest에서 별도로 관리한다.

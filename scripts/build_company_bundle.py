@@ -31,6 +31,20 @@ def copy_file(source: Path, target: Path) -> None:
     shutil.copyfile(source, target)
 
 
+def tracked_sources() -> set[Path]:
+    """Use the Git index as the distribution inventory, never rglob."""
+    git = ['git', '-c', 'safe.directory=' + ROOT.as_posix()]
+    top = subprocess.run([*git, 'rev-parse', '--show-toplevel'], cwd=ROOT,
+                         capture_output=True, text=True, encoding='utf-8', timeout=30)
+    if top.returncode or Path(top.stdout.strip()).resolve() != ROOT.resolve():
+        raise ValueError('build the bundle from its Git checkout; no tracked file inventory is available')
+    inventory = subprocess.run([*git, 'ls-files', '--cached', '-z'], cwd=ROOT,
+                               capture_output=True, text=True, encoding='utf-8', timeout=30)
+    if inventory.returncode:
+        raise ValueError('cannot read the tracked Git file inventory')
+    return {Path(name) for name in inventory.stdout.split('\0') if name}
+
+
 def build_bundle(output: Path) -> dict:
     if not output.is_absolute() or output.suffix.lower() != '.zip':
         raise ValueError('output must be an absolute ZIP path')
@@ -38,34 +52,42 @@ def build_bundle(output: Path) -> dict:
     for protected in (ROOT / 'src', ROOT / 'skills', ROOT / 'scripts', ROOT / 'company'):
         if output.is_relative_to(protected):
             raise ValueError('write the final ZIP outside implementation/source folders')
+    inventory = tracked_sources()
+
+    def copy_source(relative: Path, target: Path) -> None:
+        source = ROOT / relative
+        if relative not in inventory or not source.resolve().is_relative_to(ROOT.resolve()):
+            raise ValueError('bundle input is not a tracked in-repository source: ' + str(relative))
+        copy_file(source, target)
+
     with tempfile.TemporaryDirectory(prefix='company-dev-bundle-') as folder:
         stage = Path(folder) / 'marketplace'
         template = ROOT / 'company'
-        for source in sorted(template.rglob('*')):
-            if source.is_file() and source.suffix in {'.md', '.json', '.py', '.yaml'} and '__pycache__' not in source.parts:
+        for relative in sorted(inventory):
+            source = ROOT / relative
+            if relative.is_relative_to(Path('company')) and source.suffix in {'.md', '.json', '.py', '.yaml'} and '__pycache__' not in source.parts:
                 if not source.resolve().is_relative_to(template.resolve()):
                     raise ValueError('company template points outside its source root')
-                copy_file(source, stage / source.relative_to(template))
+                copy_source(relative, stage / source.relative_to(template))
         plugin = stage / 'plugins/company-dev'
-        for source in sorted((ROOT / 'src').rglob('*.py')):
-            relative = source.relative_to(ROOT)
-            if relative.parts[1] == 'maintenance' and source.name not in {'__init__.py', 'package_check.py'}:
+        for relative in sorted(path for path in inventory if path.is_relative_to(Path('src')) and path.suffix == '.py'):
+            if relative.parts[1] == 'maintenance' and relative.name not in {'__init__.py', 'package_check.py'}:
                 continue
-            copy_file(source, plugin / relative)
-        copy_file(ROOT / 'scripts/kh_check.py', plugin / 'scripts/kh_check.py')
-        copy_file(ROOT / 'scripts/kh_runtime.py', plugin / 'scripts/kh_runtime.py')
+            copy_source(relative, plugin / relative)
+        copy_source(Path('scripts/kh_check.py'), plugin / 'scripts/kh_check.py')
+        copy_source(Path('scripts/kh_runtime.py'), plugin / 'scripts/kh_runtime.py')
         for shared_skill in ('runtime-cleanup', 'rule-audit'):
-            for source in sorted((ROOT / 'skills' / shared_skill).rglob('*')):
-                if source.is_file() and source.suffix in {'.md', '.yaml'}:
-                    copy_file(source, plugin / source.relative_to(ROOT))
+            for relative in sorted(inventory):
+                if relative.is_relative_to(Path('skills') / shared_skill) and relative.suffix in {'.md', '.yaml'}:
+                    copy_source(relative, plugin / relative)
         workspace_reference = Path('skills/work-execution/references/workspace-files.md')
-        copy_file(ROOT / workspace_reference, plugin / workspace_reference)
+        copy_source(workspace_reference, plugin / workspace_reference)
         reports_reference = Path('skills/csharp-designer-style-harness/references/reports.md')
-        copy_file(ROOT / reports_reference, plugin / reports_reference)
+        copy_source(reports_reference, plugin / reports_reference)
         pb_scripts = Path('skills/pb-to-csharp-migration-harness/scripts')
         for relative in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
                          'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):
-            copy_file(ROOT / pb_scripts / relative, plugin / pb_scripts / relative)
+            copy_source(pb_scripts / relative, plugin / pb_scripts / relative)
         for name, (display_name, description) in DISPLAY.items():
             target = plugin / 'skills' / name / 'agents/openai.yaml'
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print(json.dumps(build_bundle(Path(args.output)), ensure_ascii=False, indent=2))
         return 0
-    except (OSError, ValueError, UnicodeError) as error:
+    except (OSError, ValueError, UnicodeError, subprocess.SubprocessError) as error:
         print(json.dumps({'status': 'failed', 'error': str(error)}, ensure_ascii=False))
         return 1
 
