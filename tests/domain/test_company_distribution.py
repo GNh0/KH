@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -119,6 +120,36 @@ class CompanyCheckTests(unittest.TestCase):
 
 
 class CompanyBundleTests(unittest.TestCase):
+    def test_untracked_source_and_template_notes_are_not_distributed(self):
+        tracked = subprocess.run(['git', '-c', 'safe.directory=' + ROOT.as_posix(), 'ls-files', '-z', '--',
+                                  'src', 'scripts', 'skills', 'company'], cwd=ROOT, capture_output=True,
+                                 text=True, encoding='utf-8', check=True).stdout.split('\0')
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            checkout = root/'checkout'
+            checkout.mkdir()
+            for name in filter(None, tracked):
+                target = checkout/name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT/name, target)
+            git = ['git', '-c', 'safe.directory=' + checkout.as_posix()]
+            subprocess.run([*git, 'init', '--quiet'], cwd=checkout, capture_output=True, check=True)
+            subprocess.run([*git, 'add', '--', 'src', 'scripts', 'skills', 'company'],
+                           cwd=checkout, capture_output=True, check=True)
+            (checkout/'src/audit_private_untracked.py').write_text(
+                'PRIVATE_MARKER = "employee-internal-note"', encoding='utf-8')
+            (checkout/'company/plugins/company-dev/references/private-note.md').write_text(
+                'employee-internal-note', encoding='utf-8')
+            archive = root/'company.zip'
+            build = subprocess.run([sys.executable, '-B', str(checkout/'scripts/build_company_bundle.py'),
+                '--output', str(archive)], cwd=checkout, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+            with zipfile.ZipFile(archive) as bundle:
+                self.assertFalse('plugins/company-dev/src/audit_private_untracked.py' in bundle.namelist(),
+                                 'untracked Python source was distributed')
+                self.assertFalse('plugins/company-dev/references/private-note.md' in bundle.namelist(),
+                                 'untracked template note was distributed')
+
     def test_zip_is_local_and_excludes_private_and_untracked_material(self):
         with tempfile.TemporaryDirectory() as folder:
             archive = Path(folder) / 'company.zip'

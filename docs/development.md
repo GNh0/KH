@@ -18,6 +18,8 @@ Use static typing to find inconsistent function contracts; separately validate e
 
 Zero type errors and passing unit tests do not replace C# compilation, Designer execution, real PB/ORCA environments, or SQL Server results. For independent usage evaluation, provide the task request and minimal required source, not the implementer's intended answer.
 
+The `tests/domain` suite is in-repository regression coverage, not an independent evaluation of skill selection or agent behavior. Validate important assumptions against user requirements, source-based counterexamples and separate evaluators where available; see [scenario evaluation](../skills/kh-maintenance/references/scenario-evaluation.md).
+
 ## GitHub publication
 
 This repository's existing publication flow uses a source/version commit on `release` and a separate publication commit with the identical file tree on `main`. The marketplace registration reads `main`'s `.agents/plugins/marketplace.json`, whose plugin source points to `release`. Preserve that structure and verify both remote refs, the manifest version and tree equality after pushing. Keep unrelated working-tree files out of the commits. Publishing only the source branch is not the completed existing release flow.

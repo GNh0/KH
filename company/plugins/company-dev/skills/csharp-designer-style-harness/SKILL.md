@@ -7,6 +7,8 @@ description: Generate, modify or review C#, WinForms Designer and XtraReports pr
 
 Read the [selected personal C# style](../../references/personal-style.md), actual target and the user's named comparison, otherwise a relevant approved same-project example. Migration source establishes behavior; target source establishes available APIs. A style example from another project does not establish target API compatibility. Personal names, formats and syntax come from the selected style, not the original KH author.
 
+Before writing C# bodies or Designer blocks, read the relevant [source and Designer contracts](references/contracts.md). Previously generated or user-rejected code is not an approved style reference. Loading this entrypoint alone does not load the selected personal style or linked contracts.
+
 Preserve current edits and change only the requested scope. Compare complete relevant event/caller bodies for return handling, initialization/reset ownership, data timing, selection, XML/SP and success/failure requery behavior. Reuse available appropriate project user controls and their actual defaults, including RepositoryItems and behavior changed through callbacks/helpers; inspect concrete reasons before adding overrides. Do not impose WinForms patterns on another C# framework.
 
 Keep required property changes at their actual control/member scope. Column settings do not authorize view-wide Appearance changes or shared-default resets; inspect relevant initialization and layout-loading paths.

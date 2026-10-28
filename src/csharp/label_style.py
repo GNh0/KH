@@ -3,13 +3,11 @@ from collections.abc import Iterable, Sequence
 
 from src.common.results import CheckResult, Issue
 from .control_defaults import ControlDefaults, _same_type, with_control_base_types
-from .control_names import known_control_kind
+from .control_names import SINGLE_LINE_INPUT_KINDS as _INPUT_KINDS, known_control_kind
 from .control_values import HEIGHT_PROPERTIES, LABEL_PROPERTIES, label_constructor_value, label_value_key
 from .designer_model import DesignerModel, _normalized_csharp_value
 
 
-_INPUT_KINDS = frozenset({'TextEdit', 'DateEdit', 'SpinEdit', 'LookUpEdit', 'GridLookUpEdit',
-                          'ButtonEdit', 'TimeEdit', 'TextBox'})
 _DIMENSIONS = frozenset({'Size', 'Height', 'Bounds'})
 
 

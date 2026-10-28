@@ -1,7 +1,7 @@
 {
   "name": "kh-skills",
   "displayName": "KH Skills",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Shared SQL, C#/Designer and PowerBuilder development skills with optional local checks.",
   "author": {
     "name": "GNho Labs",

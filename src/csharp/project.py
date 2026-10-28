@@ -34,11 +34,12 @@ def check_project(project_file: str | Path, files: list[str | Path],
         raise ValueError(f'Expected an MSBuild Project element: {project}')
     entries: list[tuple[ET.Element, bool]] = []
 
-    def visit(element: ET.Element, conditional: bool = False) -> None:
+    def visit(element: ET.Element, conditional: bool = False, evaluation_context: bool = True) -> None:
         conditional = conditional or bool(element.get('Condition')) or _tag(element) in {'Choose', 'When', 'Otherwise'}
-        entries.append((element, conditional))
+        entries.append((element, conditional or not evaluation_context))
+        child_context = evaluation_context and _tag(element) in {'Project', 'Choose', 'When', 'Otherwise', 'ItemGroup'}
         for child in element:
-            visit(child, conditional)
+            visit(child, conditional, child_context)
 
     visit(root)
     sdk = bool(root.get('Sdk')) or any(_tag(item) == 'Sdk' for item, _ in entries)
@@ -76,7 +77,7 @@ def check_project(project_file: str | Path, files: list[str | Path],
         # A local transform prevents certifying the selected explicit entry.
         transforms = any(_tag(item) == kind and (item.get('Remove') or item.get('Update'))
                          for item, _ in entries)
-        if matching and not transforms:
+        if matching and not transforms and not imported and not sdk:
             evidence.append({'path': str(selected), 'item_type': kind, 'status': 'verified'})
         elif uncertain or transforms:
             evidence.append({'path': str(selected), 'item_type': kind, 'status': 'unverified'})
@@ -120,7 +121,7 @@ def check_project(project_file: str | Path, files: list[str | Path],
                     uncertain = True  # Another resolver/GAC path may still satisfy it.
         transformed = any(_tag(item) == 'Reference' and (item.get('Remove') or item.get('Update'))
                           for item, _ in entries)
-        if verified and not transformed:
+        if verified and not transformed and not imported and not sdk:
             state = 'verified'
         elif uncertain:
             state = 'unverified'

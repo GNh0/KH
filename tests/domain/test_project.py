@@ -6,6 +6,32 @@ from src.csharp.project import check_project
 
 
 class ProjectIntegrationTests(unittest.TestCase):
+    def test_unexecuted_target_items_do_not_prove_project_membership(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, project = root/'Screen.cs', root/'Screen.csproj'
+            source.write_text('class Screen {}', encoding='utf-8')
+            project.write_text('<Project><Target Name="NeverRun"><ItemGroup><Compile Include="Screen.cs"/>'
+                               '<Reference Include="Charts.UI"/></ItemGroup></Target></Project>', encoding='utf-8')
+            result = check_project(project, [source], ['Charts.UI'])
+            self.assertEqual('incomplete', result.status)
+            self.assertEqual('unverified', result.metadata['project_integration']['files'][0]['status'])
+            self.assertEqual('unverified', result.metadata['project_integration']['required_references'][0]['status'])
+
+    def test_import_can_remove_explicit_membership_and_reference(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, project = root/'Screen.cs', root/'Screen.csproj'
+            source.write_text('class Screen {}', encoding='utf-8')
+            (root/'remove.targets').write_text('<Project><ItemGroup><Compile Remove="Screen.cs"/>'
+                '<Reference Remove="Charts.UI"/></ItemGroup></Project>', encoding='utf-8')
+            project.write_text('<Project><ItemGroup><Compile Include="Screen.cs"/><Reference Include="Charts.UI"/>'
+                               '</ItemGroup><Import Project="remove.targets"/></Project>', encoding='utf-8')
+            result = check_project(project, [source], ['Charts.UI'])
+            self.assertEqual('incomplete', result.status)
+            self.assertEqual('unverified', result.metadata['project_integration']['files'][0]['status'])
+            self.assertEqual('unverified', result.metadata['project_integration']['required_references'][0]['status'])
+
     def test_registered_code_designer_resource_and_required_assembly_are_read_only(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -19,7 +45,6 @@ class ProjectIntegrationTests(unittest.TestCase):
               <ItemGroup><Compile Include="Report.cs"/><Compile Include="Report.Designer.cs"/>
               <EmbeddedResource Include="Report.resx"/><Reference Include="Charts.UI, Version=1.0.0.0">
               <HintPath>lib\\Charts.UI.dll</HintPath></Reference></ItemGroup>
-              <Import Project="$(MSBuildToolsPath)\\Microsoft.CSharp.targets"/>
             </Project>''', encoding='utf-8')
             before = {path: path.read_bytes() for path in root.rglob('*') if path.is_file()}
             result = check_project(project, files, ['charts.ui'])
