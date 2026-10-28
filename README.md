@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH 3.1.3 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH 3.2.0 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
@@ -41,6 +41,8 @@ Open the app's plugin directory, select **KH Skills**, and install it. The exist
 
 Invoke a skill by name, for example `$sql-formatting`, or ask for the relevant work. Codex discovers skill descriptions and loads the useful guidance. See [OpenAI's plugin packaging documentation](https://developers.openai.com/plugins/build/plugins) for marketplace registration and installation.
 
+The root `SKILL.md` is a repository index. Automatic selection starts from each installed skill's name/description/path; its body then routes to references needed for the current artifact. PB analysis moving into C#/reports or SQL must enter that domain's workflow. The final rule audit checks both application of the relevant guidance and required steps that were omitted. This procedure is not a host-enforced completion hook.
+
 ### Individual skills
 
 If you do not want the complete plugin, copy only the required folders from `skills/` into your agent's supported skill directory. Keep their referenced resources available: several references and checkers use paths relative to this repository root. The complete plugin is the recommended option for the domain skills.
@@ -52,13 +54,13 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 | Skill | Use it for |
 | --- | --- |
 | [sql-formatting](skills/sql-formatting/SKILL.md) | SQL/T-SQL layout, alias-preserving edits and source comparison |
-| [csharp-designer-style-harness](skills/csharp-designer-style-harness/SKILL.md) | WinForms, DevExpress, project controls and Designer contracts |
+| [csharp-designer-style-harness](skills/csharp-designer-style-harness/SKILL.md) | WinForms/Designer, project controls, XtraReports preview and printing |
 | [pb-to-csharp-migration-harness](skills/pb-to-csharp-migration-harness/SKILL.md) | PBL/DataWindow analysis and source-grounded C#/SQL migration |
 | [work-planning](skills/work-planning/SKILL.md) | Substantial work with unresolved choices or dependencies |
 | [work-execution](skills/work-execution/SKILL.md) | Approved multi-step work, progress and stop/resume handling |
 | [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | Finished task-owned processes, REPL resources and command-tree lifetimes |
 | [code-review](skills/code-review/SKILL.md) | Actual changes, behavior regressions and verification |
-| [rule-audit](skills/rule-audit/SKILL.md) | Applied-rule compliance, focused repairs and rechecks |
+| [rule-audit](skills/rule-audit/SKILL.md) | Applicable-rule compliance, omitted prerequisites, focused repairs and rechecks |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | Reproducing a failure and tracing its actual cause |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | Deliverable content, file structure and rendered output |
 | [context-handoff](skills/context-handoff/SKILL.md) | A compact checkpoint for continuing an ongoing task |

@@ -60,6 +60,8 @@ def build_bundle(output: Path) -> dict:
                     copy_file(source, plugin / source.relative_to(ROOT))
         workspace_reference = Path('skills/work-execution/references/workspace-files.md')
         copy_file(ROOT / workspace_reference, plugin / workspace_reference)
+        reports_reference = Path('skills/csharp-designer-style-harness/references/reports.md')
+        copy_file(ROOT / reports_reference, plugin / reports_reference)
         pb_scripts = Path('skills/pb-to-csharp-migration-harness/scripts')
         for relative in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
                          'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):

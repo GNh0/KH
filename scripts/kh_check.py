@@ -23,7 +23,7 @@ def main(argv=None):
     cs.add_argument("--designer")
     cs.add_argument('--designer-original')
     cs.add_argument('--style-reference-csharp', metavar='ABSOLUTE_COMPARISON_CS',
-                    help='actual same-project screen used to compare command phases and query/save transport')
+                    help='actual approved comparison screen used to compare command phases and query/save transport')
     cs.add_argument('--screen-command', action='append', choices=('search', 'new', 'edit', 'save', 'delete', 'clear', 'print'),
                     help='explicitly allowed screen operation from the current request; repeat for each operation')
     designer = commands.add_parser('designer', help='compare explicit Designer properties with a supplied baseline')
@@ -36,7 +36,13 @@ def main(argv=None):
                              help='kh retains the personal KH preferences; project checks supplied source/contracts without imposing them')
     for command in (cs, designer):
         command.add_argument('--style-reference-designer', metavar='ABSOLUTE_COMPARISON_DESIGNER',
-                             help='actual same-project screen used to compare label/input heights, label presentation and editor buttons')
+                             help='actual approved comparison screen used to compare label/input heights, label presentation and editor buttons')
+        command.add_argument('--project-file', metavar='ACTUAL_CSPROJ',
+                             help='inspect selected source/resource registrations in the actual target project XML')
+        command.add_argument('--project-item', action='append', default=[], metavar='SELECTED_CS_OR_RESX',
+                             help='additional actual file to check for project registration; requires --project-file')
+        command.add_argument('--required-reference', action='append', default=[], metavar='ASSEMBLY_NAME',
+                             help='direct assembly reference required by verified target APIs; requires --project-file')
         command.add_argument('--preserve-existing', action='store_true',
                              help='compare retained Designer properties with the actual original; requires a Designer baseline')
         command.add_argument('--member-rename', action='append', default=[], metavar='OLD=NEW',
@@ -65,6 +71,8 @@ def main(argv=None):
         if args.command == 'sql' and args.candidate:
             pairs.append((args.input, args.candidate))
         elif args.command in {'csharp', 'designer'}:
+            if (args.project_item or args.required_reference) and not args.project_file:
+                raise ValueError('--project-item and --required-reference require --project-file')
             if args.command == 'csharp' and args.style_reference_csharp:
                 pairs.append((args.style_reference_csharp, args.input))
             if args.command == 'csharp' and args.style_reference_designer and not args.designer:
@@ -146,6 +154,24 @@ def main(argv=None):
         else:
             from src.maintenance.package_check import check_package
             result = check_package(args.input)
+        if args.command in {'csharp', 'designer'}:
+            if args.project_file:
+                from src.csharp.project import check_project
+                files = [args.input, *args.project_item]
+                companion = args.designer if args.command == 'csharp' else args.code_behind
+                if companion:
+                    files.append(companion)
+                integration = check_project(args.project_file, files, args.required_reference)
+                result.issues.extend(integration.issues)
+                result.checked.extend(integration.checked)
+                result.not_checked.extend(integration.not_checked)
+                result.incomplete = result.incomplete or integration.incomplete
+                result.metadata.update(integration.metadata)
+                if integration.issues or integration.incomplete:
+                    result.metadata['review_status'] = 'needs_review'
+            else:
+                result.metadata['project_integration'] = {'status': 'unverified', 'project_file': None}
+                result.not_checked.append('Actual project source/resource registration and required assembly references; no --project-file supplied')
         if args.command in {'sql', 'csharp', 'designer'}:
             result.metadata['style_policy'] = args.style_policy
             if args.style_policy == 'project':

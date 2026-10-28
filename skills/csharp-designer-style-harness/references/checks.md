@@ -8,6 +8,14 @@ Choose comparison scope from the task. An ordinary local edit uses the pre-chang
 
 Run `python <plugin-root>/scripts/kh_check.py csharp <absolute-source.cs> [--designer <absolute-Designer.cs>] [--original <absolute-before.cs>]` to check static UI ownership, event references, and local code changes.
 
+## Actual project integration
+
+For added/imported files or dependencies, supply `--project-file <actual-target.csproj>` to `csharp` or `designer`. The input and supplied Designer/code-behind companion are checked automatically. Repeat `--project-item <actual.cs-or-resx>` for additional selected files and `--required-reference <assembly-name>` only for direct references established from actual target APIs. These two options require `--project-file`.
+
+`project_integration` records exact resolved file paths, explicit Compile/EmbeddedResource membership and requested assembly declarations/literal HintPaths. A same-named file in another directory does not establish registration. Missing selected files/registrations or required direct references produce errors where XML can establish the mismatch. A missing literal HintPath produces a warning and incomplete resolver review because another search/GAC path may satisfy the reference. Conditional, wildcard/property-generated, imported or SDK-provided membership/reference resolution can be incomplete; obtain MSBuild/project evidence rather than assuming it failed or passed. `verified_static` means the reported explicit XML facts only. It does not verify resource relationships, assembly resolution, compilation, Designer loading or UI output. Without a project input, integration remains explicitly unverified; a temporary compile with extra references does not fill that gap.
+
+## Controls and source comparisons
+
 Apply [user-control rules](user-controls.md) outside grids too. Review agreed Spin/ymd/pn/grd/gvw/col/rps naming for new controls, member/Name mismatches, and added DateEdit EditFormat/input masks. Repeated `--control-source <absolute-control.cs>` arguments supply current project user-control implementations, enabling type-selection/default-override checks from inheritance declarations and direct parameterless-constructor assignments regardless of library name. Both C# and Designer commands support this. Do not claim automatic validation for missing source, helpers, conditions, or dynamic values.
 
 For new controls with a constructor `Size`, `user_control_size_shrink` checks arbitrary shrinking. Width may grow for content. Label height is compared with actual screen controls, rather than treating every height increase as allowed. An explicit user-requested size can be exempted with `--allow-property-change member.Size` after checking that request; this option alone is not proof of authorization. The check does not impose one global size or rewrite unchanged retained controls.
