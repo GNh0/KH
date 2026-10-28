@@ -5,3 +5,5 @@ This repository is a Codex plugin, not a mandatory intake workflow. Load the rel
 This file is an index, not an automatically executed router. The host exposes each installed skill's name/description/path, selects a matching entrypoint, then reads its instructions. Keep selection metadata in the individual skills. For the current artifact, follow that entrypoint's required reference/source path before implementation; reassess it when scope changes. Reading a skill or passing a partial checker does not establish that the final work follows it.
 
 Before handing over skill-guided work, use the shared [rule audit](skills/rule-audit/SKILL.md) to compare applicable rules with actual results and repair confirmed violations within scope.
+
+SQL/PB/C# project work follows the required [source-style cycle](skills/work-execution/references/source-style-cycle.md): read actual comparison-project style before writing, then re-read and audit the final code, repair violations and check the final repairs for regressions.

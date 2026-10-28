@@ -13,6 +13,8 @@ Compare the latest user instructions/corrections, applicable skill requirements 
 
 ## Compare rules with evidence
 
+For code work, audit the required [source-style cycle](../work-execution/references/source-style-cycle.md): was actual comparison-project code inspected before writing, and was the final saved code re-read against that same source after all edits? If the first step was skipped, inspect the missing source and correct the affected implementation; do not erase the earlier process violation or treat a late read as proof it happened before writing.
+
 Inspect the latest artifacts/diff, relevant callers/initialization and execution results. A plan, announced skill use or successful read is not evidence of applying it. Compare the actual changed structure/bodies with the required source pattern; identify prerequisite source or workflow reads that were omitted or materially truncated, retrieve what is needed and recheck the affected implementation. Whole-file imports/style corrections also require inspection beyond unchanged-line suppression.
 
 Mark relevant rules verified, violated or unverified; exclude inapplicable rules with a scope reason. A finding needs the rule source, affected location/action, observed mismatch and required correction. Missing evidence is unverified, not a guessed violation or pass.

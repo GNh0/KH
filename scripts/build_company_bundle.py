@@ -82,6 +82,8 @@ def build_bundle(output: Path) -> dict:
                     copy_source(relative, plugin / relative)
         workspace_reference = Path('skills/work-execution/references/workspace-files.md')
         copy_source(workspace_reference, plugin / workspace_reference)
+        style_cycle_reference = Path('skills/work-execution/references/source-style-cycle.md')
+        copy_source(style_cycle_reference, plugin / style_cycle_reference)
         reports_reference = Path('skills/csharp-designer-style-harness/references/reports.md')
         copy_source(reports_reference, plugin / reports_reference)
         pb_scripts = Path('skills/pb-to-csharp-migration-harness/scripts')

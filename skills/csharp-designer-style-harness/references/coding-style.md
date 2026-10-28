@@ -1,6 +1,6 @@
 # User's C# coding style
 
-Apply these agreed KH style preferences when creating or editing relevant WinForms/DevExpress screens. Select the current user's named comparison, otherwise approved source in the actual target project. Historical samples, backup/copied trees and previously rejected generated code do not establish the current style baseline. Read the relevant complete source bodies; the examples below illustrate expression style, not a target implementation to copy.
+Apply these agreed KH style preferences when creating or editing relevant WinForms/DevExpress screens. Select the current user's named comparison project, otherwise an approved comparable other project, and inspect actual target APIs separately. Historical samples, backup/copied trees and previously rejected generated code do not establish the current style baseline. Read the relevant complete source bodies; the examples below illustrate expression style, not a target implementation to copy.
 
 ## Priority of requirements
 

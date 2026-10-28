@@ -2,7 +2,7 @@
 
 **Claude와 Codex에서 사용하는 SQL·C#/Designer·PowerBuilder 개발 스킬.**
 
-KH 3.2.1은 스킬 12개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
+KH 3.2.2는 스킬 12개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
 
 [English](README.md) · [스킬](#스킬) · [로컬 검사](#선택형-로컬-검사) · [개발 검사](docs/development.md)
 
@@ -42,6 +42,8 @@ codex plugin marketplace add GNh0/KH
 `$sql-formatting`처럼 필요한 스킬을 지정하거나 작업을 자연어로 요청합니다. Codex가 스킬 설명을 보고 관련 지침을 읽습니다. marketplace 등록과 설치 흐름은 [OpenAI 공식 문서](https://developers.openai.com/plugins/build/plugins)를 참고하세요.
 
 루트 `SKILL.md`는 저장소 안내입니다. 자동 선택은 설치된 각 스킬의 이름·설명·경로에서 시작하고, 선택된 진입 문서가 현재 작업에 필요한 참고자료로 연결합니다. PB 분석에서 C#/보고서·SQL 구현으로 범위가 바뀌면 해당 도메인의 진입 문서를 적용합니다. 마지막 감사는 규칙 적용뿐 아니라 빠뜨린 필수 절차도 확인합니다. 이 절차가 호스트의 완료 동작을 강제로 차단하는 기능은 아닙니다.
+
+SQL/PB/C# 프로젝트 코드는 [작성 전후 스타일 절차](skills/work-execution/references/source-style-cycle.md)를 필수로 적용합니다. 작성 전 지정한 비교 프로젝트 또는 적합한 다른 프로젝트의 실제 소스를 읽고, 모든 작성이 끝난 후 최종 저장 코드를 다시 읽어 같은 기준으로 감사합니다. 위반 부분만 수정·재감사하고 마지막 수정의 회귀 영향도 확인합니다.
 
 ### 필요한 스킬만 사용
 

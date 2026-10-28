@@ -73,7 +73,7 @@
     "event_subscription": "Named handlers after InitializeComponent in the existing constructor pattern; preserve existing wiring and subscribe once.",
     "coding_style": {
       "reference": "skills/csharp-designer-style-harness/references/coding-style.md",
-      "source_scope": "Historical patterns include seven BA/SA/MA screens reviewed 2026-09-08; select the current user-named comparison or approved actual-target source for each task, not this historical list.",
+      "source_scope": "Historical patterns include seven BA/SA/MA screens reviewed 2026-09-08; before writing select the user-named comparison project or an approved comparable other project, inspect target APIs separately, and audit final code against the selected source.",
       "blocks": "Allman braces and four-space indentation. Use braces even for one-statement if/else/for/foreach/while/do bodies; retain else if chains.",
       "locals": "Prefer explicit types and existing semantic prefixes; do not rename or reformat unrelated code.",
       "properties": "Full get blocks; do not shorten to expression bodies.",

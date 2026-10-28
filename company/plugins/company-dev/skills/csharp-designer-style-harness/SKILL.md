@@ -5,7 +5,9 @@ description: Generate, modify or review C#, WinForms Designer and XtraReports pr
 
 # C# and Designer
 
-Read the [selected personal C# style](../../references/personal-style.md), actual target and the user's named comparison, otherwise a relevant approved same-project example. Migration source establishes behavior; target source establishes available APIs. A style example from another project does not establish target API compatibility. Personal names, formats and syntax come from the selected style, not the original KH author.
+Read the [selected personal C# style](../../references/personal-style.md), actual target and the user's named comparison project, otherwise an approved comparable other project. Migration source establishes behavior; target source establishes available APIs. A style example from another project does not establish target API compatibility. Personal names, formats and syntax come from the selected style, not the original KH author.
+
+Complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): inspect comparison-project code before writing, then re-read and audit the finished code against it.
 
 Before writing C# bodies or Designer blocks, read the relevant [source and Designer contracts](references/contracts.md). Previously generated or user-rejected code is not an approved style reference. Loading this entrypoint alone does not load the selected personal style or linked contracts.
 

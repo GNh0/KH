@@ -7,12 +7,14 @@ description: Generate, modify, or review WinForms/DevExpress C#, Designer and Xt
 
 Apply to the actual target project. Do not impose WinForms architecture on MAUI/PDA or other C# projects.
 
+Before writing and after the final write, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): inspect actual comparison-project code first, then re-read and audit the finished code against it.
+
 For C# body work, first read the relevant [coding-style](references/coding-style.md) sections. For Designer creation/edits, first read [Designer](references/designer.md). These are the baseline routes; then select the task-specific references below. Loading this entrypoint alone does not load those rules.
 
 ## Working basis
 
 1. Use the latest request and agreed style. Preserve current user edits and keep the change scoped. A conflicting sample does not weaken an agreed rule.
-2. Read the actual target and complete relevant event/caller bodies before writing. Use the user's named style comparison, otherwise a relevant approved same-project example; previously generated or user-rejected code is not an approved style reference. Match return handling, event responsibilities, data timing and initialization/reset owners. For save changes, trace selected rows, row states/XML, SP calls and success/failure refresh paths; preserve query and report behavior separately. Migration source defines business behavior; target source defines available APIs. A style example from another project does not establish target API compatibility. Matching names or available APIs alone does not establish the intended workflow.
+2. Read the actual target and complete relevant event/caller bodies before writing. Use the user's named comparison project, otherwise an approved comparable other project; previously generated or user-rejected code is not an approved style reference. Match return handling, event responsibilities, data timing and initialization/reset owners. For save changes, trace selected rows, row states/XML, SP calls and success/failure refresh paths; preserve query and report behavior separately. Migration source defines business behavior; target source defines available APIs. A style example from another project does not establish target API compatibility. Matching names or available APIs alone does not establish the intended workflow.
 3. Before adding code/settings, compare the requested behavior, actual data/result types and what the current path already does. Identify the concrete gap or verified dependency the addition resolves. Preserve a path that already meets the request; a feature name or available API alone does not establish a need. Resolve uncertain necessity from actual source/API behavior first.
 
 Keep these decisions in the working context; no intake form or audit file is required.

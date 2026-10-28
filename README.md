@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH 3.2.1 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH 3.2.2 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
@@ -42,6 +42,8 @@ Open the app's plugin directory, select **KH Skills**, and install it. The exist
 Invoke a skill by name, for example `$sql-formatting`, or ask for the relevant work. Codex discovers skill descriptions and loads the useful guidance. See [OpenAI's plugin packaging documentation](https://developers.openai.com/plugins/build/plugins) for marketplace registration and installation.
 
 The root `SKILL.md` is a repository index. Automatic selection starts from each installed skill's name/description/path; its body then routes to references needed for the current artifact. PB analysis moving into C#/reports or SQL must enter that domain's workflow. The final rule audit checks both application of the relevant guidance and required steps that were omitted. This procedure is not a host-enforced completion hook.
+
+SQL/PB/C# project code follows a required [source-style cycle](skills/work-execution/references/source-style-cycle.md): inspect the designated or comparable other project's actual code before writing, then re-read and audit the finished code against it. Repair confirmed violations, re-audit and check the final repairs for regressions.
 
 ### Individual skills
 
