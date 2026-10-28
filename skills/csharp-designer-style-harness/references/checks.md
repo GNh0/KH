@@ -4,7 +4,7 @@ Result `status=passed` means no errors were found in the items checked. C# resul
 
 `comparison_baselines` records whether originals were supplied. A single-file check without an original does not verify changes or preservation. C#/Designer/SQL treat the same file as original and candidate, including links to the same file, as an input error. Use pre-change copies or the user's specified actual migration source. A post-change copy labeled original does not establish preservation. Separate legitimate copies with identical content can be compared, but the checker does not certify their creation time or provenance.
 
-Choose comparison scope from the task. An ordinary local edit uses the pre-change target to review new changes. A new screen import or requested whole-file style correction also needs a standalone candidate inspection with the actual control sources and same-project Designer reference. An imported foreign C# file can establish behavior/provenance but cannot establish the target's coding style. Differential checks suppress unchanged findings; do not treat that suppression as a full style pass. After repeated style feedback, review the affected C#, Designer, bindings and SP paths together and resolve relevant warnings against actual requirements before reporting completion.
+Choose comparison scope from the task. An ordinary local edit uses the pre-change target to review new changes. A new screen import or requested whole-file style correction also needs standalone inspection with actual control sources and a target-screen Designer reference for dimensions/defaults. Inspect the selected comparison project separately for coding style. An unapproved imported candidate can establish behavior/provenance but is not its own style baseline. Differential checks suppress unchanged findings; do not treat that suppression as a full style pass. After repeated style feedback, review the affected C#, Designer, bindings and SP paths together and resolve relevant warnings against actual requirements before reporting completion.
 
 Run `python <plugin-root>/scripts/kh_check.py csharp <absolute-source.cs> [--designer <absolute-Designer.cs>] [--original <absolute-before.cs>]` to check static UI ownership, event references, and local code changes.
 
@@ -58,12 +58,12 @@ LINQ candidates and changes between transaction-method name families are review 
 
 ### Comparing project command phases and requested operations
 
-Supply `--style-reference-csharp <absolute-same-project-screen.cs>` to compare recognizable Save/New operations and SELECT/SAVE transport with the actual reference bodies. This is separate from `--original`, which establishes change provenance. Read the reference first and select one with a matching screen flow; the checker cannot verify its project, relevance or provenance. It does not make one screen's pattern universal. Different query and save examples may need separate comparisons; missing reference bodies remain unverified.
+Supply `--style-reference-csharp <absolute-approved-comparison-screen.cs>` to compare recognizable Save/New operations and SELECT/SAVE transport with the actual reference bodies. This is separate from `--original`, which establishes change provenance. Read the selected comparison project's reference first and choose a matching screen flow; inspect actual target APIs separately. The checker cannot verify project, relevance or provenance and does not make one screen's pattern universal. Different query and save examples may need separate comparisons; missing reference bodies remain unverified.
 
 Repeat `--screen-command` for the operations permitted by the latest request. For a modify-only screen with search, edit, save and cancel, use:
 
 ```text
-python <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --style-reference-csharp <same-project-screen.cs> --screen-command search --screen-command edit --screen-command save --screen-command clear
+python <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --style-reference-csharp <approved-comparison-screen.cs> --screen-command search --screen-command edit --screen-command save --screen-command clear
 ```
 
 `print` is also supported as an explicit screen operation.

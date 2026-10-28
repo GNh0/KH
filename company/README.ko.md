@@ -83,7 +83,7 @@ python -B "C:\CompanyTools\company-dev\plugins\company-dev\scripts\company_check
 파일 경로는 Git index, 내용은 현재 작업 트리를 기준으로 한다. 커밋된 snapshot만 내보내는 기능이나 추적 파일 내용의 개인정보 검사를 대신하지 않는다.
 
 ```powershell
-python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.2.1.zip"
+python -B scripts/build_company_bundle.py --output "C:\CompanyTools\releases\company-dev-1.2.2.zip"
 ```
 
 ZIP에는 실행에 필요한 공통 소스가 함께 들어 있다. 이후 회사 소유 원본으로 복사해 유지보수할 수 있고, 직원 PC에서 원래 KH 저장소를 조회하거나 Git 인증을 할 필요가 없다. 배포 버전은 회사 manifest에서 별도로 관리한다.

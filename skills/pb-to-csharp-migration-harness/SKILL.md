@@ -7,6 +7,8 @@ description: Analyze PowerBuilder/PBL/DataWindow sources or migrate them to C# W
 
 First read the exact PBL/object, base classes, linked DataWindows, and actual event/SQL/report relationships. If only exports are supplied, stay within their evidence scope; do not claim analysis of an unread complete PBL.
 
+For generated/edited PB, C# or SQL, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): inspect actual comparison-project style before writing, then re-read and audit the final code. Analysis/extraction alone does not require generating code.
+
 Put temporary exports, probes, and conversion output outside the source project. Supply an explicit output path for ORCA conversion and follow [workspace files](../work-execution/references/workspace-files.md) for auxiliary files.
 
 - For PBL extraction, use the bundled `scripts/export_pbl.py` (automatic runtime selection) and read [ORCA execution](references/orca.md). An external PblScripter installation is unnecessary; a compatible installed PB/ORCA runtime is still required.

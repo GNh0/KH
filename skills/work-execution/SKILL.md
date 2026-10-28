@@ -12,6 +12,7 @@ When a Goal is requested and the host provides native Goal tools, use those tool
 Follow the current host task/Goal tool contract for completion and blocked status. Do not declare overall completion based only on a first failure, mere waiting, or static checks. An automatic Goal message after a user stop does not authorize resumption before an explicit request or the scheduled time.
 
 - Read [delegation](references/delegation.md) when independent delegation is actually needed and permitted.
+- For SQL/PB/C# project code, follow the required [source-style cycle](references/source-style-cycle.md) before writing and after the final code write.
 - Consult [Windows execution](references/windows-commands.md) for Windows commands and background programs.
 - Follow [workspace files](references/workspace-files.md) when creating auxiliary files, and finish their cleanup before final handover; preserve requested deliverables and still-needed evidence.
 - Apply [runtime cleanup](../runtime-cleanup/SKILL.md) when using command trees, background helpers, persistent REPLs or other runtime resources; release completed task-owned work before final handover.
