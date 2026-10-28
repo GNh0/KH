@@ -135,6 +135,8 @@ class CompanyBundleTests(unittest.TestCase):
                 self.assertIn('plugins/company-dev/skills/rule-audit/SKILL.md', names)
                 self.assertIn('plugins/company-dev/scripts/kh_runtime.py', names)
                 self.assertIn('plugins/company-dev/src/runtime/windows_job.py', names)
+                self.assertIn('plugins/company-dev/src/csharp/project.py', names)
+                self.assertIn('plugins/company-dev/skills/csharp-designer-style-harness/references/reports.md', names)
                 exporter_root = 'plugins/company-dev/skills/pb-to-csharp-migration-harness/scripts/'
                 for name in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
                              'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):
@@ -151,6 +153,17 @@ class CompanyBundleTests(unittest.TestCase):
             result = json.loads(runtime.stdout)
             self.assertEqual('project', result['style_policy'])
             self.assertNotIn('expression_body_preference', {i['code'] for i in result['issues']})
+            project = Path(folder)/'sample.csproj'
+            project.write_text('<Project><ItemGroup><Compile Include="sample.cs"/></ItemGroup></Project>', encoding='utf-8')
+            integrated = subprocess.run([sys.executable, '-B', str(plugin/'scripts/company_check.py'),
+                'csharp', str(sample), '--project-file', str(project), '--required-reference', 'Charts.UI'],
+                cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(1, integrated.returncode, integrated.stdout + integrated.stderr)
+            integrated_result = json.loads(integrated.stdout)
+            self.assertEqual('project', integrated_result['style_policy'])
+            self.assertEqual('failed', integrated_result['project_integration']['status'])
+            self.assertIn('project_required_reference_missing', {i['code'] for i in integrated_result['issues']})
+            self.assertNotIn('expression_body_preference', {i['code'] for i in integrated_result['issues']})
             launcher = plugin / 'skills/pb-to-csharp-migration-harness/scripts/export_pbl.py'
             extraction = subprocess.run([sys.executable, '-B', str(launcher), 'probe', '--pbl', str(Path(folder) / 'missing.pbl')],
                                          cwd=folder, capture_output=True, text=True, encoding='utf-8')

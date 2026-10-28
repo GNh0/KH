@@ -9,6 +9,42 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CliTests(unittest.TestCase):
+    def test_actual_project_and_companions_are_checked_from_another_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, designer, resource = (root/name for name in ('Screen.cs', 'Screen.Designer.cs', 'Screen.resx'))
+            source.write_text('partial class Screen {}', encoding='utf-8')
+            designer.write_text('partial class Screen { void InitializeComponent() {} }', encoding='utf-8')
+            resource.write_text('<root/>', encoding='utf-8')
+            project = root/'Screen.csproj'
+            project.write_text('<Project><ItemGroup><Compile Include="Screen.cs"/></ItemGroup></Project>', encoding='utf-8')
+            before = {path: path.read_bytes() for path in root.iterdir()}
+            for command, selected, companion_flag, companion in (
+                    ('csharp', source, '--designer', designer),
+                    ('designer', designer, '--code-behind', source)):
+                with self.subTest(command=command):
+                    run = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), command,
+                        str(selected), companion_flag, str(companion), '--project-file', str(project),
+                        '--project-item', str(resource), '--required-reference', 'Charts.UI'],
+                        cwd=folder, capture_output=True, text=True, encoding='utf-8')
+                    output = json.loads(run.stdout)
+                    self.assertEqual(1, run.returncode, run.stderr)
+                    self.assertEqual('failed', output['project_integration']['status'])
+                    self.assertEqual('needs_review', output['review_status'])
+                    self.assertEqual(3, len(output['project_integration']['files']))
+                    self.assertLessEqual({'project_item_not_registered', 'project_required_reference_missing'},
+                                         {issue['code'] for issue in output['issues']})
+            self.assertEqual(before, {path: path.read_bytes() for path in root.iterdir()})
+
+    def test_project_options_require_the_actual_project_input(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder)/'Screen.cs'
+            source.write_text('class Screen {}', encoding='utf-8')
+            run = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'csharp', str(source),
+                '--required-reference', 'Charts.UI'], cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(1, run.returncode)
+            self.assertEqual('input_error', json.loads(run.stdout)['issues'][0]['code'])
+
     def test_command_style_and_operation_scope_are_available_without_mutation(self):
         with tempfile.TemporaryDirectory() as folder:
             source, reference = Path(folder)/'screen.cs', Path(folder)/'project.cs'

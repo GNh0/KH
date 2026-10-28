@@ -39,7 +39,7 @@ Calculate an overall ratio from the required numerator total and denominator tot
 
 ## Existing reports and printing
 
-For a reused report, trace its definition, data binding and print helper against the requested output. Keep working behavior and add code only for an identified gap or dependency. Check the final output relevant to the change.
+For report creation or changes to definitions, preview or print actions, use [the report workflow](reports.md). Trace the actual definition, data binding and print helper separately from screen query/layout ownership.
 
 ## Exceptions and final verification
 

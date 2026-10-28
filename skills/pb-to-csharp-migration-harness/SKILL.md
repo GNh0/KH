@@ -12,9 +12,9 @@ Put temporary exports, probes, and conversion output outside the source project.
 - For PBL extraction, use the bundled `scripts/export_pbl.py` (automatic runtime selection) and read [ORCA execution](references/orca.md). An external PblScripter installation is unnecessary; a compatible installed PB/ORCA runtime is still required.
 - For UI/DataWindow mapping, read [DataWindows and screens](references/datawindow.md). Apply the [user's HTML rules](../csharp-designer-style-harness/references/grid-layout.md) to grid defaults and editing properties.
 - Use [migration validation](references/validation.md) for migration plans and generated results.
-- For SQL work, use [SELECT/SAVE connections](references/sql.md) and the SQL skill's style.
+- For generated/edited SQL, load the [SQL entrypoint](../sql-formatting/SKILL.md) and [SELECT/SAVE connections](references/sql.md).
 - Apply the [scoped profile](references/default-profile.json) for existing user style. Read KH maintenance guidance only when extraction of a new profile is requested.
-- When generating/editing C#, also read the [user's coding style](../csharp-designer-style-harness/references/coding-style.md). Missing or unfinished implementations in reference screens do not weaken agreed C# rules.
+- When generating/editing C# or reports, load the [C# entrypoint](../csharp-designer-style-harness/SKILL.md) and its references for the current artifact. A coding-style excerpt alone does not cover Designer, report or actual-project integration. Missing/unfinished reference implementations do not weaken agreed rules.
 
 Distinguish raw key components from display keys; do not fix particular ORD/PUR/REC names or component counts. Trace input/query/protection/save/output flow through actual source. Do not require complete migration documents or C# generation for simple SELECT extraction.
 
