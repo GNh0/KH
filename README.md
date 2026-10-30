@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH 3.2.3 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH 3.3.0 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 

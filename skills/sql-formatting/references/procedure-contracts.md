@@ -1,8 +1,8 @@
-# Target procedure and save contracts
+# SELECT/SAVE procedure contracts
 
-Use this for generating, migrating or correcting SELECT/SAVE procedures. Ordinary formatting of supplied SQL preserves its existing behavior and does not trigger a schema redesign.
+Use this for generating, migrating or correcting SELECT/SAVE procedures, including SELECT-only reports. All procedure work needs the relevant mode/result and parameter/output sections; XML/save-only sections apply when that path uses them. Ordinary formatting preserves existing behavior and does not trigger a schema redesign.
 
-Read the current caller, XML generator, target table keys/types and complete approved same-project procedures for the affected operations. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies; choose by actual responsibility, not just a similar name or shared query data. Apply their recurring structure and syntax within the current agreed style while adapting the actual target contract. Keep the original business behavior within the latest requested scope. Retain requested commented integrations as their full original bodies rather than activating them, replacing them with placeholder values, or reducing them to explanatory comments.
+Read the current caller, target keys/types and complete approved procedures for the affected operations; inspect the XML generator only when the contract uses XML. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies, using actual responsibility rather than similar names. Apply the selected style while preserving target behavior. Retain requested commented integrations as their full original bodies rather than activating them or replacing them with placeholders.
 
 ## Save boundary and reuse
 
@@ -10,9 +10,9 @@ Trace the requested operation through the actual caller and relevant complete pr
 
 ## Modes and multiple rows
 
-Match actual edit-mode strings and XML Added/Modified/Deleted states to SP branches. A target that sends EDIT must not be implemented only as MOD. Preserve the established `sp_XML_LOG_SAVE` integration when the target pattern/request requires it.
-
 Give each operation a coherent dispatch branch, following the target's IF/ELSE IF structure. Keep that operation's ordered result sets together; three returned tables do not require three independent conditions repeating the same mode. Conversely, when modes use different source keys, JOIN paths or exclusions, write their queries in their own branches instead of combining them through mode-dependent OR conditions and conditional JOINs merely to share text. Shared validation or preprocessing remains valid when it has a real responsibility; do not mechanically merge it into dispatch or change independent phases into ELSE IF. Trace every mode's path and result-table order against its caller.
+
+For save/XML flows, match actual edit-mode strings and Added/Modified/Deleted states to SP branches. A target that sends EDIT must not be implemented only as MOD. Preserve `sp_XML_LOG_SAVE` where the target contract requires it.
 
 For composite keys, inspect the target's existing parser/function and its complete same-project usage. Follow that form to split the key and JOIN on the typed components and full business key. Do not reconstruct table keys by concatenating columns in a JOIN, hand-parse an already supported key, or introduce a separate mode-driven scalar-variable preprocessing layer just to simplify writing the query. Preserve actual component types, NULL behavior and cardinality; function names and component counts are not universal.
 

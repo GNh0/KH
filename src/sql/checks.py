@@ -6,6 +6,7 @@ from .compare import compare_sql
 from .lexer import _analyze_sql_integrity, _masked_sql, _scan_sql_tokens
 from .layout import _style_lint
 from .delta import _full_replace_records
+from .dispatch import review_dispatch
 
 
 def _where_subqueries(source: str) -> Counter[str]:
@@ -140,8 +141,11 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
         result.checked.append('recognizable WHERE EXISTS/NOT EXISTS/IN query counts')
         result.not_checked.append('predicate-subquery necessity, general clause grammar and JOIN-rewrite equivalence')
     result.issues.extend(_review_generation_choices(candidate, original))
+    result.issues.extend(review_dispatch(candidate, original))
     result.checked.append('explicit added locking hints and aliased typed-empty output fields')
+    result.checked.append('supported repeated enclosing scalar-mode guards with no observed mode assignment')
     result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')
+    result.not_checked.append('sibling dispatch-phase ownership, jumps/loop re-entry, complex or unbraced predicates, case-sensitive parameter binding and complete mode-to-result-set behavior')
     result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
     return result
 

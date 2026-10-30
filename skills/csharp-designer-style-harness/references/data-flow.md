@@ -49,7 +49,7 @@ Bind lookup/popup display names and persisted codes according to the actual targ
 
 In FocusedRowChanged, apply the existing edit-mode row-movement guard before a negative/filter-row early return when that return could bypass protection. Preserve tab/input/detail data during requery according to the current request. Use the target's `Usr_ControlsProtect` or equivalent protection path for edit-state colors and availability; do not simulate it with arbitrary Designer colors.
 
-When creating or changing SAVE procedures, also apply the [SQL save contracts](../../sql-formatting/references/save-contracts.md). A full screen migration needs the target's actual caller/XML/SP chain; compilation and a similarly named foreign procedure do not establish that chain.
+When creating or changing SELECT/SAVE procedures, enter the [SQL workflow](../../sql-formatting/SKILL.md), including its procedure contracts. A full screen migration needs the target's actual caller/XML/SP chain; compilation and a similarly named foreign procedure do not establish that chain.
 
 ## Preserving original integrations as comments
 
