@@ -1,6 +1,8 @@
 # SQL source and procedure contracts
 
-Read the actual caller, XML generator, target schema and complete approved project procedures for the affected operations before changing a SELECT/SAVE contract. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies; choose by actual responsibility, not just a similar name or shared query data. Apply their recurring structure and syntax within the selected style. Match input types, lengths, defaults, output names and target keys from the actual target.
+Read the actual caller, target schema and complete approved procedures for the affected operations, including SELECT-only reports. Inspect XML generation only when that contract uses XML. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies by responsibility, not just names. Apply selected style while taking input types, lengths, defaults, output names and keys from the actual target.
+
+Keep each operation's ordered result sets in its coherent dispatch block. A mode already established by an enclosing branch does not need rechecking just to return another table. Preserve distinct business conditions and genuinely shared validation/preprocessing; inspect the complete mode/result-set path against its caller rather than classifying every separate IF as wrong.
 
 Preserve batch keys as a set through XML parsing and updates/deletes. Distinguish a display key from raw key components, persisted sequence numbers from XML row order, and single-header data from multiple selected masters. Trace Added/Modified/Deleted states and the actual caller mode strings to procedure branches.
 

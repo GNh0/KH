@@ -13,17 +13,13 @@ For C# body work, first read the relevant [coding-style](references/coding-style
 
 ## Working basis
 
-1. Use the latest request and agreed style. Preserve current user edits and keep the change scoped. A conflicting sample does not weaken an agreed rule.
-2. Read the actual target and complete relevant event/caller bodies before writing. Use the user's named comparison project, otherwise an approved comparable other project; previously generated or user-rejected code is not an approved style reference. Match return handling, event responsibilities, data timing and initialization/reset owners. For save changes, trace selected rows, row states/XML, SP calls and success/failure refresh paths; preserve query and report behavior separately. Migration source defines business behavior; target source defines available APIs. A style example from another project does not establish target API compatibility. Matching names or available APIs alone does not establish the intended workflow.
-3. Before adding code/settings, compare the requested behavior, actual data/result types and what the current path already does. Identify the concrete gap or verified dependency the addition resolves. Preserve a path that already meets the request; a feature name or available API alone does not establish a need. Resolve uncertain necessity from actual source/API behavior first.
+1. Apply the latest request and agreed style; preserve current user edits. Conflicting samples do not create exceptions.
+2. Reference programs establish style; the actual target establishes APIs and behavior. Read complete relevant caller/callee bodies for return handling, data timing and initialization/reset ownership. For save changes, trace selected rows, XML/state, SP calls and failure/success refresh together. Preserve query and report behavior separately.
+3. Add code/settings only for an identified missing behavior or verified dependency after checking what the current path already does. A feature name, available API or familiar sample does not establish necessity.
 
-Keep these decisions in the working context; no intake form or audit file is required.
+For any control or RepositoryItem creation/change, including ColumnEdit, first read [user controls](references/user-controls.md), actual Designer/library source and shared initialization. Preserve effective defaults through direct properties, callbacks and helpers. Distinguish display from input behavior; a data type/display request alone does not justify an editor or override.
 
-For any control or RepositoryItem creation/change, including a new ColumnEdit assignment, read [user controls](references/user-controls.md) and its actual Designer, library and shared initialization before writing. Preserve effective defaults through properties, callbacks and helpers alike. Determine display versus input behavior first; a data type or display request alone does not justify an editor or override.
-
-Keep required property changes at their actual control/member scope. Column settings do not authorize view-wide Appearance changes or shared-default resets; inspect the relevant initialization and layout-loading paths.
-
-For labels and single-line inputs added or edited, match height and sizing constraints to similar controls in the actual screen. Inherit the selected control's initialized label font, H/V alignment and UseTextOptions; avoid arbitrary overrides. Read a self-property Default fallback from that source rather than imposing one global alignment. Apply needed role/request exceptions with their actual basis. Width may grow for content. Resolve differences before completion.
+Keep changes at the requested member scope: column settings do not authorize view-wide Appearance or shared-default resets. For labels/single-line inputs, match height and constraints to similar actual-screen controls. Inherit initialized font, H/V alignment and UseTextOptions, including the source's Default fallback; do not impose a global alignment. Width may grow for content. Establish actual role/request exceptions from source and inspect runtime/layout overwrite paths.
 
 ## Read for the current change
 
@@ -31,9 +27,7 @@ Read the needed sections, not every reference. Inspect relevant source bodies co
 
 | Change | Reference |
 | --- | --- |
-| C# syntax, names, events and DB-call style | [Coding style](references/coding-style.md) |
-| Control selection, defaults, dimensions and initialization | [User controls](references/user-controls.md) |
-| Layout, import preservation, Designer/resx and slides | [Designer](references/designer.md); for grids, [HTML defaults](references/grid-layout.md) |
+| Grid layout, Appearance and editor defaults | [HTML defaults](references/grid-layout.md) |
 | Query/save, XML, row handling, selection and binding | [Data and event contracts](references/data-flow.md) |
 | Report creation, data/preview/printing, bands and project integration | [Reports](references/reports.md) |
 | Monitoring, repeated queries or rebinding | [Screen behavior](references/screen-behavior.md) |
@@ -41,11 +35,9 @@ Read the needed sections, not every reference. Inspect relevant source bodies co
 
 Use the [necessity criteria](../work-execution/references/preferences.md) for LINQ, intermediate tables and builds. Keep auxiliary files outside project/source trees using [workspace files](../work-execution/references/workspace-files.md).
 
-Before completion, compare each changed C# body and Designer block with the agreed style and relevant project source. Correct unsupported differences; justify necessary departures from actual behavior or API constraints and preserve the surrounding style. Reading the references alone does not complete this comparison.
+When scope moves from analysis to implementation or adds SQL/report work, enter that artifact's workflow before writing it. An earlier PB analysis or C# style excerpt does not cover the new responsibility.
 
-Reassess these routes when the request changes from analysis to implementation or adds a report, SQL or another artifact. Load that domain's entrypoint and needed reference before writing it; an earlier PB analysis or C# style read does not cover a later report implementation.
-
-Static checks cover only their reported items. Use actual comparison inputs, resolve relevant warnings and inspect `not_checked`; a pass or build is not project-style verification. New imports/full style corrections also need standalone inspection so unchanged foreign mistakes are not hidden.
+After the final write, compare changed C# bodies and Designer blocks with the selected sources through the source-style cycle and shared rule audit. Resolve unsupported differences, checker warnings and `not_checked` from actual source/requirements. A read, pass or build is not style verification. Imports/full style corrections need standalone inspection too, so differential suppression does not hide retained mistakes.
 
 With snippets only, perform the clear scoped edit. Mark unavailable project APIs, inherited paths and registration as unverified; seek missing information only when it determines the implementation. Do not substitute another project's APIs for missing target evidence.
 
