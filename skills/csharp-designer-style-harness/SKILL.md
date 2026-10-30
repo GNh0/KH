@@ -7,7 +7,7 @@ description: Generate, modify, or review WinForms/DevExpress C#, Designer and Xt
 
 Apply to the actual target project. Do not impose WinForms architecture on MAUI/PDA or other C# projects.
 
-Before writing and after the final write, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): inspect actual comparison-project code first, then re-read and audit the finished code against it.
+Complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): before editing, inspect and briefly identify the actual reference program/methods for each changed responsibility and their complete relevant call path; after writing, audit the final production code against them. A file opening or unrelated example does not establish that comparison.
 
 For C# body work, first read the relevant [coding-style](references/coding-style.md) sections. For Designer creation/edits, first read [Designer](references/designer.md). These are the baseline routes; then select the task-specific references below. Loading this entrypoint alone does not load those rules.
 
