@@ -11,11 +11,11 @@ For project code generation/edits, complete the required [source-style cycle](..
 
 ## Procedure work: SELECT and SAVE
 
-Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Derive schema, types, keys and behavior from the actual target.
+Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Use the matching [source-based patterns](references/procedure-patterns.md) to choose the query/save structure, then verify it against those complete procedures. Derive schema, types, keys and behavior from the actual target. When the request adds a caller or operation, cover the added responsibility before drafting it.
 
 Keep one operation's ordered result sets in its owning dispatch block. Do not put additional SELECTs behind a second check of the mode predicate already established by that branch, or append a duplicate mode branch just to return another table. Preserve genuinely different business conditions and required shared phases.
 
-After all edits, inspect the complete mode-to-result-set path against the caller's table order and the selected procedures. Resolve unnecessary branches and unsupported departures before completion. Layout, a source-read log and a successful sample do not establish this contract.
+Before changing the target file or executing changed procedure SQL, including rollback tests, compare the exact draft with the selected procedures and each requested rule, including existing code the user explicitly asked to correct. Run the [standalone SQL check](references/checks.md) when available and resolve relevant findings against that draft; preservation success or no errors does not clear `needs_review`. For filters and state changes, establish both qualifying and excluded cases. After the final edit, verify the caller's mode/result-table order and exercise both cases where execution is authorized. Recheck the applied body when deploying.
 
 ## Layout and preservation
 
@@ -25,10 +25,10 @@ Align actual text columns with spaces, including within lists; equal tab counts 
 
 For cleanup of supplied SQL alone, deliver the completed SQL directly. Do not rewrite SQL or connect to a database for simple comparison or explanation questions. Preserve semantics, JOIN types/order, conditions, literals, Korean text, existing comments, and output columns/types. SQL generation and database execution are separate request scopes.
 
-Read [checker usage](references/checks.md) only when semantic comparison of a cleanup or checks of complex nested JOINs would help. For changes that could alter semantics, such as replacing a function with a JOIN, check actual definitions, NULL behavior, duplicates, row counts, and performance. The checker does not replace database execution.
+For other SQL work, use the [checker](references/checks.md) when it adds evidence. For changes that could alter semantics, such as replacing a function with a JOIN, check actual definitions, NULL behavior, duplicates, row counts, and performance. The checker does not replace database execution.
 
 Keep temporary query files and verification output outside the source project; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
 
-Do not habitually add unnecessary CTEs, intermediate tables, or WHERE/SELECT subqueries. Apply [preferences and exceptions](../work-execution/references/preferences.md) without mechanically substituting JOINs that change semantics. Return the requested complete SQL or exact replacement block.
+Use the approved JOIN-based form for lookups, aggregation and inclusion/exclusion in both SELECT and SAVE. Keep query sources in FROM/JOIN rather than adding SELECT/WHERE subqueries or copying row values into scalar variables for convenience. Preserve required IF EXISTS validations and necessary key/output variables. Apply [preferences and exceptions](../work-execution/references/preferences.md) when an actual requirement makes the preferred form unsuitable; verify full keys, NULLs and row cardinality before rewriting. Return the requested complete SQL or exact replacement block.
 
 Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

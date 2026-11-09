@@ -6,7 +6,11 @@ Read the current caller, target keys/types and complete approved procedures for 
 
 ## Save boundary and reuse
 
+When several files define the same procedure, identify the source used by the apply path and any maintained snapshots. Compare their relevant bodies separately and reconcile managed copies within the task scope.
+
 Trace the requested operation through the actual caller and relevant complete procedure bodies. Compare what the existing path already handles with the concrete gap the change must resolve. Select the simplest sufficient implementation that follows the agreed style and preserves input cardinality, full keys, related writes, validation and transaction/error ownership. An available API or familiar technique alone does not establish a need for added code. Justify necessary differences from actual behavior, API constraints or measured performance; classify neither necessity nor correctness from a technique's name or shape. Resolve material omissions from truncated output.
+
+Keep XML/selected row values in their rowset and consume them through the approved INSERT SELECT, UPDATE FROM and DELETE JOIN flow. Do not first copy available row fields into a list of scalar variables or normalize a staging table merely to prepare the following write. Apply required value expressions at their owning write when that preserves the contract. Variables for real numbering, single-document outputs or required API calls, and staging updates that record generated keys, remain valid. Compare responsibilities with the [source-based patterns](procedure-patterns.md), not variable counts or a blanket ban on staging UPDATEs.
 
 ## Modes and multiple rows
 
@@ -26,6 +30,8 @@ Assign persisted sequence numbers within the real target key scope. XML row orde
 
 For upstream quantity checks, use the full linked key and the correct unit. On EDIT, exclude the current document's old contribution from already-processed totals before comparing proposed values. Inspect Added/Modified/Deleted together and aggregate duplicate linked keys in the proposed batch. Preserve restrictions already required by the source; do not invent new zero/count/required-value rules or duplicate SP-owned validation in C#.
 
+For eligibility and state transitions, separate the current row's inclusion rule, prerequisites on linked rows, and any status updates. Derive expected included and excluded cases for each applicable rule from the request. Use actual keys to test those cases, and keep sample identifiers out of the business predicate. If several prerequisite rows can match, verify that the result preserves the caller's expected row count per key.
+
 ## Parameters, outputs and dates
 
 Use the approved parameter template: in this user's current screen procedures WORKTYPE and ORGDIV are required, while ordinary optional parameters generally default to NULL. Apply actual target types/lengths instead of copied literal defaults. Match CUSTCD/CUSTNM to the real master schema. Preserve Unicode when meaningful, including XML and actual password/encrypted-value contracts; do not batch-convert every NVARCHAR to VARCHAR.
@@ -42,4 +48,4 @@ Distinguish application/request dates from result/inspection dates. Trace which 
 
 If the request assigns a save timestamp to GETDATE(), generate it in the SP. Do not add a timestamp input/OUTPUT solely to patch the grid when the caller's established success path requeries. Keep outputs that the actual caller needs.
 
-At completion compare the actual caller, XML shape, SP signature/branches, target keys, related writes, error/transaction path and returned fields with the requested operation and approved structure. The optional checker reviews lexical/layout patterns, new locking hints and typed empty output aliases; it does not prove implementation necessity, schema compatibility, correct numbering, concurrency, business validation or actual DB deployment.
+At completion compare the actual caller, XML shape, SP signature/branches, target keys, related writes, error/transaction path and returned fields with the requested operation and approved structure. Use the [SQL checker](checks.md) for supported source patterns. Verify schema compatibility, numbering, concurrency, business rules and deployment through the relevant execution path.
