@@ -166,5 +166,119 @@ class WhereSubqueryReviewTests(unittest.TestCase):
         self.assertEqual([], self.findings(source, original=before))
 
 
+class CteReviewTests(unittest.TestCase):
+    def findings(self, source, **kwargs):
+        return [issue for issue in check_sql(source, check_style=False, **kwargs).issues
+                if issue.code == 'cte_preference']
+
+    def test_cte_in_procedure_branch_is_reported_at_its_declaration(self):
+        source = '''IF @WORKTYPE = 'LIST'
+BEGIN
+    ;WITH QTY AS (
+        SELECT A.ID, SUM(A.QTY) AS QTY FROM RESULTS A GROUP BY A.ID
+    )
+    SELECT A.ID, A.QTY FROM QTY A;
+END'''
+        issue, = self.findings(source)
+        self.assertEqual(('warning', 3, 'QTY'), (issue.severity, issue.line, issue.details['cte']))
+
+    def test_added_declaration_in_existing_cte_list_is_reviewed(self):
+        original = 'WITH PLAN AS (SELECT A.ID FROM PLANS A) SELECT A.ID FROM PLAN A;'
+        candidate = '''WITH [Plan] AS (SELECT A.ID FROM PLANS A),
+              [Ready] (ID) AS (SELECT A.ID FROM [Plan] A)
+        SELECT A.ID FROM [Ready] A;'''
+        self.assertEqual(['[Ready]'], [issue.details['cte'] for issue in self.findings(candidate, original=original)])
+        self.assertEqual([], self.findings(candidate, check_preferences=False))
+
+    def test_table_hints_and_protected_text_are_not_ctes(self):
+        source = '''SELECT 'WITH S AS (SELECT 1)', [WITH] FROM ITEMS A WITH (NOLOCK)
+        /* WITH S AS (SELECT 1) */
+        FOR XML PATH('item');'''
+        self.assertEqual([], self.findings(source))
+
+
+class ExpressionSubqueryReviewTests(unittest.TestCase):
+    def findings(self, source, **kwargs):
+        return [issue for issue in check_sql(source, check_style=False, **kwargs).issues
+                if issue.code == 'subquery_preference']
+
+    def test_select_output_and_variable_assignment_queries_have_locations(self):
+        source = '''SELECT A.ID
+     , (SELECT T.NAME FROM ITEMS T WHERE T.ID = A.ID) AS NAME
+FROM ORDERS A;
+SELECT @ITEM = (
+    SELECT T.ITEM FROM MACHINES T WHERE T.ID = @ID
+);'''
+        self.assertEqual([('SELECT', 2), ('SELECT', 5)],
+                         [(i.details['clause'], i.line) for i in self.findings(source)])
+
+    def test_scalar_where_and_case_expressions_are_reviewed(self):
+        source = '''SELECT CASE WHEN A.ACTIVE = 1 THEN 0
+                   ELSE (SELECT MAX(T.QTY) FROM RESULTS T) END AS QTY
+FROM ITEMS A
+WHERE (A.QTY > ISNULL((SELECT SUM(T.QTY) FROM PLANS T), 0))
+  AND A.ID = ANY (SELECT T.ID FROM RESULTS T);'''
+        self.assertEqual(['SELECT', 'WHERE', 'WHERE'],
+                         [i.details['clause'] for i in self.findings(source)])
+
+    def test_nested_queries_keep_their_own_clause(self):
+        source = '''SELECT A.ID FROM (
+    SELECT T.ID, (SELECT T1.NAME FROM NAMES T1 WHERE T1.ID = T.ID) AS NAME
+    FROM ITEMS T
+) A WHERE A.QTY > (SELECT MAX(T.QTY) FROM PLANS T);'''
+        self.assertEqual(['SELECT', 'WHERE'], [i.details['clause'] for i in self.findings(source)])
+
+    def test_join_sources_save_validations_and_protected_text_are_not_flagged(self):
+        source = '''IF EXISTS (SELECT 1 FROM @TMP A JOIN ITEMS B ON A.ID = B.ID)
+BEGIN
+    SELECT A.ID, 'SELECT (SELECT 1)', [SELECT], "WHERE"
+    FROM (SELECT T.ID FROM ITEMS T) A
+    OUTER APPLY (SELECT MAX(T.QTY) AS QTY FROM PLANS T WHERE T.ID = A.ID) B
+    LEFT JOIN RESULTS C ON C.ID = A.ID AND C.QTY = (SELECT MAX(T.QTY) FROM PLANS T)
+    WHERE A.ID IN (1, 2); -- (SELECT 1)
+END'''
+        self.assertEqual([], self.findings(source))
+
+    def test_existing_expressions_and_disabled_preferences_are_preserved(self):
+        before = 'SELECT A.ID, (SELECT T.NAME FROM ITEMS T WHERE T.ID = A.ID) AS NAME FROM ORDERS A;'
+        self.assertEqual([], self.findings(before, original=before))
+        self.assertEqual([], self.findings(before, check_preferences=False))
+        changed = before.replace('T.NAME', 'T.CODE')
+        self.assertEqual(1, len(self.findings(changed, original=before)))
+
+    def test_nested_select_has_its_own_leading_comma_check(self):
+        good = '''SELECT A.ID
+     , (SELECT T.CODE
+             , T.NAME
+        FROM ITEMS T
+        WHERE T.ID = A.ID) AS ITEM
+FROM ORDERS A;'''
+        codes = lambda text: [i.code for i in check_sql(text, check_preferences=False).issues]
+        self.assertNotIn('select_column_missing_leading_comma', codes(good))
+        bad_inner = good.replace('             , T.NAME', '               T.NAME')
+        self.assertIn('select_column_missing_leading_comma', codes(bad_inner))
+        bad_outer = good.replace('FROM ORDERS A;', '       A.QTY\nFROM ORDERS A;')
+        self.assertIn('select_column_missing_leading_comma', codes(bad_outer))
+
+    def test_leading_comma_review_preserves_line_ending_support(self):
+        for ending in ['\n', '\r\n', '\r']:
+            with self.subTest(ending=repr(ending)):
+                source = ending.join(['SELECT A.ID', '       A.NAME', 'FROM ITEMS A;'])
+                self.assertIn('select_column_missing_leading_comma',
+                              [i.code for i in check_sql(source).issues])
+
+    def test_review_locations_match_each_supported_line_ending(self):
+        for ending in ['\n', '\r\n', '\r']:
+            with self.subTest(ending=repr(ending)):
+                source = ending.join(['SELECT A.ID',
+                    '     , (SELECT T.NAME FROM ITEMS T) AS NAME FROM ORDERS A;',
+                    'WITH TOTAL AS (SELECT SUM(T.QTY) AS QTY FROM RESULTS T)',
+                    'SELECT A.QTY FROM TOTAL A;'])
+                result = check_sql(source, check_style=False)
+                self.assertEqual([('subquery_preference', 2), ('cte_preference', 3)],
+                    sorted([(i.code, i.line) for i in result.issues
+                            if i.code in {'subquery_preference', 'cte_preference'}], key=lambda item: item[1] or 0))
+
+
 if __name__ == '__main__':
     unittest.main()

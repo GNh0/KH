@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 from .lexer import (
     SqlFormattingIssue,
@@ -1232,25 +1233,48 @@ def _check_procedure_parameter_layout(sql: str) -> List[SqlFormattingIssue]:
 
 def _check_select_leading_commas(sql: str) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
-    lines = _masked_sql(sql).splitlines()
     raw_lines = sql.splitlines()
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if not re.match(r"^\s*SELECT\b", line, flags=re.IGNORECASE):
-            index += 1
+    line_starts: List[int] = []
+    offset = 0
+    for part in sql.splitlines(keepends=True):
+        line_starts.append(offset)
+        offset += len(part)
+    masked = _masked_sql(sql)
+    lines = [masked[start:start + len(line)] for start, line in zip(line_starts, raw_lines)]
+    code = [token for token in _scan_sql_tokens(sql)[0]
+            if token.kind not in {'line_comment', 'block_comment'}]
+    token_lines = [bisect_right(line_starts, token.start) - 1 for token in code]
+    by_line: Dict[int, List[_SqlToken]] = {}
+    for token, token_line in zip(code, token_lines):
+        by_line.setdefault(token_line, []).append(token)
+    for position, token in enumerate(code):
+        if token.kind != 'word' or token.normalized != 'SELECT':
             continue
-        select_indent = len(line) - len(line.lstrip(" "))
+        start_line = token_lines[position]
+        select_indent = token.start - line_starts[start_line]
+        line = lines[start_line][select_indent:]
+        if any(item.start > token.start and item.depth == token.depth and
+               ((item.kind == 'word' and item.normalized in {'FROM', 'INTO', 'UNION'}) or item.text == ';')
+               for item in by_line.get(start_line, [])):
+            continue
         column_seen = bool(re.search(r"\bSELECT\s+\S+", line, flags=re.IGNORECASE))
-        index += 1
+        index = start_line + 1
         while index < len(lines):
+            line_tokens = by_line.get(index, [])
+            if line_tokens and line_tokens[0].depth < token.depth:
+                break
+            # Nested queries have their own SELECT-list audit below. Their
+            # columns and clauses are not columns of the enclosing SELECT.
+            if line_tokens and line_tokens[0].depth > token.depth:
+                index += 1
+                continue
             candidate = lines[index]
             stripped = candidate.strip()
             if not stripped:
                 index += 1
                 continue
             if re.match(
-                r"^(INTO|FROM|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|UNION|END|ELSE)\b",
+                r"^(SELECT|INTO|FROM|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|UNION|END|ELSE)\b",
                 stripped,
                 flags=re.IGNORECASE,
             ):
