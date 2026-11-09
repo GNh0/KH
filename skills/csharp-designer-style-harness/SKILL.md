@@ -5,6 +5,8 @@ description: Generate, modify, or review WinForms/DevExpress C#, Designer and Xt
 
 # C# and Designer
 
+For substantial implementation coordinated in this session, use the [KH worker and review flow](../work-execution/references/delegation.md). An assigned C# worker executes its scope and returns evidence to the controller.
+
 Apply to the actual target project. Do not impose WinForms architecture on MAUI/PDA or other C# projects.
 
 Complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): before editing, inspect and briefly identify the actual reference program/methods for each changed responsibility and their complete relevant call path; after writing, audit the final production code against them. A file opening or unrelated example does not establish that comparison.

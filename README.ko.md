@@ -2,7 +2,7 @@
 
 **Claude와 Codex에서 사용하는 SQL·C#/Designer·PowerBuilder 개발 스킬.**
 
-KH 3.3.0은 스킬 12개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
+KH는 스킬 12개, 역할별 에이전트 4개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
 
 [English](README.md) · [스킬](#스킬) · [로컬 검사](#선택형-로컬-검사) · [개발 검사](docs/development.md)
 
@@ -69,6 +69,8 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 | [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH 패키지·검사기·프로필·요청한 소스 로그 감사 |
 
 ## 작업 방식
+
+여러 단계가 필요한 SQL·C#/Designer·PB 구현은 [작업 에이전트와 독립 검수 흐름](skills/work-execution/references/delegation.md)을 사용합니다. 메인 에이전트가 담당 작업 에이전트에 원본·범위·요구사항을 전달하고, 실제 변경분을 [검수 에이전트](agents/kh-rule-auditor.md)에 전달합니다. 확인된 위반은 담당 작업 에이전트가 수정한 뒤 재검수합니다. Claude Code는 플러그인의 에이전트 정의를 사용합니다. Codex는 사용 가능한 서브에이전트 도구에 패키지의 역할 지침을 전달하며, 네이티브 이름 등록은 별도 호스트 설정입니다.
 
 현재 요청, 원본 소스, 실제 프로젝트 API와 사용자의 정정을 기준으로 작업합니다. 작고 명확한 수정은 직접 처리하고, 계획·검토는 해당 작업에 도움이 될 때 사용합니다. 공유 스킬은 현재 에이전트 환경에서 제공하는 도구를 따릅니다.
 
