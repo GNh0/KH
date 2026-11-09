@@ -11,6 +11,7 @@ from .lexer import (
     _matching_parenthesis_token,
     _next_code_token,
     _normalize_source,
+    _previous_code_token,
 )
 
 
@@ -354,6 +355,9 @@ def _is_bound_alias_reference(
 ) -> bool:
     if _identifier_value(tokens[index]) != alias:
         return False
+    previous = _previous_code_token(tokens, index - 1, scope.start)
+    if previous is not None and tokens[previous].text == ".":
+        return False
     binding_scope = (
         _binding_scope_for_alias(scopes, index, alias)
         if scopes is not None
@@ -373,6 +377,26 @@ def _is_bound_alias_reference(
         return False
     following = _next_code_token(tokens, member + 1, scope.end)
     return following is None or tokens[following].text != "."
+
+
+def _is_qualified_alias_reference(
+    tokens: Sequence[_SqlToken],
+    index: int,
+    scope: _SqlScope,
+    alias: str,
+    scopes: Sequence[_SqlScope],
+) -> bool:
+    if _identifier_value(tokens[index]) != alias:
+        return False
+    binding = _binding_scope_for_alias(scopes, index, alias)
+    if binding is None or binding.scope_id != scope.scope_id:
+        return False
+    previous = _previous_code_token(tokens, index - 1, scope.start)
+    dot = _next_code_token(tokens, index + 1, scope.end)
+    if previous is None or tokens[previous].text != "." or dot is None or tokens[dot].text != ".":
+        return False
+    member = _next_code_token(tokens, dot + 1, scope.end)
+    return member is not None and (_is_identifier_token(tokens[member]) or tokens[member].text == "*")
 
 
 def _is_dml_target_alias(

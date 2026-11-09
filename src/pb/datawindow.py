@@ -16,6 +16,7 @@ from src.csharp.grid_style import column_edit_properties
 from .models import (
     DataWindowColumnSpec,
 )
+from .lexer import scan_pb
 
 
 DATAWINDOW_COLUMN_PATTERN = re.compile(r"column\s*=\s*\(", re.IGNORECASE)
@@ -111,17 +112,29 @@ def extract_datawindow_columns(source_text: str) -> List[str]:
 
 def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_") -> List[DataWindowColumnSpec]:
     """Extract DataWindow columns in exact column=( occurrence order."""
-    source = str(source_text or "")
-    starts = [match.start() for match in DATAWINDOW_COLUMN_PATTERN.finditer(source)]
+    raw_source = str(source_text or "")
+    code, _ = scan_pb(raw_source)
+    source, _ = scan_pb(raw_source, mask_literals=False)
     table_columns: List[Dict[str, str]] = []
-    for index, start in enumerate(starts):
-        end = starts[index + 1] if index + 1 < len(starts) else len(source)
-        block = source[start:end]
-        name_match = DATAWINDOW_NAME_PATTERN.search(block)
+    for match in DATAWINDOW_COLUMN_PATTERN.finditer(code):
+        depth = 1
+        end = match.end()
+        while end < len(code) and depth:
+            if code[end] == '(':
+                depth += 1
+            elif code[end] == ')':
+                depth -= 1
+            end += 1
+        if depth:
+            continue
+        block = source[match.start():end]
+        block_code = code[match.start():end]
+        name_match = next((item for item in DATAWINDOW_NAME_PATTERN.finditer(block)
+                           if block_code[item.start():item.start() + 4].lower() == 'name'), None)
         if name_match:
             type_match = re.search(
                 r"\btype\s*=\s*(?P<data_type>[A-Za-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?)",
-                block,
+                block_code,
                 flags=re.IGNORECASE,
             )
             table_columns.append(
@@ -131,8 +144,8 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
                 }
             )
 
-    visual_columns = _extract_visual_datawindow_columns(source)
-    text_controls = _extract_datawindow_text_controls(source)
+    visual_columns = _extract_visual_datawindow_columns(source, code)
+    text_controls = _extract_datawindow_text_controls(source, code)
     specs: List[DataWindowColumnSpec] = []
 
     visual_by_field: Dict[str, List[Dict[str, Any]]] = {}
@@ -1131,10 +1144,10 @@ def _normalize_datawindow_field_name(value: str) -> str:
     return str(value or "").strip().strip('"').upper()
 
 
-def _extract_visual_datawindow_columns(source: str) -> List[Dict[str, Any]]:
+def _extract_visual_datawindow_columns(source: str, code: str) -> List[Dict[str, Any]]:
     columns: List[Dict[str, Any]] = []
-    for line_index, line in enumerate(source.splitlines()):
-        if not DATAWINDOW_VISUAL_COLUMN_PATTERN.search(line):
+    for line_index, (line, code_line) in enumerate(zip(source.splitlines(), code.splitlines())):
+        if not DATAWINDOW_VISUAL_COLUMN_PATTERN.search(code_line):
             continue
         attrs = _parse_datawindow_attributes(line)
         field_name = _normalize_datawindow_field_name(attrs.get("name", ""))
@@ -1154,10 +1167,10 @@ def _extract_visual_datawindow_columns(source: str) -> List[Dict[str, Any]]:
     return columns
 
 
-def _extract_datawindow_text_controls(source: str) -> List[Dict[str, Any]]:
+def _extract_datawindow_text_controls(source: str, code: str) -> List[Dict[str, Any]]:
     controls: List[Dict[str, Any]] = []
-    for line_index, line in enumerate(source.splitlines()):
-        if not DATAWINDOW_TEXT_PATTERN.search(line):
+    for line_index, (line, code_line) in enumerate(zip(source.splitlines(), code.splitlines())):
+        if not DATAWINDOW_TEXT_PATTERN.search(code_line):
             continue
         attrs = _parse_datawindow_attributes(line)
         caption = str(attrs.get("text", "")).strip()

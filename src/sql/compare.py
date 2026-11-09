@@ -2,7 +2,7 @@
 from collections import Counter
 from src.common.results import CheckResult, Issue
 from .lexer import _analyze_sql_integrity, _canonical_token_value
-from .scopes import _AliasChange, _build_sql_scopes, _find_alias_changes
+from .scopes import _AliasChange, _build_sql_scopes, _find_alias_changes, _is_qualified_alias_reference
 from .compare_core import _canonical_token_stream, _first_token_difference
 
 
@@ -33,9 +33,29 @@ def compare_sql(original: str, candidate: str, *, preserve_aliases: bool = False
                 if has_as_before != has_as_after:
                     changes.append(_AliasChange(b.scope_id, target.source, source.effective_alias,
                                                 target.effective_alias, source, target))
+    for change in changes:
+        if change.original_alias == change.formatted_alias:
+            continue
+        for label, tokens, scopes, alias in (
+            ('original', left, left_scopes, change.original_alias),
+            ('candidate', right, right_scopes, change.formatted_alias),
+        ):
+            scope = next((item for item in scopes if item.scope_id == change.scope_id), None)
+            if scope is not None and any(_is_qualified_alias_reference(tokens, index, scope, alias, scopes)
+                                         for index in range(scope.start, scope.end)):
+                result.incomplete = True
+                result.issues.append(Issue('qualified_alias_change_unverified', 'warning',
+                    'Alias changes involving multipart column qualifiers require direct binding review; '
+                    'their preservation is not established by this checker.',
+                    details={'side': label, 'scope': scope.scope_id, 'alias': alias}))
+    if result.incomplete:
+        result.not_checked.append('alias binding changes involving multipart column qualifiers')
+        result.not_checked.append('token equivalence across unverified multipart alias changes')
+        result.checked.remove('token order, literals and comments')
+        result.checked.append('literal and comment preservation')
     before = _canonical_token_stream(left, left_scopes, changes, "original")
     after = _canonical_token_stream(right, right_scopes, changes, "formatted")
-    if before != after:
+    if before != after and not result.incomplete:
         result.issues.append(Issue("sql_meaning_tokens_changed", "error",
                                   "SQL changed beyond whitespace, casing, and permitted bound alias renaming.",
                                   details={"first_difference": _first_token_difference(before, after)}))
