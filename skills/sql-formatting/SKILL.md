@@ -11,7 +11,7 @@ For project code generation/edits, complete the required [source-style cycle](..
 
 ## Procedure work: SELECT and SAVE
 
-Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Use the matching [source-based patterns](references/procedure-patterns.md) to choose the query/save structure, then verify it against those complete procedures. Derive schema, types, keys and behavior from the actual target. When the request adds a caller or operation, cover the added responsibility before drafting it.
+Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Select the changed responsibilities in the [illustrative-pattern index](references/procedure-patterns.md) and read those examples; do not load the whole example collection. Verify the selected structure against the complete procedures. Derive schema, types, keys and behavior from the actual target. When the request adds a caller or operation, cover the added responsibility before drafting it.
 
 Keep one operation's ordered result sets in its owning dispatch block. Do not put additional SELECTs behind a second check of the mode predicate already established by that branch, or append a duplicate mode branch just to return another table. Preserve genuinely different business conditions and required shared phases.
 
