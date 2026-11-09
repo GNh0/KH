@@ -79,7 +79,7 @@ def _consume_csharp_literal(
     quote_count = 1
     while quote == '"' and index + quote_count < length and text[index + quote_count] == quote:
         quote_count += 1
-    raw = quote == '"' and quote_count >= 3
+    raw = quote == '"' and quote_count >= 3 and not verbatim
     content_start = quote_start + (quote_count if raw else 1)
     delimiter = quote * (quote_count if raw else 1)
     index = content_start
