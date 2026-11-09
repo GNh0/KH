@@ -65,6 +65,37 @@ class SqlDispatchTests(unittest.TestCase):
                 source = "IF @Mode = 'READ' BEGIN " + prefix + " IF @Mode = 'READ' BEGIN SELECT 2; END END"
                 self.assertEqual(1, len(findings(source)))
 
+    def test_update_set_mode_writes_invalidate_the_guard_at_any_list_position(self):
+        for mutation in (
+            "UPDATE T SET @Mode = Mode, Other = 1 FROM T;",
+            "UPDATE T SET Other = 1, @Mode = Mode FROM T;",
+            "UPDATE T SET Other = 1, @Mode = Mode, Flag = 0 FROM T;",
+            "UPDATE T SET Other = 1, @mode = Mode;",
+            "UPDATE T SET Other = 1, @Mode += 'X';",
+            "UPDATE T SET Other = 1, @Mode = Mode = 'OTHER';",
+            "UPDATE T SET Other = (SELECT MAX(ID) FROM S), @Mode = Mode FROM T;",
+            "UPDATE T SET Other = CASE WHEN Flag = 1 THEN 1 ELSE 0 END, @Mode = Mode FROM T;",
+            "UPDATE T SET Other = CONCAT('a,b', 'c'), /* list item */ @Mode = Mode FROM T;",
+        ):
+            with self.subTest(mutation=mutation):
+                source = "IF @Mode = 'READ' BEGIN " + mutation + " IF @Mode = 'READ' BEGIN SELECT 2; END END"
+                self.assertFalse(findings(source))
+
+    def test_update_set_reads_and_other_variable_writes_keep_the_guard(self):
+        for mutation in (
+            "UPDATE T SET Other = 1;",
+            "UPDATE T SET Other = @Mode;",
+            "UPDATE T SET @Other = Other, Flag = 1 FROM T;",
+            "UPDATE T SET Flag = 1, @Other = Other FROM T;",
+            "UPDATE T SET Other = CASE WHEN @Mode = 'READ' THEN 1 ELSE 0 END;",
+            "UPDATE T SET Other = (SELECT MAX(ID) FROM S WHERE @Mode = 'READ');",
+            "UPDATE T SET Other = 1 WHERE @Mode = 'READ';",
+            "UPDATE T SET Other = 1 OUTPUT CASE WHEN @Mode = 'READ' THEN 1 ELSE 0 END;",
+        ):
+            with self.subTest(mutation=mutation):
+                source = "IF @Mode = 'READ' BEGIN " + mutation + " IF @Mode = 'READ' BEGIN SELECT 2; END END"
+                self.assertEqual(1, len(findings(source)))
+
     def test_comments_strings_case_end_and_transactions_keep_block_context(self):
         source = """IF @Mode = 'READ'
 BEGIN
