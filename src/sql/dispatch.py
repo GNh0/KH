@@ -144,6 +144,8 @@ def _repetitions(source: str) -> list[tuple[_Signature, int, int]]:
             if index + 1 < len(tokens) and tokens[index + 1].text.startswith('@'):
                 changed(tokens[index + 1].text)
             projection.clear()
+            # UPDATE SET lists may assign a variable after any column item.
+            projection[token.depth] = word == 'SET'
         elif word == 'SELECT':
             projection[token.depth] = True
         elif word in {'FROM', 'WHERE', 'ON', 'GROUP', 'ORDER', 'HAVING', 'UNION', 'EXCEPT', 'INTERSECT'}:
