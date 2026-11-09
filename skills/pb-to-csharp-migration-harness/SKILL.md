@@ -5,7 +5,7 @@ description: Analyze PowerBuilder/PBL/DataWindow sources or migrate them to C# W
 
 # PB to C# migration
 
-For substantial implementation coordinated in this session, use the [KH worker and review flow](../work-execution/references/delegation.md). An assigned PB worker executes its scope and returns evidence to the controller.
+Execute in the current agent by default. Use the [KH delegation flow](../work-execution/references/delegation.md) only when a bounded specialist task or independent review benefits from a separate agent. An assigned PB worker completes its scope and returns evidence without further delegation.
 
 First read the exact PBL/object, base classes, linked DataWindows, and actual event/SQL/report relationships. If only exports are supplied, stay within their evidence scope; do not claim analysis of an unread complete PBL.
 

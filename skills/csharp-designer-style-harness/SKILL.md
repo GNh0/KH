@@ -5,7 +5,7 @@ description: Generate, modify, or review WinForms/DevExpress C#, Designer and Xt
 
 # C# and Designer
 
-For substantial implementation coordinated in this session, use the [KH worker and review flow](../work-execution/references/delegation.md). An assigned C# worker executes its scope and returns evidence to the controller.
+Execute in the current agent by default. Use the [KH delegation flow](../work-execution/references/delegation.md) only when a bounded specialist task or independent review benefits from a separate agent. An assigned C# worker completes its scope and returns evidence without further delegation.
 
 Apply to the actual target project. Do not impose WinForms architecture on MAUI/PDA or other C# projects.
 

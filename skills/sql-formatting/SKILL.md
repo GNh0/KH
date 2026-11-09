@@ -5,7 +5,7 @@ description: Generate, edit, or format SQL/T-SQL using the scoped KH layout whil
 
 # SQL formatting
 
-For substantial implementation coordinated in this session, use the [KH worker and review flow](../work-execution/references/delegation.md). An assigned SQL worker executes its scope and returns evidence to the controller.
+Execute in the current agent by default. Use the [KH delegation flow](../work-execution/references/delegation.md) only when a bounded specialist task or independent review benefits from a separate agent. An assigned SQL worker completes its scope and returns evidence without further delegation.
 
 For project code generation/edits, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): read actual comparison-project SQL before writing, then re-read and audit the final SQL after all edits.
 
