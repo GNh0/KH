@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH 3.3.0 packages twelve focused development skills, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH packages twelve focused development skills, four role agents, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
@@ -71,6 +71,8 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 ## How KH works
 
 Start from the current request, original source, actual project APIs and the user's corrections. Small clear changes run directly; planning and review are used when they improve the task. The shared skills use the tools available in the current host.
+
+Substantial SQL, C#/Designer and PB implementation uses the [domain worker and independent review flow](skills/work-execution/references/delegation.md). The controller dispatches a packaged [worker](agents/kh-sql-worker.md) with the task's source and scope, collects its actual changes, and sends them to the [auditor](agents/kh-rule-auditor.md). Confirmed violations return to the responsible worker for correction and re-review. Claude Code uses the plugin's native agent definitions. In Codex, the controller passes the packaged role instructions to an available subagent tool; native named-agent installation remains a separate host configuration.
 
 Before handing over skill-guided work, [rule-audit](skills/rule-audit/SKILL.md) compares applicable rules with the actual artifacts and execution evidence. Confirmed violations are repaired within scope and affected checks are repeated. A final regression check then verifies the combined repair's effects on related behavior; introduced regressions return to correction and rechecking. Unverified areas remain explicit. This is an agent procedure using the existing checkers; it does not install a host completion hook.
 

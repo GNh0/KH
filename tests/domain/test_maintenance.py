@@ -111,6 +111,36 @@ class MaintenanceTests(unittest.TestCase):
             result = check_package(root)
             self.assertEqual({'skill_link_broken', 'internal_import_missing'}, {i.code for i in result.issues})
 
+    def test_package_checks_agent_names_and_local_references(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / '.codex-plugin').mkdir()
+            (root / '.codex-plugin/plugin.json').write_text(json.dumps({'name': 'sample'}))
+            (root / 'skills/sample').mkdir(parents=True)
+            (root / 'skills/sample/SKILL.md').write_text('---\nname: sample\ndescription: Sample\n---\nRun the sample.')
+            (root / 'agents').mkdir()
+            agent = root / 'agents/worker.md'
+            agent.write_text('---\nname: worker\ndescription: Work\n---\nRead [source](../skills/sample/SKILL.md).')
+            result = check_package(root)
+            self.assertEqual([], result.issues)
+            self.assertEqual(['worker'], result.metadata['agent_names'])
+
+            agent.write_text('---\nname: reviewer\ndescription: Review\n---\nRead [missing](../missing.md).')
+            result = check_package(root)
+            self.assertEqual({'agent_metadata_invalid', 'agent_link_broken'}, {i.code for i in result.issues})
+
+            (root / '.claude-plugin').mkdir()
+            manifest = root / '.claude-plugin/plugin.json'
+            manifest.write_text(json.dumps({'agents': './agents/'}))
+            result = check_package(root)
+            self.assertEqual({'agent_path_invalid'}, {i.code for i in result.issues})
+
+            agent.write_text('---\nname: worker\ndescription: Work\n---\nRead [source](../skills/sample/SKILL.md).')
+            manifest.write_text(json.dumps({'agents': ['./agents/worker.md']}))
+            result = check_package(root)
+            self.assertEqual([], result.issues)
+            self.assertEqual(['worker'], result.metadata['agent_names'])
+
 
 if __name__ == '__main__':
     unittest.main()

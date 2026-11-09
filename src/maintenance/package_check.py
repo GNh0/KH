@@ -11,10 +11,18 @@ def check_package(path: str | Path) -> CheckResult:
     if not root.is_absolute():
         raise ValueError('package path must be absolute')
     root = root.resolve(strict=True)
-    result = CheckResult(checked=['manifest and skill entrypoints', 'local Markdown links', 'Python AST and internal import targets'],
+    result = CheckResult(checked=['manifest, skill and agent entrypoints', 'local Markdown links', 'Python AST and internal import targets'],
                          not_checked=['installed plugin cache', 'Codex skill selection', 'host or domain runtime behavior'])
     def error(code, message, path=None):
         result.issues.append(Issue(code, 'error', message, path=str(path) if path else None))
+    def check_links(doc, code):
+        for href in re.findall(r'\[[^\]]*\]\(([^)]+)\)', doc.read_text(encoding='utf-8-sig')):
+            href = href.strip().strip('<>').split('#', 1)[0]
+            if not href or re.match(r'[a-z][a-z0-9+.-]*:', href, re.I):
+                continue
+            target = (doc.parent / href).resolve()
+            if not target.is_relative_to(root) or not target.exists():
+                error(code, 'Missing or external local reference: ' + href, doc)
     manifest_path = root / '.codex-plugin/plugin.json'
     try:
         manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
@@ -44,15 +52,45 @@ def check_package(path: str | Path) -> CheckResult:
             error('skill_metadata_invalid', 'Skill name must match its directory and include a description.', entry)
         names.append(name)
         for doc in entry.parent.rglob('*.md'):
-            for href in re.findall(r'\[[^\]]*\]\(([^)]+)\)', doc.read_text(encoding='utf-8-sig')):
-                href = href.strip().strip('<>').split('#', 1)[0]
-                if not href or re.match(r'[a-z][a-z0-9+.-]*:', href, re.I):
-                    continue
-                target = (doc.parent / href).resolve()
-                if not target.is_relative_to(root) or not target.exists():
-                    error('skill_link_broken', 'Missing or external local reference: ' + href, doc)
+            check_links(doc, 'skill_link_broken')
     if len(names) != len(set(names)):
         error('skill_name_duplicate', 'Skill names must be unique.')
+    agent_names = []
+    agent_files = sorted((root / 'agents').glob('*.md'))
+    claude_manifest_path = root / '.claude-plugin/plugin.json'
+    if claude_manifest_path.is_file():
+        try:
+            claude_manifest = json.loads(claude_manifest_path.read_text(encoding='utf-8-sig'))
+            declared_agents = claude_manifest.get('agents')
+            if declared_agents is not None:
+                paths = [declared_agents] if isinstance(declared_agents, str) else declared_agents
+                if not isinstance(paths, list):
+                    raise ValueError('Manifest agents must be a path or an array of file paths.')
+                agent_files = []
+                for path in paths:
+                    entry = (root / path).resolve() if isinstance(path, str) else root
+                    if not isinstance(path, str) or not path.startswith('./') or not entry.is_relative_to(root) or entry.suffix != '.md' or not entry.is_file():
+                        error('agent_path_invalid', 'Manifest agents must name existing .md files inside the package.', claude_manifest_path)
+                        continue
+                    agent_files.append(entry)
+        except (OSError, ValueError, AttributeError) as exc:
+            error('agent_manifest_invalid', str(exc), claude_manifest_path)
+    for entry in agent_files:
+        text = entry.read_text(encoding='utf-8-sig')
+        match = re.match(r'\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)', text, re.S)
+        if not match:
+            error('agent_frontmatter_missing', 'Agent definitions need YAML frontmatter.', entry)
+            continue
+        fields = dict(re.findall(r'^([a-z_-]+):\s*(.+)$', match[1], re.M))
+        name = fields.get('name', '').strip('"\'')
+        description = fields.get('description', '').strip('"\'')
+        if name != entry.stem or not description or not text[match.end():].strip():
+            error('agent_metadata_invalid', 'Agent name must match its file and include a description and instructions.', entry)
+        agent_names.append(name)
+        check_links(entry, 'agent_link_broken')
+    if len(agent_names) != len(set(agent_names)):
+        error('agent_name_duplicate', 'Agent names must be unique.')
+    result.not_checked.append('host agent discovery, invocation and review behavior')
     python_files = [p for folder in ('src', 'scripts') for p in (root / folder).rglob('*.py')]
     for source in python_files:
         try:
@@ -76,5 +114,6 @@ def check_package(path: str | Path) -> CheckResult:
                 if not target.with_suffix('.py').is_file() and not target.is_dir():
                     error('internal_import_missing', 'Missing internal module: ' + '.'.join(module), source)
     result.metadata.update(plugin=manifest.get('name'), version=manifest.get('version'), skill_names=names,
-                           skill_count=len(skill_files), python_files=len(python_files))
+                           skill_count=len(skill_files), python_files=len(python_files),
+                           agent_names=agent_names, agent_count=len(agent_names))
     return result
