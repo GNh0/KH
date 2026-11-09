@@ -388,6 +388,10 @@ def _is_qualified_alias_reference(
 ) -> bool:
     if _identifier_value(tokens[index]) != alias:
         return False
+    if any(declaration.source != "(DERIVED)" and
+           declaration.source_start <= index <= declaration.source_name_end
+           for item in scopes for declaration in item.declarations):
+        return False
     binding = _binding_scope_for_alias(scopes, index, alias)
     if binding is None or binding.scope_id != scope.scope_id:
         return False

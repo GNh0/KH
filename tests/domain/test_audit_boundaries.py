@@ -7,6 +7,7 @@ from src.pb.checks import check_pb_export
 from src.pb.datawindow import build_datawindow_grid_layout, extract_datawindow_column_specs
 from src.sql.aliases import rename_aliases
 from src.sql.compare import compare_sql
+from src.sql.checks import check_sql, verify_sql_formatting_style
 
 
 class AliasQualificationTests(unittest.TestCase):
@@ -34,6 +35,15 @@ class AliasQualificationTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual('incomplete', result.status)
 
+    def test_new_explicit_alias_is_not_just_optional_as_spelling(self):
+        source = 'SELECT dbo.T.ID FROM dbo.T;'
+        candidate = 'SELECT dbo.T.ID FROM dbo.T AS T;'
+        self.assertEqual('incomplete', compare_sql(source, candidate).status)
+        self.assertFalse(check_sql(candidate, original=source, check_style=False, check_preferences=False).success)
+        self.assertFalse(verify_sql_formatting_style(source, candidate, check_style=False).success)
+        self.assertTrue(compare_sql('SELECT T.ID FROM dbo.T;', 'SELECT T.ID FROM dbo.T AS T;').success)
+        self.assertTrue(compare_sql('SELECT T.ID FROM dbo.T AS T;', 'SELECT T.ID FROM dbo.T T;').success)
+
     def test_supported_alias_renames_and_unchanged_qualifiers_still_pass(self):
         for source in ('SELECT T.ID FROM dbo.T;', 'SELECT X.ID FROM dbo.T X;'):
             old = 'X' if ' X;' in source else 'T'
@@ -44,6 +54,17 @@ class AliasQualificationTests(unittest.TestCase):
         source = 'SELECT dbo.T.ID FROM dbo.T;'
         self.assertTrue(compare_sql(source, source.replace('SELECT ', 'SELECT\n    ')).success)
         self.assertTrue(compare_sql('SELECT X.ID FROM dbo.T AS X;', 'SELECT X.ID FROM dbo.T X;').success)
+
+    def test_source_name_parts_matching_aliases_do_not_block_supported_renames(self):
+        for source, old, new in (
+            ('SELECT A.ID FROM db.A.Items A;', 'A', 'B'),
+            ('SELECT X.ID FROM db.A.Items X;', 'X', 'A'),
+            ('SELECT A.ID FROM [db].[A].[Items] A;', 'A', 'B'),
+        ):
+            with self.subTest(source=source, new=new):
+                candidate = rename_aliases(source, {'scope_1': {old: new}})
+                self.assertTrue(compare_sql(source, candidate).success)
+                self.assertIn('SELECT ' + new + '.ID', candidate)
 
 
 class DataWindowLiteralBoundaryTests(unittest.TestCase):

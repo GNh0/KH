@@ -34,7 +34,9 @@ def compare_sql(original: str, candidate: str, *, preserve_aliases: bool = False
                     changes.append(_AliasChange(b.scope_id, target.source, source.effective_alias,
                                                 target.effective_alias, source, target))
     for change in changes:
-        if change.original_alias == change.formatted_alias:
+        same_declaration_presence = ((change.original.alias_start is not None) ==
+                                     (change.formatted.alias_start is not None))
+        if change.original_alias == change.formatted_alias and same_declaration_presence:
             continue
         for label, tokens, scopes, alias in (
             ('original', left, left_scopes, change.original_alias),
