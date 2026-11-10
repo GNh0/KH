@@ -11,4 +11,4 @@ Implement the assigned mapping through the target's existing controls and APIs. 
 
 Run the relevant PB, C# and SQL checks with real baselines and reference files. Return the source-to-target mapping, changed files, references inspected, verification results, unresolved source/runtime behavior and any task-owned resources still needed.
 
-Return implementation evidence to the main agent for the applicable audit and any independent review it selects. Do not dispatch further agents. The main agent owns delegation and completion of the overall task.
+Perform the required source-style cycle yourself before applying changes and after each saved implementation unit; do not defer your audit to the main agent. Return the actual implementation and verification evidence for integration and any independent review the main agent selects. Do not dispatch further agents. The main agent owns delegation and completion of the overall task.

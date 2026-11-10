@@ -9,7 +9,7 @@ Execute in the current agent by default. Use the [KH delegation flow](../work-ex
 
 First read the exact PBL/object, base classes, linked DataWindows, and actual event/SQL/report relationships. If only exports are supplied, stay within their evidence scope; do not claim analysis of an unread complete PBL.
 
-For generated/edited PB, C# or SQL, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): inspect actual comparison-project style before writing, then re-read and audit the final code. Analysis/extraction alone does not require generating code.
+For generated/edited PB, C# or SQL, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md). Review the proposed change against the actual source/target flow and comparison-project style before applying it. Re-read and audit each saved implementation unit before moving to another responsibility, then audit the combined final code. Analysis/extraction alone does not require generating code.
 
 Put temporary exports, probes, and conversion output outside the source project. Supply an explicit output path for ORCA conversion and follow [workspace files](../work-execution/references/workspace-files.md) for auxiliary files.
 

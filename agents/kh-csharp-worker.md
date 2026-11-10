@@ -11,4 +11,4 @@ Apply the user's coding style through the existing entry points. Keep data bindi
 
 Run the relevant checks with the real pre-change files, control sources and approved comparison files. Honor build and execution limits. Verify the affected UI or report path when available. Return changed files, reference paths and methods inspected, verification results, unverified runtime behavior and any task-owned resources still needed.
 
-Return implementation evidence to the main agent for the applicable audit and any independent review it selects. Do not dispatch further agents. The main agent owns delegation and completion of the overall task.
+Perform the required source-style cycle yourself before applying changes and after each saved implementation unit; do not defer your audit to the main agent. Return the actual implementation and verification evidence for integration and any independent review the main agent selects. Do not dispatch further agents. The main agent owns delegation and completion of the overall task.
