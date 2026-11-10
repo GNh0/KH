@@ -91,6 +91,69 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(2, len(report['user_candidates']))
             self.assertEqual(2, report['files'][0]['counts']['environment_or_automatic_records'])
 
+    def test_tool_evidence_locations_retrieve_real_return_records(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'session.jsonl'
+            records = [
+                {'type': 'session_meta', 'payload': {'id': 'fictional-session'}},
+                {'timestamp': '2026-11-10T01:00:00Z', 'type': 'response_item',
+                 'payload': {'type': 'function_call', 'name': 'exec', 'call_id': 'read',
+                             'arguments': 'Get-Content source.cs # password=private-value'}},
+                {'timestamp': '2026-11-10T01:00:01Z', 'type': 'response_item',
+                 'payload': {'type': 'function_call_output', 'call_id': 'read', 'output': 'first result'}},
+                {'timestamp': '2026-11-10T01:00:02Z', 'type': 'response_item',
+                 'payload': {'type': 'function_call_output', 'call_id': 'read', 'output': 'remaining result'}},
+                {'type': 'response_item', 'payload': {'type': 'custom_tool_call', 'name': 'apply_patch',
+                                                     'call_id': 'write', 'input': 'change source.cs'}}]
+            path.write_text('\n'.join(json.dumps(x, ensure_ascii=False) for x in records), encoding='utf-8')
+            default = inspect_sessions([path])
+            self.assertNotIn('argument_excerpt', default['tool_calls'][0])
+            report = inspect_sessions([path], tool_excerpt_chars=100)
+            read, write = report['tool_calls']
+            self.assertNotIn('private-value', json.dumps(report))
+            self.assertEqual('2026-11-10T01:00:00Z', read['timestamp'])
+            self.assertEqual(2, len(read['result_locations']))
+            with path.open('rb') as stream:
+                for location in read['result_locations']:
+                    stream.seek(location['byte_offset'])
+                    returned = json.loads(stream.readline())
+                    self.assertEqual('read', returned['payload']['call_id'])
+                    self.assertEqual(records[location['line']-1], returned)
+            self.assertEqual('change source.cs', write['argument_excerpt'])
+            self.assertEqual([], write['result_locations'])
+            self.assertEqual('call_without_observed_return', write['observed_state'])
+
+    def test_tool_excerpt_is_bounded_and_invalid_limits_fail(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'session.jsonl'
+            path.write_text(json.dumps({'type': 'response_item', 'payload': {
+                'type': 'function_call', 'name': 'exec', 'call_id': 'c1',
+                'arguments': {'command': 'read a long fictional source path'}}}), encoding='utf-8')
+            call = inspect_sessions([path], tool_excerpt_chars=8)['tool_calls'][0]
+            self.assertEqual(8, len(call['argument_excerpt']))
+            self.assertTrue(call['argument_truncated'])
+            for limit in (-1, 2001):
+                with self.assertRaises(ValueError):
+                    inspect_sessions([path], tool_excerpt_chars=limit)
+
+    def test_tool_previews_mask_structured_and_quoted_secret_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'session.jsonl'
+            for argument in ({'password': 'fictional-secret-123'},
+                             json.dumps({'api_key': 'fictional-secret-123'}),
+                             json.dumps({'env': {'client_secret': 'fictional-secret-123'}}),
+                             json.dumps({'access_token': 'fictional-secret-123"suffix'}),
+                             "{'password': 'fictional-secret-123'}"):
+                with self.subTest(argument=argument):
+                    path.write_text(json.dumps({'type': 'response_item', 'payload': {
+                        'type': 'function_call', 'name': 'exec', 'call_id': 'c1',
+                        'arguments': argument}}), encoding='utf-8')
+                    report = inspect_sessions([path], tool_excerpt_chars=1000)
+                    serialized = json.dumps(report)
+                    self.assertNotIn('fictional-secret-123', serialized)
+                    self.assertNotIn('suffix', serialized)
+                    self.assertIn('[REDACTED]', serialized)
+
     def test_session_excerpts_mask_secret_and_do_not_auto_infer_preference(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'session.jsonl'

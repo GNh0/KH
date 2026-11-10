@@ -21,7 +21,9 @@ def _message_text(payload):
                      if isinstance(item, dict) and item.get('type') in {'input_text', 'output_text', 'text'})
 
 
-def inspect_sessions(paths, *, pattern=None, excerpt_chars=240):
+def inspect_sessions(paths, *, pattern=None, excerpt_chars=240, tool_excerpt_chars=0):
+    if not 0 <= tool_excerpt_chars <= 2000:
+        raise ValueError('tool_excerpt_chars must be between 0 and 2000')
     paths = list(paths)
     selected = list(dict.fromkeys(Path(p).resolve(strict=True) for p in paths))
     if any(not Path(p).is_absolute() for p in paths):
@@ -31,12 +33,13 @@ def inspect_sessions(paths, *, pattern=None, excerpt_chars=240):
         'Candidate excerpts need chronological and project-scope review.',
         'Copied child context and quoted reviews are not new independent requirements.',
         'Images, missing logs and runtime outcomes are not inferred from this extraction.',
-        'A tool return or role artifact does not establish agent completion.']}
+        'A tool return or role artifact does not establish agent completion.',
+        'Call/return order and excerpts locate evidence; inspect complete relevant inputs and outputs to judge source reads, writes and audits.']}
     for path in selected:
         if not path.is_file():
             raise ValueError('selected input is not a file: ' + str(path))
         before = path.stat()
-        counts, calls, returned = Counter(), {}, set()
+        counts, calls, returns = Counter(), {}, {}
         session_id, child = None, False
         last_user = None
         with path.open('rb') as stream:
@@ -64,9 +67,18 @@ def inspect_sessions(paths, *, pattern=None, excerpt_chars=240):
                 if kind == 'response_item' and subtype in {'function_call', 'custom_tool_call'}:
                     call_id = payload.get('call_id') or payload.get('id')
                     calls[call_id or f'line:{line_number}'] = {'path': str(path), 'line': line_number, 'byte_offset': offset,
-                        'session_id': session_id, 'name': payload.get('name'), 'call_id': call_id}
+                        'timestamp': record.get('timestamp'), 'session_id': session_id,
+                        'name': payload.get('name'), 'call_id': call_id}
+                    if tool_excerpt_chars:
+                        argument = payload.get('arguments', payload.get('input', ''))
+                        argument = argument if isinstance(argument, str) else json.dumps(argument, ensure_ascii=False)
+                        excerpt = redact(argument)
+                        calls[call_id or f'line:{line_number}'].update(
+                            argument_excerpt=excerpt[:tool_excerpt_chars],
+                            argument_truncated=len(excerpt) > tool_excerpt_chars)
                 elif kind == 'response_item' and subtype in {'function_call_output', 'custom_tool_call_output'}:
-                    returned.add(payload.get('call_id'))
+                    returns.setdefault(payload.get('call_id'), []).append({'path': str(path),
+                        'line': line_number, 'byte_offset': offset, 'timestamp': record.get('timestamp')})
                 is_user = ((kind == 'event_msg' and subtype == 'user_message') or
                            (kind == 'response_item' and subtype == 'message' and payload.get('role') == 'user'))
                 if not is_user:
@@ -92,7 +104,8 @@ def inspect_sessions(paths, *, pattern=None, excerpt_chars=240):
                     'byte_offset': offset, 'child_context': child, 'text_sha256': digest,
                     'excerpt': excerpt[:excerpt_chars], 'truncated': len(excerpt) > excerpt_chars})
         for call_id, call in calls.items():
-            call['observed_state'] = 'tool_return_recorded' if call_id in returned else 'call_without_observed_return'
+            call['observed_state'] = 'tool_return_recorded' if call_id in returns else 'call_without_observed_return'
+            call['result_locations'] = returns.get(call_id, [])
             report['tool_calls'].append(call)
         after = path.stat()
         report['files'].append({'path': str(path), 'session_id': session_id, 'bytes_read': before.st_size,
@@ -106,10 +119,15 @@ def main(argv=None):
     parser.add_argument('paths', nargs='+')
     parser.add_argument('--pattern')
     parser.add_argument('--excerpt-chars', type=int, default=240)
+    parser.add_argument('--tool-excerpt-chars', type=int, default=0,
+                        help='optional bounded, redacted tool input previews; result bodies stay in the source log')
     args = parser.parse_args(argv)
     if not 0 <= args.excerpt_chars <= 2000:
         parser.error('--excerpt-chars must be between 0 and 2000')
-    print(json.dumps(inspect_sessions(args.paths, pattern=args.pattern, excerpt_chars=args.excerpt_chars), ensure_ascii=False, indent=2))
+    if not 0 <= args.tool_excerpt_chars <= 2000:
+        parser.error('--tool-excerpt-chars must be between 0 and 2000')
+    print(json.dumps(inspect_sessions(args.paths, pattern=args.pattern, excerpt_chars=args.excerpt_chars,
+                                     tool_excerpt_chars=args.tool_excerpt_chars), ensure_ascii=False, indent=2))
     return 0
 
 

@@ -14,7 +14,7 @@ Apply the current skill-creator guidance to skill changes. For a reported bad ad
 - Requested GitHub publication: follow the existing two-branch [publication flow](../../docs/development.md#github-publication) and verify both remote refs and identical file trees.
 - Profile maintenance: [PB/C# profiles](references/pb-profile-maintenance.md).
 - Explicit conversation audits: [source-log audits](references/session-audit.md).
-- Realistic behavior evaluation: [scenario evaluation](references/scenario-evaluation.md).
+- Realistic behavior evaluation: [scenario evaluation](references/scenario-evaluation.md). Implementation/audit workflow changes need actual tool-order and returned-source evidence as well as a correct final artifact.
 - Keep audit and validation scratch outside source trees using [workspace files](../work-execution/references/workspace-files.md).
 
 Check the skills and paths actually discovered. Do not report test counts, self-ratings, role JSON, or simulations as actual agent execution. Distinguish source, branch, manifest, and installed cache; keep installation and publication within the actual request.
