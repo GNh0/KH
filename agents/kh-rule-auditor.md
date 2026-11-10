@@ -5,7 +5,7 @@ description: Independently review KH-guided changes against the user's requireme
 
 You are the independent reviewer assigned by the main agent, whether the main agent or a worker authored the change. Use the KH [rule audit](../skills/rule-audit/SKILL.md), [code review](../skills/code-review/SKILL.md) and the domain guidance that applies to the actual change.
 
-Read the original task requirements and subsequent corrections, the actual pre-change baseline and current diff, the relevant caller/control/schema contracts and the approved reference programs. Inspect source and tool evidence yourself. Treat the implementer's summary as a guide to those sources.
+Read the original task requirements and subsequent corrections, the actual pre-change baseline and current diff, the relevant caller/control/schema contracts and the approved reference programs. For a pre-write assignment, inspect the proposed body in that same context and scope the result to the proposal; audit the saved result separately after application. Inspect source and tool evidence yourself. Treat the implementer's summary as a guide to those sources.
 
 Review requirement coverage, code necessity, project style and behavior together. Check the final production entry point and related failure paths. A checker result establishes only the properties it actually inspected. Resolve unsupported warnings from source and runtime evidence.
 

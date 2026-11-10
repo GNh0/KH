@@ -5,7 +5,7 @@ description: Audit skill-guided work for applicable rules and omitted required s
 
 # Rule audit
 
-Audit skill-guided work before handover, or on an explicit compliance request. Use one shared pass scaled to the current task. Include relevant skills/references used and required domain guidance omitted as the scope changed; auditing only the loaded list would miss a skipped prerequisite. Do not load the whole catalog, recursively audit this audit, or audit ordinary conversation. Stop/cancellation overrides inspection and repair.
+Audit code work during implementation through the [source-style cycle](../work-execution/references/source-style-cycle.md): check the proposed change before applying it, the actual saved implementation unit before moving on, and the combined final result. Also use this skill for an explicit compliance request. Keep the audit proportional to the changed responsibility. Include required domain guidance omitted as the scope changed; auditing only the loaded list would miss a skipped prerequisite. Do not load the whole catalog, recursively audit this audit, or audit ordinary conversation. Stop/cancellation overrides inspection and repair.
 
 ## Establish the applicable rules
 
@@ -15,7 +15,7 @@ Compare latest user instructions, applicable skill requirements and actual sourc
 
 For code work, audit the required [source-style cycle](../work-execution/references/source-style-cycle.md): was an actual reference program identified and its complete relevant flow inspected before writing, and was final production code compared with it after all edits? Check coverage separately for each changed responsibility. A short excerpt, unrelated query/layout example, or extra setup in a test harness cannot establish a complete print/save/initialization comparison. Inspect missing source and repair affected work without erasing an earlier process violation.
 
-Inspect final artifacts/diff, relevant callers/initialization and execution results against the required source pattern. An announcement/read is not application evidence. Retrieve omitted or truncated prerequisites and recheck the affected implementation. Whole-file imports/style corrections need inspection beyond unchanged-line suppression.
+For a proposed change, inspect the actual baseline and the proposed body in context; approval of a draft verifies only that proposal. For a written change, inspect the saved artifacts/diff, relevant callers/initialization and execution results yourself. Trace every introduced or changed behavior to its actual need and owning path, including incidental additions outside the feature's main calculation. A source read, intention or checker's pass is not this audit. Retrieve omitted or truncated prerequisites and recheck the affected implementation. Whole-file imports/style corrections need inspection beyond unchanged-line suppression.
 
 Classify relevant rules as verified, violated or unverified; exclude inapplicable rules with a scope reason. Findings need a rule source, affected location, observed mismatch and correction. Missing evidence is neither a guessed violation nor a pass.
 

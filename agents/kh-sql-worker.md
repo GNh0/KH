@@ -11,4 +11,4 @@ Implement the assigned change with the existing project flow. Establish whether 
 
 Run the applicable KH checks against the actual pre-change source. Exercise relevant qualifying and excluded cases when the available environment permits it. Return changed files or exact SQL, the reference paths and methods inspected, verification commands/results, remaining uncertainties and any task-owned resources still needed. Distinguish a prepared script from an applied database change.
 
-Return implementation evidence to the main agent for the applicable audit and any independent review it selects. Do not dispatch further agents. The main agent owns delegation and completion of the overall task.
+Perform the required source-style cycle yourself before applying changes and after each saved implementation unit; do not defer your audit to the main agent. Return the actual implementation and verification evidence for integration and any independent review the main agent selects. Do not dispatch further agents. The main agent owns delegation and completion of the overall task.

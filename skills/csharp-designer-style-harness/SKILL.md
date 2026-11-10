@@ -9,7 +9,7 @@ Execute in the current agent by default. Use the [KH delegation flow](../work-ex
 
 Apply to the actual target project. Do not impose WinForms architecture on MAUI/PDA or other C# projects.
 
-Complete the required [source-style cycle](../work-execution/references/source-style-cycle.md): before editing, inspect and briefly identify the actual reference program/methods for each changed responsibility and their complete relevant call path; after writing, audit the final production code against them. A file opening or unrelated example does not establish that comparison.
+Complete the required [source-style cycle](../work-execution/references/source-style-cycle.md). Before applying each coherent change, review the proposed code against the request, the actual existing flow and its owning responsibilities; remove unsupported additions before writing. Re-read and audit the saved implementation unit before moving to another responsibility, then audit the combined final result. Inspect and briefly identify the actual reference program/methods and complete relevant call path. A file opening or unrelated example does not establish that comparison.
 
 For C# body work, first read the relevant [coding-style](references/coding-style.md) sections. For Designer creation/edits, first read [Designer](references/designer.md). These are the baseline routes; then select the task-specific references below. Loading this entrypoint alone does not load those rules.
 
