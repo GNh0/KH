@@ -11,7 +11,7 @@ def configure_utf8_streams() -> None:
         if isinstance(stream, TextIOWrapper):
             stream.reconfigure(encoding='utf-8')
 
-_ASSIGNMENT = re.compile(r'(?i)(\b(?:password|passwd|pwd|api[_-]?key|access[_-]?token|client[_-]?secret)\b\s*[=:]\s*)(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\s;,]+)')
+_ASSIGNMENT = re.compile(r'(?i)(["\']?\b(?:password|passwd|pwd|api[_-]?key|access[_-]?token|client[_-]?secret)\b["\']?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\'|[^\s;,]+)')
 _TOKENS = re.compile(r'(?i)\bBearer\s+[^\s"\']+|\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}')
 _SENSITIVE_KOREAN = re.compile(r'(?i)(비밀번호|패스워드)\s*(?:는|은|가|:|=)?\s*\S+')
 
