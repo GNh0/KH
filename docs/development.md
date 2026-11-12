@@ -20,6 +20,8 @@ Zero type errors and passing unit tests do not replace C# compilation, Designer 
 
 The `tests/domain` suite is in-repository regression coverage, not an independent evaluation of skill selection or agent behavior. Validate important assumptions against user requirements, source-based counterexamples and separate evaluators where available; see [scenario evaluation](../skills/kh-maintenance/references/scenario-evaluation.md).
 
+API authentication tests use an independent HTTP protocol fixture and actual Windows current-user DPAPI, including cold CLI reuse, revision/approval boundaries, refresh-token rotation and interrupted maintenance. They do not establish live OpenAI/Google account permissions or successful provider reissue. Live checks require conversational approval for the actual account/session, a secret-safe internal handoff and an authorized real request; never substitute native Codex/Claude login tokens. The runtime remains standard-library-only. Test fixtures and optional development dependencies belong outside the source tree and must be cleaned.
+
 ## GitHub publication
 
 This repository's existing publication flow uses a source/version commit on `release` and a separate publication commit with the identical file tree on `main`. The marketplace registration reads `main`'s `.agents/plugins/marketplace.json`, whose plugin source points to `release`. Preserve that structure and verify both remote refs, the manifest version and tree equality after pushing. Keep unrelated working-tree files out of the commits. Publishing only the source branch is not the completed existing release flow.

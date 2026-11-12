@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH packages twelve focused development skills, four role agents, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH packages thirteen focused skills, four role agents, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
@@ -61,6 +61,7 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 | [work-planning](skills/work-planning/SKILL.md) | Substantial work with unresolved choices or dependencies |
 | [work-execution](skills/work-execution/SKILL.md) | Approved multi-step work, progress and stop/resume handling |
 | [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | Finished task-owned processes, REPL resources and command-tree lifetimes |
+| [api-auth](skills/api-auth/SKILL.md) | Shared API credential registration, reuse and explicitly approved renewal/reconnection |
 | [code-review](skills/code-review/SKILL.md) | Actual changes, behavior regressions and verification |
 | [rule-audit](skills/rule-audit/SKILL.md) | Applicable-rule compliance, omitted prerequisites, focused repairs and rechecks |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | Reproducing a failure and tracing its actual cause |
@@ -81,6 +82,8 @@ C# guidance preserves the actual screen's event flow, control defaults, names an
 SQL checks compare supported source tokens and layout; the agent determines business meaning from the query and user instructions. PB work maps the source's events, state, DataWindows and stored-procedure parameters before migration.
 
 Runtime cleanup preserves needed work and releases completed task-owned sessions, handles and helpers. The optional [Windows runner](skills/runtime-cleanup/references/windows-runner.md) contains a newly launched command tree and verifies its exit; it cannot dispose Codex-internal MCP caches or existing shared services.
+
+Shared [API authentication](skills/api-auth/SKILL.md) keeps external API credentials in Windows current-user encrypted storage outside projects/plugin caches. Service profiles support Bearer/header authentication, OAuth refresh and configurable JSON key issuance; OpenAI and Google Cloud have managed-key adapters. New compatible services join through configuration. Actual user approval is required for credential maintenance; the tool does not change native Codex/Claude login. See [usage and limits](skills/api-auth/references/usage.md).
 
 LINQ, intermediate tables and builds are disfavored by the included project style. Use them when avoiding them makes implementation difficult or causes an extreme performance disadvantage, with a concrete reason. Current user instructions take precedence.
 

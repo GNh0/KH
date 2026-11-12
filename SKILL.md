@@ -9,3 +9,5 @@ Before handing over skill-guided work, use the shared [rule audit](skills/rule-a
 SQL/PB/C# project work follows the required [source-style cycle](skills/work-execution/references/source-style-cycle.md): read actual comparison-project style before writing, then re-read and audit the final code, repair violations and check the final repairs for regressions.
 
 Bundled [hooks and context retention](docs/hooks-and-context.md) supplement these procedures with observed read/check conditions and scoped recovery. They need host trust and do not prove semantic compliance. For long work or explicit durable project memory, use [context handoff](skills/context-handoff/SKILL.md).
+
+External API credentials use [shared API authentication](skills/api-auth/SKILL.md) for secure registration, reuse and explicitly approved maintenance.
