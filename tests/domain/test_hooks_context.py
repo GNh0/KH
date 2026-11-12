@@ -91,7 +91,12 @@ class HooksContextTests(unittest.TestCase):
         self.append_user('앞의 저장 작업은 취소하고 조회만 수정해')
         output = self.event('PreCompact')
         self.assertIn('preserved', output['systemMessage'])
-        restored = self.event('PostCompact')['hookSpecificOutput']['additionalContext']
+        # PostCompact cannot inject model context. It must not consume pending recovery.
+        self.assertEqual({}, self.event('PostCompact'))
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        with store.connect() as connection:
+            self.assertTrue(store.load(connection, session_key(self.base, 'codex'))['restore_pending'])
+        restored = self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext']
         self.assertLess(restored.index('조회만'), restored.index('기본 폭'))
         self.assertIn('byte_offset', restored)
         self.assertEqual({}, self.event('SessionStart', source='compact'))
@@ -107,7 +112,7 @@ class HooksContextTests(unittest.TestCase):
         with self.log.open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'type': 'response_item', 'payload': {'type': 'reasoning', 'text': 'hidden-reasoning-marker'}}) + '\n')
         self.event('PreCompact')
-        output = self.event('PostCompact')
+        output = self.event('SessionStart', source='compact')
         serialized = json.dumps(output, ensure_ascii=False)
         self.assertNotIn('fictional-private', serialized)
         self.assertNotIn('hidden-reasoning-marker', serialized)
@@ -244,7 +249,7 @@ class HooksContextTests(unittest.TestCase):
         self.log.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'foreign'}}) + '\n' +
                             json.dumps({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': 'FOREIGN' * 30}}) + '\n')
         self.assertIn('incomplete', self.event('PreCompact')['systemMessage'])
-        restored = self.event('PostCompact')['hookSpecificOutput']['additionalContext']
+        restored = self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext']
         self.assertNotIn('FOREIGN', restored)
         fresh = self.root / 'damage.jsonl'
         fresh.write_text('{not valid json}\n')
@@ -267,7 +272,7 @@ class HooksContextTests(unittest.TestCase):
         cli('remember', 'label-style', '--file', str(fact))
         self.append_user('수정 작업 취소. 지금은 검토 결과만 전달해')
         self.event('PreCompact')
-        restored = self.event('PostCompact')['hookSpecificOutput']['additionalContext']
+        restored = self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext']
         self.assertIn('newer user records=1', restored)
         self.assertIn('preview_truncated=True', restored)
         self.assertIn('수정 작업 취소', restored)
@@ -458,7 +463,7 @@ class HooksContextTests(unittest.TestCase):
         self.assertIn('unverified', state['capture_warning'])
         output = self.event('PreCompact')
         self.assertIn('incomplete', output['systemMessage'])
-        self.assertIn('Capture incomplete', self.event('PostCompact')['hookSpecificOutput']['additionalContext'])
+        self.assertIn('Capture incomplete', self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext'])
 
     def test_latest_cancellation_survives_when_transcript_capture_has_backlog(self):
         self.prerequisites()
@@ -468,7 +473,7 @@ class HooksContextTests(unittest.TestCase):
             self.event('UserPromptSubmit', prompt='이전 작업 취소. 다음 요청까지 멈춰')
             self.event('UserPromptSubmit', prompt='현재 상태만 알려줘.')
             self.event('PreCompact')
-        restored = self.event('PostCompact')['hookSpecificOutput']['additionalContext']
+        restored = self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext']
         self.assertIn('이전 작업 취소', restored)
         self.assertIn('Capture incomplete', restored)
         result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/kh_context.py'), '--cwd', str(self.project),

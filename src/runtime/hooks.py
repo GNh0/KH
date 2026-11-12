@@ -325,7 +325,7 @@ def handle(event: dict, host: str) -> dict:
     if mode == 'off':
         return {}
     if name not in {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PreCompact',
-                    'PostCompact', 'Stop', 'Interrupt', 'SessionEnd'}:
+                    'Stop', 'Interrupt', 'SessionEnd'}:
         return {}
     store = Store(data_root(), event['cwd'])
     key = session_key(event, host)
@@ -404,12 +404,9 @@ def handle(event: dict, host: str) -> dict:
                         r'(?:[.!]\s*(?:지금은\s*)?아무것도\s*하지\s*마[.!]?)?)[.!\s]*')
                 if len(prompt) < 300 and re.fullmatch(stop, prompt, re.I):
                     state['paused'] = True
-        elif name in {'SessionStart', 'PostCompact'}:
-            if host == 'claude' and name == 'PostCompact':
-                # Claude PostCompact is observational; SessionStart(source=compact) injects context.
-                store.save(connection, key, state)
-                return {}
-            compact = name == 'PostCompact' or event.get('source') == 'compact'
+        elif name == 'SessionStart':
+            # Both hosts inject restored context through SessionStart, not PostCompact.
+            compact = event.get('source') == 'compact'
             if not compact or state.get('restore_pending', True):
                 text = restore(state, store.memories(connection), store)
                 if text:
