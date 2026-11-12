@@ -24,6 +24,8 @@ Typed Edit/Write/apply_patch and a limited set of literal shell-write paths are 
 
 Recovery is a bounded preview with original source locations. It is not a second summary that silently replaces the originals. Latest corrections/cancellations take precedence, a checkpoint records its user-record cursor, and incomplete capture is reported. The latest observed UserPromptSubmit is preserved separately even while a large transcript has pending capture; older uncaptured details still require the original log/checkpoint. Supported Codex/Claude transcript adapters are version-sensitive because host transcript formats are not stable public APIs. Images, attachments, deleted logs and unsupported formats remain unverified.
 
+Codex capture accepts both desktop `response_item/message/role=user` text parts and `event_msg/user_message`. Adjacent mirrored representations share one archive record with both source locations; separate repeated requests remain separate. Adapter upgrades rewind the selected transcript once and backfill in bounded passes, preserving existing archive identifiers, checkpoints and pause state. A fully read log with no supported user records is reported as unverified rather than successfully preserved.
+
 Use [context handoff](../skills/context-handoff/SKILL.md) to save a critical task checkpoint or explicitly requested long-term project fact. Storage is outside project/cache trees and isolated by project/chat; no native global memory is edited. Local archival is not promotion of all historical requests into permanent user preferences.
 
 ## References adapted

@@ -14,4 +14,6 @@ Use `python -B <absolute-plugin-root>/scripts/kh_context.py --cwd <absolute-work
 
 Bundled hooks archive user records before compaction and preserve original transcript offsets/hashes, plus redacted text capped at 64,000 characters per record. They never archive reasoning or tool bodies. A large/unsupported/incomplete transcript produces diagnostics; a preview cut is not a complete read. The native transcript remains necessary for huge entries, images and attachments. Structured secrets are masked on a best-effort basis; do not deliberately submit secrets as memories.
 
+The Codex adapter reads both desktop response-message records and user event records. A one-time adapter backfill can leave pending bytes on a long existing chat; keep the original transcript and check diagnostics until capture catches up. Existing checkpoints, pause state and archive ids remain intact. Host-only parts are excluded individually so they cannot hide a real request in the same multipart message.
+
 After compaction/restart, inspect later records before trusting a checkpoint. The hook injects only a bounded recovery preview; use `recall`/`search` and the original transcript for missing details. Revalidate files and pending runtime ownership. Do not replay completed DB writes, deployments or cancellations merely because they appear in older evidence.
