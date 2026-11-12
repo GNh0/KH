@@ -7,3 +7,5 @@ This file is an index, not an automatically executed router. The host exposes ea
 Before handing over skill-guided work, use the shared [rule audit](skills/rule-audit/SKILL.md) to compare applicable rules with actual results and repair confirmed violations within scope.
 
 SQL/PB/C# project work follows the required [source-style cycle](skills/work-execution/references/source-style-cycle.md): read actual comparison-project style before writing, then re-read and audit the final code, repair violations and check the final repairs for regressions.
+
+Bundled [hooks and context retention](docs/hooks-and-context.md) supplement these procedures with observed read/check conditions and scoped recovery. They need host trust and do not prove semantic compliance. For long work or explicit durable project memory, use [context handoff](skills/context-handoff/SKILL.md).

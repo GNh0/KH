@@ -2,6 +2,8 @@
 
 Apply this while writing SQL, PB or C# project code, including Designer and reports: review the proposed change before applying it, audit each completed implementation unit, then check the combined result. An implementation unit is a coherent method, query branch or related UI change, not every line or tool call. Use the current working context; no separate draft file, checklist or audit log is required.
 
+When long work needs continuation across compaction/restart, preserve exact critical constraints, latest corrections and unfinished verification through [context handoff](../../context-handoff/SKILL.md). After restoration, retrieve omitted original evidence and recheck current sources; an older checkpoint cannot revive cancelled work or replace newer instructions.
+
 ## Before the first code write
 
 Select an actual existing reference **program, screen or procedure for each changed responsibility** in the user's designated comparison project. If none is designated, use an available approved other project with the same framework. A query/layout example does not establish a printing or save path it does not implement. Read the relevant complete bodies and follow their called preparation/initialization through the point where the result is consumed. A project name, search hit, file opening or fixed first-lines excerpt does not establish this coverage. Do not substitute unapproved generated drafts or user-rejected code for a working reference.
