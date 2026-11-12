@@ -7,7 +7,8 @@ from src.api_auth.profile import api_base, expiry, fingerprint, validate_bundle,
 from src.api_auth.providers import google_issue, headers, http_issue, openai_issue, refresh, revoke
 from src.api_auth.security import AuthError, safe_output, secret_values
 from src.api_auth.store import Store
-from src.api_auth.transport import Transport, validate_url
+from src.api_auth.streaming import Mapping, Presenter, choose_protocol, strict_json, wire_events
+from src.api_auth.transport import StreamLimits, Transport, category, validate_url
 
 
 class Manager:
@@ -153,6 +154,69 @@ class Manager:
         response = self.transport.send(method, url, headers(current['profile'], bundle), body)
         return safe_output({'service': service, 'status': response.category, 'http_status': response.status,
                             'renewal_due': state == 'due', 'data': response.data}, secret_values(bundle))
+
+    def stream(self, service: str, method: str, path: str, body=None, *, sink, protocol='auto', mapping=None,
+               output_dir=None, limits: StreamLimits | None = None, selected_base: str | None = None) -> dict:
+        if method not in {'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'}:
+            raise AuthError('invalid_request', 'Unsupported HTTP method.')
+        if not isinstance(path, str) or not path.startswith('/') or path.startswith('//') or '\\' in path:
+            raise AuthError('invalid_request', 'Use a path relative to the registered API base URL.')
+        if protocol not in {'auto', 'sse', 'ndjson', 'text'}:
+            raise AuthError('invalid_stream_protocol', 'Choose auto, sse, ndjson or text.')
+        current = self.entry(service)
+        bundle = current['active']
+        if bundle is None:
+            raise AuthError('registration_required', 'Register this service before streaming.')
+        if expiry(bundle, current['profile']) == 'expired':
+            raise AuthError('renewal_approval_required', 'This credential expired; review its maintenance before another request.')
+        base = api_base(current['profile'], selected_base, loopback=self.transport.loopback)
+        url = validate_url(base + path, loopback=self.transport.loopback)
+        limits = limits or StreamLimits()
+        presenter = Presenter(sink, secret_values(bundle), Mapping(mapping), output_dir)
+        outgoing = headers(current['profile'], bundle)
+        outgoing['Accept'] = {'sse': 'text/event-stream', 'ndjson': 'application/x-ndjson', 'text': 'text/plain'}.get(protocol, 'text/event-stream, application/x-ndjson, text/plain')
+        result = {'service': service, 'status': 'stream_closed', 'terminal_received': False}
+        presenter.emit({'kind': 'request_started', 'service': service, 'method': method,
+                        'renewal_due': expiry(bundle, current['profile']) == 'due'})
+        try:
+            with self.transport.open_stream(method, url, outgoing, body, limits) as response:
+                result.update(http_status=response.status, request_id=response.request_id)
+                if not 200 <= response.status < 300:
+                    error_blocks, error_size = [], 0
+                    for block in response.chunks:
+                        error_size += len(block)
+                        if error_size > 1024 * 1024:
+                            raise AuthError('response_too_large', 'Stream error response exceeded the 1 MiB bound.')
+                        error_blocks.append(block)
+                    raw = b''.join(error_blocks)
+                    try:
+                        data = strict_json(raw)
+                    except (ValueError, UnicodeError, RecursionError):
+                        data = {'message': 'Non-JSON error response omitted.'}
+                    result['status'] = category(response.status, data)
+                    presenter.emit({'kind': 'error', 'category': result['status'], 'http_status': response.status, 'data': data})
+                else:
+                    actual_protocol = choose_protocol(protocol, response.content_type)
+                    presenter.emit({'kind': 'connected', 'http_status': response.status, 'protocol': actual_protocol,
+                                    'request_id': response.request_id})
+                    for wire in wire_events(response.chunks, actual_protocol, limits):
+                        terminal, kind = presenter.accept(wire)
+                        if terminal:
+                            result.update(status='provider_error' if kind == 'error' else 'completed', terminal_received=True)
+                            break
+                    presenter.flush_text()
+        except AuthError as error:
+            result['status'] = error.code
+            presenter.flush_text()
+            presenter.emit({'kind': 'error', 'category': error.code, 'message': str(error)})
+        except KeyboardInterrupt:
+            result['status'] = 'cancelled'
+            presenter.flush_text()
+            presenter.emit({'kind': 'cancelled', 'upstream_cancelled': False,
+                            'message': 'Local stream stopped. Closing HTTP does not prove that remote work was cancelled.'})
+        finally:
+            presenter.emit({'kind': 'connection_closed', **result, 'local_connection_closed': True})
+        return safe_output(result, secret_values(bundle))
 
     def prepare(self, service: str, reason: str, *, clipboard_baseline=None, source_url=None, session_label=None, account_label=None, create_key=None) -> dict:
         if reason not in {'user_request', 'expiry_due', 'expired', 'authentication_rejected'}:

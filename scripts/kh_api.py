@@ -10,8 +10,9 @@ from src.api_auth.manager import Manager
 from src.api_auth.profile import fingerprint, validate_profile
 from src.api_auth.security import AuthError
 from src.api_auth.store import Store
-from src.api_auth.transport import Transport
+from src.api_auth.transport import StreamLimits, Transport
 from src.api_auth.input import clipboard_sequence, clear_owned_clipboard, read_credential
+from src.api_auth.streaming import strict_json
 from src.common.output import configure_utf8_streams
 
 
@@ -95,6 +96,20 @@ def main(argv=None):
     request.add_argument('--path', required=True)
     request.add_argument('--api-base', help='reuse this credential at an allowed API base; Google Cloud permits HTTPS Google API hosts')
     request.add_argument('--body-file', help='UTF-8 JSON request body, not an authentication file')
+    stream = sub.add_parser('stream', help='stream SSE, NDJSON or UTF-8 HTTP events through the registered credential')
+    stream.add_argument('service')
+    stream.add_argument('--method', default='GET', choices=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'])
+    stream.add_argument('--path', required=True)
+    stream.add_argument('--api-base')
+    stream.add_argument('--body-file', help='public JSON request parameters, not credentials')
+    stream.add_argument('--protocol', choices=['auto', 'sse', 'ndjson', 'text'], default='auto')
+    stream.add_argument('--mapping', help='non-secret event presentation mapping JSON')
+    stream.add_argument('--output-dir', help='absolute artifact directory outside project sources')
+    stream.add_argument('--timeout-seconds', type=float, default=180)
+    stream.add_argument('--idle-timeout', type=float, default=30)
+    stream.add_argument('--max-bytes', type=int, default=64 * 1024 * 1024)
+    stream.add_argument('--max-event-bytes', type=int, default=8 * 1024 * 1024)
+    stream.add_argument('--max-events', type=int, default=10000)
     forget = sub.add_parser('forget', help='remove local credentials; no remote key is revoked')
     forget.add_argument('service')
     forget.add_argument('--confirm-service', required=True)
@@ -169,6 +184,26 @@ def main(argv=None):
                 result = store.forget(args.service)
         elif args.command == 'reconcile':
             result = manager.reconcile(args.plan, args.outcome, args.evidence_reference)
+        elif args.command == 'stream':
+            mapping = None
+            if args.mapping:
+                with Path(args.mapping).open('r', encoding='utf-8-sig') as file:
+                    text = file.read(64001)
+                if len(text) > 64000:
+                    raise AuthError('invalid_stream_mapping', 'Stream mapping exceeds the size bound.')
+                mapping = strict_json(text)
+            body = None
+            if args.body_file:
+                with Path(args.body_file).open('r', encoding='utf-8-sig') as file:
+                    text = file.read(1024 * 1024 + 1)
+                if len(text) > 1024 * 1024:
+                    raise AuthError('request_too_large', 'Streaming JSON request exceeds the input bound.')
+                body = strict_json(text)
+            limits = StreamLimits(args.timeout_seconds, args.idle_timeout, args.max_bytes, args.max_event_bytes, args.max_events)
+            result = manager.stream(args.service, args.method, args.path, body, protocol=args.protocol, mapping=mapping,
+                output_dir=args.output_dir, limits=limits, selected_base=args.api_base,
+                sink=lambda record: print(json.dumps(record, ensure_ascii=False, allow_nan=False), flush=True))
+            return 130 if result['status'] == 'cancelled' else 0 if result['status'] in {'completed', 'stream_closed'} else 2
         else:
             body = json.loads(Path(args.body_file).read_text(encoding='utf-8-sig')) if args.body_file else None
             result = manager.request(args.service, args.method, args.path, body, selected_base=args.api_base)
@@ -176,6 +211,8 @@ def main(argv=None):
         return 2 if result.get('status') in {'authentication_rejected', 'permission_denied', 'quota_or_rate_limit',
             'service_error', 'request_error', 'redirect_blocked', 'registration_required',
             'renewal_approval_required', 'reconnection_pending', 'revocation_pending', 'maintenance_in_progress'} else 0
+    except BrokenPipeError:
+        return 1
     except AuthError as error:
         print(json.dumps({'status': error.code, 'message': str(error)}, ensure_ascii=False))
         return 1
