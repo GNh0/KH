@@ -10,4 +10,4 @@ SQL/PB/C# project work follows the required [source-style cycle](skills/work-exe
 
 Bundled [hooks and context retention](docs/hooks-and-context.md) supplement these procedures with observed read/check conditions and scoped recovery. They need host trust and do not prove semantic compliance. For long work or explicit durable project memory, use [context handoff](skills/context-handoff/SKILL.md).
 
-External API credentials use [shared API authentication](skills/api-auth/SKILL.md) for secure registration, reuse and explicitly approved maintenance.
+External API credentials, authenticated requests and streaming use [shared API authentication](skills/api-auth/SKILL.md) for secure registration, reuse, approved maintenance and live event handling.

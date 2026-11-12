@@ -18,7 +18,7 @@ Follow the current host task/Goal tool contract for completion and blocked statu
 - Preserve critical constraints, current corrections and unfinished verification through [context handoff](../context-handoff/SKILL.md) when long work needs durable continuation. Restore from this chat's checkpoint and original evidence after compaction; do not rely solely on a compressed goal summary.
 - Apply [runtime cleanup](../runtime-cleanup/SKILL.md) when using command trees, background helpers, persistent REPLs or other runtime resources; release completed task-owned work before final handover.
 - Read [secret handling](references/secret-handling.md) only when handling input containing actual secrets.
-- For external API credential registration, reuse or approved maintenance, use [shared API authentication](../api-auth/SKILL.md); existing host login and app-managed MCP authentication remain with their owning host.
+- For external API credentials, authenticated requests or live streaming, use [shared API authentication](../api-auth/SKILL.md); existing host login and app-managed MCP authentication remain with their owning host.
 - Read [preferences and exceptions](references/preferences.md) when deciding whether a disfavored approach is necessary.
 
 Communicate the work and meaningful progress. Do not record errors, interruptions, or unexecuted work as success. Deliver the complete code/SQL or final replacement requested by the user, identifying changed program IDs and the scope verified.
