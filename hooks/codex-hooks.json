@@ -86,18 +86,6 @@
         ]
       }
     ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -B \"${PLUGIN_ROOT}/scripts/kh_hook.py\" --host codex",
-            "commandWindows": "python -B \"$env:PLUGIN_ROOT/scripts/kh_hook.py\" --host codex",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "Interrupt": [
       {
         "hooks": [
