@@ -31,6 +31,17 @@ class WireTests(unittest.TestCase):
         self.assertEqual([0, False, None, [], 'hello'], [record['data'] for record in records])
         self.assertTrue(all(record['kind'] == 'data' for record in records))
 
+    def test_large_split_sse_payload_preserves_content_and_crlf_boundaries(self):
+        content = '가' * (1024 * 1024)
+        data = ('data: ' + json.dumps({'image': content}, ensure_ascii=False) + '\r\n\r\n').encode('utf-8')
+        events = list(wire_events((data[index:index + 4096] for index in range(0, len(data), 4096)), 'sse', StreamLimits()))
+        self.assertEqual([{'image': content}], [event['data'] for event in events])
+        for ending in ('\r', '\n', '\r\n'):
+            data = ('data: 1' + ending + ending + 'data: 2' + ending + ending).encode()
+            for width in (1, 2, 7):
+                events = list(wire_events((data[index:index + width] for index in range(0, len(data), width)), 'sse', StreamLimits()))
+                self.assertEqual([1, 2], [event['data'] for event in events])
+
     def test_text_decode_and_validation(self):
         data = '가나다'.encode('utf-8')
         events = list(wire_events((data[index:index + 1] for index in range(len(data))), 'text', StreamLimits()))
@@ -39,6 +50,13 @@ class WireTests(unittest.TestCase):
             list(wire_events([b'\xff'], 'text', StreamLimits()))
         with self.assertRaises(AuthError):
             list(wire_events([b'{bad}\n'], 'ndjson', StreamLimits()))
+
+    def test_truncated_utf8_bom_is_rejected_in_all_protocols(self):
+        for protocol in ('sse', 'ndjson', 'text'):
+            for data in (b'\xef', b'\xef\xbb'):
+                with self.subTest(protocol=protocol, data=data), self.assertRaises(AuthError) as error:
+                    list(wire_events([data], protocol, StreamLimits()))
+                self.assertEqual('invalid_stream_data', error.exception.code)
 
     def test_wire_limits_and_media_type(self):
         with self.assertRaises(AuthError):

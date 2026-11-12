@@ -23,27 +23,41 @@ def strict_json(text):
 
 def lines(chunks, maximum):
     decoder = codecs.getincrementaldecoder('utf-8-sig')('strict')
-    pending = ''
-    try:
+    fragments, byte_count, skip_lf = [], 0, False
+
+    def decoded_chunks():
         for block in chunks:
-            pending += decoder.decode(block)
-            while True:
-                match = re.search(r'\r\n|\r|\n', pending)
-                if match is None or (match.group() == '\r' and match.end() == len(pending)):
-                    break
-                line, pending = pending[:match.start()], pending[match.end():]
-                if len(line.encode('utf-8')) > maximum:
+            yield decoder.decode(block)
+        tail = decoder.decode(b'', final=True)
+        if decoder.getstate()[0]:
+            raise AuthError('invalid_stream_data', 'Stream ended with incomplete UTF-8.')
+        yield tail
+
+    try:
+        for text in decoded_chunks():
+            if not text:
+                continue
+            if skip_lf and text.startswith('\n'):
+                text = text[1:]
+            skip_lf = text.endswith('\r')
+            start = 0
+            for match in re.finditer(r'\r\n|\r|\n', text):
+                part = text[start:match.start()]
+                byte_count += len(part.encode('utf-8'))
+                if byte_count > maximum:
                     raise AuthError('stream_event_too_large', 'Stream line exceeded its event bound.')
-                yield line
-            if len(pending.encode('utf-8')) > maximum:
+                fragments.append(part)
+                yield ''.join(fragments)
+                fragments, byte_count = [], 0
+                start = match.end()
+            part = text[start:]
+            byte_count += len(part.encode('utf-8'))
+            if byte_count > maximum:
                 raise AuthError('stream_event_too_large', 'Stream line exceeded its event bound.')
-        pending += decoder.decode(b'', final=True)
-        # A final CR is a complete line ending. A remaining unterminated line is not.
-        if pending.endswith('\r'):
-            yield pending[:-1]
-            pending = ''
-        if pending:
-            yield pending
+            if part:
+                fragments.append(part)
+        if fragments:
+            yield ''.join(fragments)
     except UnicodeError:
         raise AuthError('invalid_stream_data', 'Stream contained invalid UTF-8.') from None
 
@@ -63,6 +77,8 @@ def wire_events(chunks, protocol, limits):
                         raise AuthError('stream_event_limit', 'Stream exceeded its event count bound.')
                     yield {'event': 'text', 'id': None, 'data': text, 'json': False}
             text = decoder.decode(b'', final=True)
+            if decoder.getstate()[0]:
+                raise AuthError('invalid_stream_data', 'Stream ended with incomplete UTF-8.')
             if text:
                 yield {'event': 'text', 'id': None, 'data': text, 'json': False}
         except UnicodeError:
