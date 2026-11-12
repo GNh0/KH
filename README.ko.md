@@ -2,7 +2,7 @@
 
 **Claude와 Codex에서 사용하는 SQL·C#/Designer·PowerBuilder 개발 스킬.**
 
-KH는 스킬 12개, 역할별 에이전트 4개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
+KH는 스킬 13개, 역할별 에이전트 4개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
 
 [English](README.md) · [스킬](#스킬) · [로컬 검사](#선택형-로컬-검사) · [개발 검사](docs/development.md)
 
@@ -61,6 +61,7 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 | [work-planning](skills/work-planning/SKILL.md) | 규모가 크거나 중요한 선택이 남은 작업의 계획 |
 | [work-execution](skills/work-execution/SKILL.md) | 승인된 다단계 작업과 진행·중단·재개 |
 | [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | 완료된 작업 소유 프로세스·REPL 자원 정리와 명령 트리 수명 관리 |
+| [api-auth](skills/api-auth/SKILL.md) | 공용 API 인증 등록·재사용과 명시적으로 승인한 갱신·재연결 |
 | [code-review](skills/code-review/SKILL.md) | 실제 변경, 요구 동작과 회귀 검토 |
 | [rule-audit](skills/rule-audit/SKILL.md) | 적용 규칙 준수 감사, 위반 부분만 수정·재검사 |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | 오류 재현과 실제 실행 경로의 원인 분석 |
@@ -81,6 +82,8 @@ C# 작업은 같은 화면의 이벤트 흐름, 컨트롤 기본값, 이름과 �
 SQL 검사기는 지원하는 토큰과 배치를 확인하고, 업무 의미는 쿼리와 사용자 지시를 바탕으로 판단합니다. PB 이관은 원본 이벤트·상태·DataWindow·SP 매개변수와 결과를 먼저 연결합니다.
 
 자원 정리는 필요한 작업을 유지하고, 필요 없어진 작업 소유 세션·핸들·보조 프로세스를 해제합니다. 선택형 [Windows 실행기](skills/runtime-cleanup/references/windows-runner.md)는 새로 실행한 명령 트리의 종료를 검증합니다. Codex 내부 MCP 캐시나 기존 공유 서비스의 종료를 제어하지는 않습니다.
+
+공용 [API 인증 관리](skills/api-auth/SKILL.md)는 외부 API 인증정보를 프로젝트·설치 캐시 밖의 Windows 사용자 암호화 저장소에 보관합니다. Bearer·헤더 인증, OAuth 갱신과 설정형 JSON 재발급을 공통으로 처리하며 OpenAI·Google Cloud 관리형 키 어댑터도 제공합니다. 호환되는 새 서비스는 설정만으로 추가합니다. 갱신 절차는 실제 사용자 승인을 받은 범위에서 수행하고, Codex·Claude 자체 로그인은 변경하지 않습니다. [사용법과 지원 범위](skills/api-auth/references/usage.md)를 참고하세요.
 
 포함된 프로젝트 스타일에서 LINQ·중간 테이블·빌드는 비선호입니다. 피하면 구현이 어렵거나 대안의 성능이 극단적으로 불리할 때 구체적인 이유로 사용합니다. 현재 사용자의 명시적 지시가 우선합니다.
 
