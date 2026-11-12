@@ -91,6 +91,35 @@ def check_package(path: str | Path) -> CheckResult:
     if len(agent_names) != len(set(agent_names)):
         error('agent_name_duplicate', 'Agent names must be unique.')
     result.not_checked.append('host agent discovery, invocation and review behavior')
+    hook_paths = {root / 'hooks/hooks.json'} if (root / 'hooks/hooks.json').exists() else set()
+    declared_hooks = manifest.get('hooks')
+    if isinstance(declared_hooks, str):
+        hook_path = (root / declared_hooks).resolve()
+        if not declared_hooks.startswith('./') or not hook_path.is_relative_to(root) or not hook_path.is_file():
+            error('hook_path_invalid', 'Declared hook configuration must exist inside the package.', manifest_path)
+        else:
+            hook_paths.add(hook_path)
+    for hook_path in hook_paths:
+        try:
+            config = json.loads(hook_path.read_text(encoding='utf-8-sig'))
+            events = config.get('hooks')
+            if not isinstance(events, dict) or not events:
+                raise ValueError('Hook configuration needs a nonempty hooks object.')
+            for groups in events.values():
+                if not isinstance(groups, list):
+                    raise ValueError('Hook event groups must be arrays.')
+                for group in groups:
+                    for handler in group['hooks']:
+                        if handler.get('type') != 'command' or not isinstance(handler.get('command'), str):
+                            raise ValueError('KH bundled hooks use command handlers.')
+                        if not 0 < handler.get('timeout', 0) <= 10:
+                            raise ValueError('KH hook commands need an explicit timeout <=10 seconds.')
+                        if not (root / 'scripts/kh_hook.py').is_file():
+                            raise ValueError('Hook launcher is missing.')
+            result.checked.append('bundled hook JSON shape and launcher presence: ' + hook_path.name)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            error('hook_config_invalid', str(exc), hook_path)
+    result.not_checked.append('host hook trust, event firing and semantic audit/recall behavior')
     python_files = [p for folder in ('src', 'scripts') for p in (root / folder).rglob('*.py')]
     for source in python_files:
         try:
