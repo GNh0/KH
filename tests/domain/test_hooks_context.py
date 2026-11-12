@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from src.context.store import Store, session_key
-from src.context.transcript import capture
+from src.context.transcript import capture, user_text
 from src.runtime.hooks import CYCLE, ROOT, handle
 from src.runtime.hooks import file_paths, line_hashes, update_files, restore
 
@@ -354,6 +355,110 @@ class HooksContextTests(unittest.TestCase):
         capture(state, self.base, 'codex')
         self.assertEqual(2, len(state['users']))
         self.assertNotEqual(state['users'][0]['source']['byte_offset'], state['users'][1]['source']['byte_offset'])
+
+    def test_desktop_response_items_and_multipart_requests_are_collected(self):
+        user = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': [
+            {'type': 'input_text', 'text': '<environment_context>host data</environment_context>'},
+            {'type': 'input_text', 'text': '업그레이드 테스트해줘. 기본 폭 유지.'},
+            {'type': 'input_image', 'image_url': 'ignored'}]}}
+        self.log.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 's1'}}) + '\n' +
+                            json.dumps(user, ensure_ascii=False) + '\n', encoding='utf-8')
+        state = {'users': []}
+        capture(state, self.base, 'codex')
+        self.assertEqual(1, len(state['users']))
+        self.assertEqual('업그레이드 테스트해줘. 기본 폭 유지.', state['users'][0]['text'])
+        self.assertEqual('response_item', state['users'][0]['source']['kind'])
+        user['payload']['role'] = 'assistant'
+        self.assertIsNone(user_text(user, 'codex'))
+
+    def test_dual_transcript_mirrors_are_one_record_but_real_repetitions_remain(self):
+        response = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                    'content': [{'type': 'input_text', 'text': '기본 속성을 유지해'}]}}
+        event = {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '기본 속성을 유지해'}}
+        for pair in ((response, event), (event, response)):
+            self.log.write_text('\n'.join(json.dumps(record, ensure_ascii=False) for record in pair) + '\n', encoding='utf-8')
+            state = {'users': []}
+            capture(state, self.base, 'codex')
+            self.assertEqual(1, len(state['users']))
+            self.assertEqual(1, len(state['users'][0]['source_aliases']))
+            with self.log.open('a', encoding='utf-8') as stream:
+                stream.write('\n'.join(json.dumps(record, ensure_ascii=False) for record in pair) + '\n')
+            capture(state, self.base, 'codex')
+            self.assertEqual(2, len(state['users']))
+
+    def test_response_mirror_across_capture_boundary_and_existing_archive_migration(self):
+        response = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                    'content': [{'type': 'input_text', 'text': '유지해'}]}}
+        event = {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '유지해'}}
+        self.log.write_text(json.dumps(response, ensure_ascii=False) + '\n', encoding='utf-8')
+        state = {'users': []}
+        capture(state, self.base, 'codex')
+        original_id = state['users'][0]['seq']
+        with self.log.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps(event, ensure_ascii=False) + '\n')
+        capture(state, self.base, 'codex')
+        self.assertEqual(1, len(state['users']))
+        self.assertEqual(original_id, state['users'][0]['seq'])
+        # Version 1 had consumed all bytes but kept only the event representation.
+        legacy = {'users': [{**state['users'][0], 'seq': 42, 'source': state['users'][0]['source_aliases'][0]}],
+                  'cursor': self.log.stat().st_size}
+        legacy['users'][0].pop('source_aliases', None)
+        capture(legacy, self.base, 'codex')
+        self.assertEqual(1, len(legacy['users']))
+        self.assertEqual(42, legacy['users'][0]['seq'])
+        self.assertEqual(2, legacy['adapter_version'])
+
+    def test_upgrade_backfills_previously_consumed_desktop_users_without_touching_controls(self):
+        response = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                    'content': [{'type': 'input_text', 'text': '이전 저장 작업 취소'}]}}
+        self.log.write_text(json.dumps(response, ensure_ascii=False) + '\n', encoding='utf-8')
+        state = {'users': [], 'cursor': self.log.stat().st_size,
+                 'checkpoint': {'text': 'preserved checkpoint', 'user_seq': 0}, 'paused': True}
+        capture(state, self.base, 'codex')
+        self.assertEqual('이전 저장 작업 취소', state['users'][0]['text'])
+        self.assertTrue(state['paused'])
+        self.assertEqual('preserved checkpoint', state['checkpoint']['text'])
+        capture(state, self.base, 'codex')
+        self.assertEqual(1, len(state['users']))
+
+    def test_assistant_boundary_and_completed_pair_preserve_real_repeated_requests(self):
+        response = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                    'content': [{'type': 'input_text', 'text': '기본값 유지'}]}}
+        event = {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '기본값 유지'}}
+        assistant = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant',
+                     'content': [{'type': 'output_text', 'text': '완료'}]}}
+        for records in ((response, assistant, event), (response, event, event)):
+            self.log.write_text('\n'.join(json.dumps(record, ensure_ascii=False) for record in records) + '\n', encoding='utf-8')
+            state = {'users': []}
+            capture(state, self.base, 'codex')
+            self.assertEqual(2, len(state['users']))
+
+    def test_backfill_keeps_original_archive_id_across_scan_boundaries(self):
+        response = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                    'content': [{'type': 'input_text', 'text': '보존'}]}}
+        event = {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '보존'}}
+        raw1 = (json.dumps(response, ensure_ascii=False) + '\n').encode('utf-8')
+        raw2 = (json.dumps(event, ensure_ascii=False) + '\n').encode('utf-8')
+        self.log.write_bytes(raw1 + raw2)
+        state = {'users': [{'seq': 42, 'text': '보존', 'sha256': hashlib.sha256('보존'.encode()).hexdigest(),
+                           'truncated': False, 'source': {'path': str(self.log), 'byte_offset': len(raw1),
+                                                         'sha256': hashlib.sha256(raw2).hexdigest()}}],
+                 'cursor': len(raw1) + len(raw2)}
+        with patch('src.context.transcript.SCAN_LIMIT', len(raw1)):
+            capture(state, self.base, 'codex')
+        self.assertGreater(state['backlog_bytes'], 0)
+        capture(state, self.base, 'codex')
+        self.assertEqual([42], [item['seq'] for item in state['users']])
+        self.assertEqual(1, len(state['users'][0]['source_aliases']))
+
+    def test_valid_unknown_format_is_reported_instead_of_success_with_zero_users(self):
+        self.log.write_text(json.dumps({'type': 'future-user-format', 'body': 'must not silently pass'}) + '\n')
+        state = {'users': []}
+        capture(state, self.base, 'codex')
+        self.assertIn('unverified', state['capture_warning'])
+        output = self.event('PreCompact')
+        self.assertIn('incomplete', output['systemMessage'])
+        self.assertIn('Capture incomplete', self.event('PostCompact')['hookSpecificOutput']['additionalContext'])
 
     def test_latest_cancellation_survives_when_transcript_capture_has_backlog(self):
         self.prerequisites()
