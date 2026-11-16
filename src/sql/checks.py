@@ -172,22 +172,27 @@ def _review_generation_choices(candidate: str, original: str | None) -> list[Iss
 
 
 def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: bool = False,
-              check_style: bool = True, check_delta: bool = False, check_preferences: bool = True) -> CheckResult:
-    result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None else CheckResult(
+              check_style: bool = True, check_delta: bool = False, check_preferences: bool = True,
+              compare_original: bool = True) -> CheckResult:
+    comparing = original is not None and compare_original
+    result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None and compare_original else CheckResult(
         checked=["SQL lexical integrity"], not_checked=["SQL Server execution", "complete T-SQL grammar and type semantics", "business equivalence to an unsupplied source"])
     result.metadata['comparison_baselines'] = {'sql': original is not None}
+    result.metadata['original_comparison'] = 'formatting_preservation' if comparing else 'changed_preferences_only'
+    if original is not None and not compare_original:
+        result.not_checked.append('Original SQL is used for changed review findings, not to forbid requested behavior changes.')
     tokens, errors = _analyze_sql_integrity(candidate, check_kind="candidate")
     if not any(t.kind not in {'line_comment', 'block_comment'} for t in tokens):
         result.incomplete = True
         result.issues.append(Issue('sql_code_missing', 'warning', 'No SQL code is available beyond comments or whitespace.'))
-    if original is None:
+    if not comparing:
         result.issues.extend(Issue(e.code, e.severity, e.message, details={"evidence": e.evidence}) for e in errors)
     if any(e.severity == "error" for e in errors):
         return result
     if check_style:
         result.checked.append("KH SQL layout preferences")
         for item in _style_lint(original or candidate, candidate, tokens, tokens,
-                                operation="formatting" if original is not None else "generation"):
+                                operation="formatting" if original else "generation"):
             if preserve_aliases and item.code in {"ad_hoc_outer_alias", "outer_query_uses_derived_table_internal_alias"}:
                 continue
             result.issues.append(Issue(item.code, "warning", item.message,
