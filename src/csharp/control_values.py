@@ -66,7 +66,7 @@ def label_value_key(prop: str, value: str) -> tuple | None:
     if prop == 'Bounds':
         match = re.fullmatch(r'new\s+(?:System\.Drawing\.)?Rectangle\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*(\d+)\s*\)', value)
         return ('height', int(match[1])) if match else None
-    if prop in {'Font', 'Appearance.Font'}:
+    if prop == 'Font' or prop.endswith('.Font'):
         match = re.fullmatch(r'new\s+(?:System\.Drawing\.)?Font\s*\((.*)\)', value, re.S)
         if not match:
             return None

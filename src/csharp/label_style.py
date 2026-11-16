@@ -5,7 +5,7 @@ from src.common.results import CheckResult, Issue
 from .control_defaults import ControlDefaults, _same_type, with_control_base_types
 from .control_names import SINGLE_LINE_INPUT_KINDS as _INPUT_KINDS, known_control_kind
 from .control_values import HEIGHT_PROPERTIES, LABEL_PROPERTIES, label_constructor_value, label_value_key
-from .designer_model import DesignerModel, _normalized_csharp_value
+from .designer_model import ControlRecord, DesignerModel, _normalized_csharp_value
 
 
 _DIMENSIONS = frozenset({'Size', 'Height', 'Bounds'})
@@ -47,6 +47,42 @@ def _key(prop: str, value: str | None) -> tuple | None:
     return label_value_key(prop, value)
 
 
+def _screen_peers(model: DesignerModel, original: DesignerModel, name: str) -> list[ControlRecord]:
+    control = model.controls[name]
+    # A default <form> without an observed Controls.Add is not parent evidence.
+    if control.parent == '<form>' and control.add_order is None:
+        return []
+
+    def visible(record: ControlRecord, source: DesignerModel) -> bool:
+        seen = set()
+        while record.name not in seen:
+            seen.add(record.name)
+            if record.properties.get('Visible', 'true').strip() != 'true':
+                return False
+            if record.parent not in source.controls:
+                return True
+            record = source.controls[record.parent]
+        return False
+
+    peers = []
+    for peer_name, before in original.controls.items():
+        current = model.controls.get(peer_name)
+        if (peer_name == name or current is None or before.parent != control.parent or
+                current.parent != before.parent or not _same_type(before.type_name, current.type_name) or
+                not visible(before, original) or not visible(current, model)):
+            continue
+        if any(_normalized_csharp_value(_property_value(before.properties, p) or '') !=
+               _normalized_csharp_value(_property_value(current.properties, p) or '') for p in LABEL_PROPERTIES):
+            continue
+        peers.append(before)
+    row = [p for p in peers if
+           (control.table_position is not None and p.table_position is not None and
+            control.table_position[1] == p.table_position[1]) or
+           (control.table_position is None and control.location is not None and
+            p.location is not None and control.location[1] == p.location[1])]
+    return row or [p for p in peers if _same_type(p.type_name, control.type_name)]
+
+
 def check_label_style(model: DesignerModel, *, original: DesignerModel | None = None,
                       reference: DesignerModel | None = None, defaults: Sequence[ControlDefaults] = (),
                       allowed_property_changes: Iterable[str] = (), explicit_only: bool = False) -> CheckResult:
@@ -54,7 +90,9 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
     allowed = set(allowed_property_changes)
     typed = with_control_base_types(model, defaults)
     typed_reference = with_control_base_types(reference, defaults) if reference else None
+    typed_original = with_control_base_types(original, defaults) if original else None
     inspected: list[str] = []
+    screen_members = {}
     for name, control in model.controls.items():
         kind = known_control_kind(typed.controls[name].type_name)
         is_label = kind == 'LabelControl'
@@ -81,6 +119,15 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
         similar = [c for n, c in reference.controls.items()
                    if typed_reference and known_control_kind(typed_reference.controls[n].type_name) in _INPUT_KINDS | {'LabelControl'}
                    and c.properties.get('Multiline', '').strip() != 'true'] if reference else []
+        automatic = reference is None and original is not None
+        if reference is None and original is not None:
+            peers = _screen_peers(model, original, name)
+            comparisons = [c for c in peers if _same_type(control.type_name, c.type_name)]
+            similar = [c for c in peers if typed_original and
+                       known_control_kind(typed_original.controls[c.name].type_name) in _INPUT_KINDS | {'LabelControl'}
+                       and c.properties.get('Multiline', '').strip() != 'true']
+            if comparisons or similar:
+                screen_members[name] = [c.name for c in comparisons or similar]
         if not constructor and not comparisons and not similar:
             result.not_checked.append('presentation defaults for ' + name + '; supply the actual control source and approved screen controls')
             continue
@@ -96,13 +143,27 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
             actual = _property_value(control.properties, prop)
             inherited = _property_value(constructor, prop)
             refs = (comparisons or similar) if prop in HEIGHT_PROPERTIES else comparisons
-            values = [_property_value(c.properties, prop) for c in refs]
+            values = [_property_value(c.properties, prop) for c in refs
+                      if prop not in {'MinimumSize', 'MaximumSize'} or comparisons]
             present = [v for v in values if v is not None]
+            if prop in {'MinimumSize', 'MaximumSize'} and not present and refs and actual is not None:
+                heights = {_key('Height', _property_value(c.properties, 'Height')) for c in refs}
+                bound = _key(prop, actual)
+                established = next(iter(heights), None)
+                if len(heights) == 1 and established is not None and bound is not None:
+                    height = established[1]
+                    compatible = bound[1] <= height if prop == 'MinimumSize' else bound[1] == 0 or bound[1] >= height
+                    if compatible:
+                        continue
+                    result.issues.append(Issue(('label_' if is_label else 'control_') + 'height_mismatch', 'error',
+                        'This size constraint prevents the height established by the actual comparison controls.',
+                        details={'property': f'{name}.{prop}', 'screen_height': height, 'actual': actual}))
+                    continue
             # Control-owned font/alignment win over copied screen overrides.
             # Actual screen heights win over unscaled constructor dimensions.
             use_reference = bool(present) and (prop in HEIGHT_PROPERTIES or inherited is None)
             expected = present[0] if use_reference else inherited
-            source = 'comparison controls' if use_reference else 'control constructor'
+            source = ('unchanged same-screen controls' if automatic else 'comparison controls') if use_reference else 'control constructor'
             if use_reference and len({_key(prop, v) or ('expression', _normalized_csharp_value(v)) for v in present}) > 1:
                 if actual is not None:
                     result.incomplete = True
@@ -143,7 +204,7 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
     if inspected:
         result.checked.append('scoped label font/alignment and label/input heights against supplied initialization and actual comparison controls')
         if reference is None:
-            result.not_checked.append('height matching to actual screen controls; no comparison Designer supplied')
+            result.not_checked.append('explicit comparison Designer and runtime layout; automatic same-screen peers are limited to recorded unchanged visible controls')
     result.metadata['label_style'] = {'inspected_members': inspected, 'reference_supplied': reference is not None,
-                                      'control_source_supplied': bool(defaults)}
+                                      'control_source_supplied': bool(defaults), 'same_screen_members': screen_members}
     return result
