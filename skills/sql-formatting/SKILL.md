@@ -9,6 +9,8 @@ Execute in the current agent by default. Use the [KH delegation flow](../work-ex
 
 For project code generation/edits, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md). Review the proposed change against actual comparison-project SQL, target behavior and its owning branch before applying it. Re-read and audit each saved implementation unit before moving to another responsibility, then audit the combined final SQL.
 
+Do not add or change a value fallback unless the user explicitly requested that substitution. Preserve the actual supplied/stored value; NULLs, blanks, missing legacy data or defensive coding do not authorize replacing it with another field, master/default value, zero or a literal. A request to initialize an input default does not authorize replacing submitted values during SAVE or later SELECT. Changing ISNULL to COALESCE, CASE or another form does not change this rule; preserve unchanged existing handling outside the requested correction.
+
 ## Procedure work: SELECT and SAVE
 
 Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Select the changed responsibilities in the [illustrative-pattern index](references/procedure-patterns.md) and read those examples; do not load the whole example collection. Verify the selected structure against the complete procedures. Derive schema, types, keys and behavior from the actual target. When the request adds a caller or operation, cover the added responsibility before drafting it.

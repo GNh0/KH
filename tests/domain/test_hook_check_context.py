@@ -161,6 +161,28 @@ class HookCheckContextTests(unittest.TestCase):
         self.assertEqual({}, state['files'])
         self.assertEqual(fixed, SourceBaselines(self.store.path.parent / 'checks' / self.key, state).original(code))
 
+    def test_sql_value_fallback_survives_readback_until_the_unauthorized_addition_is_removed(self):
+        sql = self.project / 'Save.sql'
+        before = 'SELECT A.LIMIT_VALUE, ISNULL(A.QTY, 0) AS QTY FROM INPUT_ROWS A;'
+        sql.write_text(before, encoding='utf-8', newline='')
+        self.read_skills('sql-formatting')
+        self.write_event('PreToolUse', sql)
+        added = before.replace('SELECT A.LIMIT_VALUE', 'SELECT ISNULL(A.LIMIT_VALUE, 0)')
+        sql.write_text(added, encoding='utf-8', newline='')
+        response = self.write_event('PostToolUse', sql)
+        self.assertIn('value_fallback_review', response['hookSpecificOutput']['additionalContext'])
+        self.event('PostToolUse', tool_name='Read', tool_response=added)
+        check = self.state()['files'][str(sql)]['check']
+        self.assertEqual('review_required', check['status'])
+        self.assertEqual(1, check['warning_counts']['value_fallback_review'])
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.write_event('PreToolUse', sql)
+        sql.write_text(before, encoding='utf-8', newline='')
+        self.write_event('PostToolUse', sql)
+        self.event('PostToolUse', tool_name='Read', tool_response=before)
+        self.assertEqual({}, self.event('Stop'))
+        self.assertFalse((self.store.path.parent / 'checks' / self.key).exists())
+
     def test_new_file_has_empty_original_but_unknown_original_is_not_current_source(self):
         state = {}
         baselines = SourceBaselines(self.root / 'snapshots', state)

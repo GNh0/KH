@@ -16,6 +16,130 @@ def _review_line_number(source: str, offset: int) -> int:
     return len(re.findall(r'\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]', source[:offset])) + 1
 
 
+def _absence_guard(tokens: list[_SqlToken]) -> bool:
+    for index, token in enumerate(tokens):
+        if token.kind == 'word' and token.normalized == 'IS':
+            end = index + 1
+            if end < len(tokens) and tokens[end].normalized == 'NOT':
+                end += 1
+            if end < len(tokens) and tokens[end].normalized == 'NULL':
+                return True
+        if token.text in {'=', '<>', '!='} and any(
+                tokens[neighbor].normalized in {"''", "N''"}
+                for neighbor in (index - 1, index + 1) if 0 <= neighbor < len(tokens)):
+            return True
+    return False
+
+
+def _value_contexts(tokens: list[_SqlToken]) -> list[bool]:
+    """Separate value production from predicate-only NULL handling."""
+    clauses = [True]
+    cases: list[tuple[int, bool]] = []
+    iifs: dict[int, bool] = {}
+    result = []
+    for index, token in enumerate(tokens):
+        result.append(clauses[-1])
+        word = token.normalized if token.kind == 'word' else ''
+        if token.text == '(':
+            clauses.append(clauses[-1])
+            if index and tokens[index - 1].kind == 'word' and tokens[index - 1].normalized == 'IIF':
+                iifs[len(clauses)] = clauses[-1]
+                clauses[-1] = False
+        elif token.text == ',' and len(clauses) in iifs:
+            clauses[-1] = iifs[len(clauses)]
+        elif token.text == ')' and len(clauses) > 1:
+            iifs.pop(len(clauses), None)
+            clauses.pop()
+        elif token.text == ';' or token.kind == 'batch_separator':
+            clauses[-1] = True
+        elif word in {'SELECT', 'SET', 'VALUES', 'RETURN', 'DECLARE'}:
+            clauses[-1] = True
+        elif word in {'FROM', 'JOIN', 'ON', 'WHERE', 'HAVING', 'GROUP', 'ORDER', 'IF', 'WHILE'}:
+            clauses[-1] = False
+        elif word == 'CASE':
+            cases.append((len(clauses), clauses[-1]))
+        elif word == 'WHEN' and cases:
+            clauses[-1] = False
+        elif word in {'THEN', 'ELSE'} and cases:
+            clauses[-1] = cases[-1][1]
+        elif word == 'END' and cases and cases[-1][0] == len(clauses):
+            clauses[-1] = cases.pop()[1]
+    return result
+
+
+def _value_fallbacks(source: str) -> list[tuple[tuple[str, ...], str, int]]:
+    """Recognize null/blank substitutions, not their authorization or necessity."""
+    tokens = [t for t in _scan_sql_tokens(source)[0] if t.kind not in {'line_comment', 'block_comment'}]
+    values = _value_contexts(tokens)
+    found = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        form = token.normalized if token.kind == 'word' else ''
+        close = None
+        if not values[index]:
+            index += 1
+            continue
+        if form in {'ISNULL', 'COALESCE', 'IIF'} and index + 1 < len(tokens) and tokens[index + 1].text == '(' and (not index or tokens[index - 1].text != '.'):
+            close = _matching_parenthesis_token(tokens, index + 1, len(tokens))
+            if close is not None and form == 'IIF':
+                depth = 0
+                comma = close
+                for cursor in range(index + 2, close):
+                    text = tokens[cursor].text
+                    if text == '(':
+                        depth += 1
+                    elif text == ')':
+                        depth -= 1
+                    elif text == ',' and not depth:
+                        comma = cursor
+                        break
+                if not _absence_guard(tokens[index + 2:comma]):
+                    close = None
+        elif form == 'CASE':
+            depth = 1
+            guard = None
+            absent = False
+            for cursor in range(index + 1, len(tokens)):
+                word = tokens[cursor].normalized if tokens[cursor].kind == 'word' else ''
+                if word == 'CASE':
+                    depth += 1
+                elif word == 'END':
+                    depth -= 1
+                    if not depth:
+                        close = cursor
+                        break
+                elif word == 'WHEN' and depth == 1:
+                    guard = cursor + 1
+                elif word == 'THEN' and depth == 1 and guard is not None:
+                    absent = absent or _absence_guard(tokens[guard:cursor])
+                    guard = None
+            if not absent:
+                close = None
+        if close is not None:
+            found.append((tuple(t.normalized for t in tokens[index:close + 1]), form, token.start))
+            index = close + 1  # One finding for a nested fallback chain.
+        else:
+            index += 1
+    return found
+
+
+def _review_value_fallbacks(candidate: str, original: str | None) -> list[Issue]:
+    previous = Counter(identity for identity, _, _ in _value_fallbacks(original or ''))
+    added = []
+    for identity, form, offset in _value_fallbacks(candidate):
+        if previous[identity]:
+            previous[identity] -= 1
+        else:
+            added.append((form, offset))
+    if added and original is not None and compare_sql(original, candidate).success:
+        return []  # Recognized formatting/alias-only changes did not add a value policy.
+    return [Issue('value_fallback_review', 'warning',
+        'This new or changed null/blank substitution needs the user\'s explicit request for this value source. Preserve the supplied/stored value otherwise. A default-initialization request, nullable column, missing legacy data or defensive intent does not authorize a SAVE/SELECT fallback. Verify the actual request and owning flow; do not replace it with another fallback form to silence review.',
+        line=_review_line_number(candidate, offset), details={'form': form, 'authorization_required': 'explicit user request for this substitution'})
+        for form, offset in added]
+
+
 def _xml_write_sources(source: str) -> tuple[bool, list[tuple[tuple[str, ...], int]]]:
     """Recognize simple XML-to-staging loads and XML sources in owning DML.
 
@@ -298,6 +422,9 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
     result.issues.extend(_review_generation_choices(candidate, original))
     result.issues.extend(review_dispatch(candidate, original))
     result.issues.extend(_review_xml_boundary(candidate, original))
+    result.issues.extend(_review_value_fallbacks(candidate, original))
+    result.checked.append('added or changed ISNULL/COALESCE and supported NULL/blank-guard CASE/IIF substitutions')
+    result.not_checked.append('user authorization for value substitution and equivalent fallbacks outside supported syntax')
     result.checked.append('recognizable new direct XML writes beside an established parsed-staging boundary')
     result.checked.append('explicit added locking hints and aliased typed-empty output fields')
     result.checked.append('supported repeated enclosing scalar-mode guards with no observed mode assignment')

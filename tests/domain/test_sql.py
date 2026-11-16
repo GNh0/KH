@@ -6,6 +6,40 @@ from src.sql.layout import normalize_sql_join_layout
 
 
 class SqlPreservationTests(unittest.TestCase):
+    def test_new_value_fallback_requires_review_without_banning_existing_null_handling(self):
+        before = "INSERT INTO PLAN_ROWS (LIMIT_VALUE) SELECT A.LIMIT_VALUE FROM @INPUT A;"
+        for expression, form in [
+            ("ISNULL(A.LIMIT_VALUE, ISNULL(B.DEFAULT_LIMIT, ISNULL(C.DEFAULT_LIMIT, 0)))", 'ISNULL'),
+            ("COALESCE(A.LIMIT_VALUE, B.DEFAULT_LIMIT, 0)", 'COALESCE'),
+            ("CASE WHEN A.LIMIT_VALUE IS NULL THEN B.DEFAULT_LIMIT ELSE A.LIMIT_VALUE END", 'CASE'),
+            ("CASE WHEN A.LIMIT_TEXT = '' THEN B.DEFAULT_TEXT ELSE A.LIMIT_TEXT END", 'CASE'),
+            ("CASE WHEN A.LIMIT_VALUE > 0 THEN A.LIMIT_VALUE WHEN A.LIMIT_VALUE IS NULL THEN 0 ELSE A.LIMIT_VALUE END", 'CASE'),
+            ("CASE WHEN '' = A.LIMIT_TEXT THEN B.DEFAULT_TEXT ELSE A.LIMIT_TEXT END", 'CASE'),
+            ("IIF(A.LIMIT_VALUE IS NULL, B.DEFAULT_LIMIT, A.LIMIT_VALUE)", 'IIF'),
+        ]:
+            candidate = before.replace('SELECT A.LIMIT_VALUE', 'SELECT ' + expression)
+            result = check_sql(candidate, original=before, compare_original=False)
+            findings = [i for i in result.issues if i.code == 'value_fallback_review']
+            self.assertEqual(1, len(findings), expression)
+            self.assertEqual(form, findings[0].details['form'])
+            self.assertEqual('warning', findings[0].severity)
+            self.assertTrue(result.success)  # Review is not a blanket syntax/API prohibition.
+            unchanged = check_sql(candidate, original=candidate, compare_original=False)
+            self.assertNotIn('value_fallback_review', {i.code for i in unchanged.issues})
+        # Pure aliases/formatting, predicates, literals and divide-by-zero guards are separate contracts.
+        a = 'SELECT ISNULL(X.QTY, 0) AS QTY FROM ITEMS X'
+        b = 'SELECT ISNULL(A.QTY, 0) AS QTY FROM ITEMS A'
+        self.assertNotIn('value_fallback_review', {i.code for i in check_sql(b, original=a, compare_original=False).issues})
+        for source in [
+            "SELECT A.QTY FROM ITEMS A WHERE ISNULL(A.FLAG, '') <> 'Y'",
+            "SELECT A.QTY FROM ITEMS A JOIN OTHER B ON ISNULL(A.ID, 0)=B.ID",
+            "SELECT CASE WHEN ISNULL(A.QTY, 0)>0 THEN 'P' ELSE 'Z' END FROM ITEMS A",
+            "SELECT IIF(ISNULL(A.QTY, 0)>0, 'P', 'Z') FROM ITEMS A",
+            "SELECT A.QTY / NULLIF(A.RATE, 0) FROM ITEMS A",
+            "SELECT 'ISNULL(A.QTY, B.QTY)' -- COALESCE(A.QTY, 0)",
+        ]:
+            self.assertNotIn('value_fallback_review', {i.code for i in check_sql(source).issues}, source)
+
     def test_new_xml_action_is_compared_with_established_preparation_boundary(self):
         staged = """DECLARE @ROWS TABLE (ID INT);
 INSERT INTO @ROWS (ID) SELECT ID FROM OPENXML(@DOC, '/ROOT/ROW', 1) WITH (ID INT);
