@@ -11,7 +11,7 @@ from unittest.mock import patch
 from src.context.store import Store, session_key
 from src.context.transcript import capture, user_text
 from src.runtime.hooks import CYCLE, ROOT, handle
-from src.runtime.hooks import file_paths, line_hashes, update_files, restore
+from src.runtime.hooks import file_paths, write_paths, line_hashes, update_files, restore
 
 
 class HooksContextTests(unittest.TestCase):
@@ -74,6 +74,11 @@ class HooksContextTests(unittest.TestCase):
         self.event('PostToolUse', tool_name='Bash', tool_response={'output': 'SELECT 1\n'})
         self.assertEqual({}, self.event('Stop'))
         path.write_text('SELECT 2\n', encoding='utf-8')
+        # A completed edit is no longer monitored during another task/chat.
+        self.assertEqual({}, self.event('Stop'))
+        self.edit_event('PreToolUse')
+        path.write_text('SELECT 3\n', encoding='utf-8')
+        self.edit_event('PostToolUse')
         self.assertEqual('block', self.event('Stop')['decision'])
         self.event('Interrupt')
         self.assertEqual({}, self.event('Stop'))
@@ -167,6 +172,70 @@ class HooksContextTests(unittest.TestCase):
         self.assertEqual([expected], file_paths(shell))
         shell['tool_input']['cmd'] = "Get-Content 'example.sql' | Set-Content 'notes.txt'"
         self.assertEqual([], file_paths(shell))
+
+    def test_variable_python_and_powershell_destinations_keep_domain_prerequisite(self):
+        expected = self.project / 'dynamic-path.sru'
+        commands = [
+            "@'\nfrom pathlib import Path\np = Path.cwd()\nfile = p / ('dynamic-path' + '.sru')\nfile.write_text('export')\n'@ | python -B -",
+            "$root = (Get-Location); $file = Join-Path $root 'dynamic-path.sru'; Set-Content -LiteralPath $file -Value 'export'",
+            "$file = 'dynamic-path.sru'; [System.IO.File]::WriteAllText($file, 'export')",
+            'python -c "from pathlib import Path; p=Path.cwd(); f=p / (\'dynamic-path\' + \'.sru\'); f.write_text(\'export\')"',
+            "python - <<'PY'\nfrom pathlib import Path\nf = Path('dynamic-path.sru')\nwith f.open('w') as stream:\n    stream.write('export')\nPY",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                event = {**self.base, 'tool_name': 'exec_command', 'tool_input': {'cmd': command}}
+                self.assertEqual(([expected], []), write_paths(event))
+                result = handle({**event, 'hook_event_name': 'PreToolUse'}, 'codex')
+                self.assertEqual('deny', result['hookSpecificOutput']['permissionDecision'])
+                self.assertIn('pb-to-csharp-migration-harness', result['hookSpecificOutput']['permissionDecisionReason'])
+                self.assertFalse(expected.exists())
+
+    def test_shell_workdir_unknown_source_and_read_only_examples(self):
+        event = {**self.base, 'tool_name': 'exec_command',
+                 'tool_input': {'cmd': "$p='sample.sql'; Set-Content $p 'SELECT 1'", 'workdir': str(self.root)}}
+        self.assertEqual(([self.root / 'sample.sql'], []), write_paths(event))
+        for command in [
+            "Get-Content 'example.sql'",
+            'Write-Output "Set-Content \'example.sql\' -Value \'SELECT 1\'"',
+            "# Set-Content 'example.sql' -Value 'SELECT 1'\nGet-Date",
+            "@'\n*** Add File: example.sql\n+SELECT 1\n'@ | Write-Output",
+            "@'\nfrom pathlib import Path\np=Path('example.sql')\nprint(p.read_text())\n'@ | python -",
+            "@'\nprint(\"Path('example.sql').write_text('SELECT 1')\")\n'@ | python -",
+            "$p='notes.txt'; Set-Content $p 'not a domain source'",
+        ]:
+            event['tool_input'] = {'cmd': command}
+            self.assertEqual(([], []), write_paths(event), command)
+        event['tool_input'] = {'cmd': "@'\nfrom pathlib import Path\nroot=unknown()\nf=root / 'private-name.sql'\nf.write_text('SELECT 1')\n'@ | python -"}
+        paths, unresolved = write_paths(event)
+        self.assertEqual([], paths)
+        self.assertTrue(unresolved)
+        denied = handle({**event, 'hook_event_name': 'PreToolUse'}, 'codex')
+        self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
+        self.assertNotIn('private-name', denied['hookSpecificOutput']['permissionDecisionReason'])
+        event['tool_input'] = {'cmd': '$root=unknown; $p="$root/private-name.sql"; $dest=$p; Set-Content $dest "SELECT 1"'}
+        self.assertEqual([], write_paths(event)[0])
+        self.assertTrue(write_paths(event)[1])
+
+    def test_completed_files_are_archived_without_rechecking_in_later_read_only_work(self):
+        self.prerequisites()
+        self.edit_event('PreToolUse')
+        path = self.project / 'example.sql'
+        path.write_text('SELECT 1\n', encoding='utf-8')
+        self.edit_event('PostToolUse')
+        self.event('PostToolUse', tool_name='Bash', tool_response='SELECT 1\n')
+        self.assertEqual({}, self.event('Stop'))
+        path.write_text('SELECT 2\n', encoding='utf-8')  # external later work
+        with patch('src.runtime.hooks.snapshot') as read:
+            self.assertEqual({}, self.event('PostToolUse', tool_name='Bash', tool_input={'command': 'Get-Date'}, tool_response='today'))
+            self.assertEqual({}, self.event('Stop'))
+            read.assert_not_called()
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        with store.connect() as connection:
+            state = store.load(connection, session_key(self.base, 'codex'))
+        self.assertEqual({}, state['files'])
+        self.assertIn(str(path), state['last_file_checks'])
+        self.assertNotIn('line_hashes', state['last_file_checks'][str(path)])
 
     def test_numbered_and_segmented_reads_and_version_change(self):
         for relative in (CYCLE, 'sql-formatting/SKILL.md'):
