@@ -24,6 +24,7 @@ DOMAINS = {'.sql': 'sql-formatting', '.cs': 'csharp-designer-style-harness',
 CYCLE = 'work-execution/references/source-style-cycle.md'
 FILE_LIMIT = 1024 * 1024
 MAX_FILES = 32
+SKILL_SCOPE_VERSION = 1
 
 
 def checker_generation() -> str | None:
@@ -346,6 +347,28 @@ def observed_reads(returned: str, state: dict) -> set[str]:
     return seen
 
 
+def used_domains(state: dict) -> set[str]:
+    used = set(state.get('kh_used_skills', []))
+    domains = used & set(DOMAINS.values())
+    if 'pb-to-csharp-migration-harness' in domains:
+        domains.update(DOMAINS.values())  # Migration includes its SQL/C# outputs.
+    return domains
+
+
+def observe_usage(returned: str, state: dict) -> None:
+    seen = observed_reads(returned, state)
+    state['skills_seen'] = sorted(seen)
+    state['kh_used_skills'] = sorted(set(state.get('kh_used_skills', [])) |
+                                    {name for name in DOMAINS.values() if name + '/SKILL.md' in seen})
+
+
+def clear_usage(state: dict) -> None:
+    state['skills_seen'] = []
+    state['read_coverage'] = {}
+    state['kh_used_skills'] = []
+    state.pop('kh_scope_closed', None)
+
+
 def restore(state: dict, memories: list[dict], store: Store) -> str:
     discard_host_records(state)
     if not state.get('users') and not state.get('checkpoint') and not state.get('latest_prompt') and not memories and not state.get('capture_warning') and not state.get('backlog_bytes'):
@@ -406,7 +429,7 @@ def handle(event: dict, host: str) -> dict:
     returned = flatten(event.get('tool_response', {})) if name == 'PostToolUse' else ''
     observation = {}
     observed_reads(returned, observation)
-    create = bool(paths or unresolved or observation.get('read_coverage')) or name == 'PreCompact'
+    create = bool(observation.get('read_coverage')) or name == 'PreCompact'
     with store.connect(create=create) as connection:
         if connection is None:
             return {}
@@ -414,6 +437,29 @@ def handle(event: dict, host: str) -> dict:
         discard_host_records(state)
         baselines = SourceBaselines(store.path.parent / 'checks' / key, state)
         output = {}
+        if state.get('skill_scope_version') != SKILL_SCOPE_VERSION:
+            clear_usage(state)
+            state['skill_scope_version'] = SKILL_SCOPE_VERSION
+            state['scope_reset_pending'] = bool(state.get('files') or state.get('check_baselines') or state.get('file_warning'))
+        if state.get('scope_reset_pending'):
+            try:
+                retire_checks(state, baselines, 'pre_scope_unverified')
+                state.pop('scope_reset_pending', None)
+            except (OSError, ValueError, UnicodeError):
+                pass  # Preserve originals; unrelated work must not inherit their checks.
+        if name == 'PostToolUse':
+            observe_usage(returned, state)
+        domains = used_domains(state)
+        paths = [path for path in paths if DOMAINS[path.suffix.casefold()] in domains]
+        unresolved = unresolved if domains else []
+        if state.get('scope_reset_pending') and (paths or unresolved or (name == 'Stop' and domains)):
+            reason = 'KH could not retire pre-scope source snapshots safely. Inspect ' + str(baselines.directory) + '; current KH source checks remain unverified.'
+            output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
+                      if name == 'PreToolUse' and mode == 'enforce' else context(name, reason))
+            if name == 'Stop':
+                state['kh_scope_closed'] = True
+            store.save(connection, key, state)
+            return output
         if name == 'PreToolUse' and (paths or unresolved):
             state['skills_seen'] = sorted(observed_reads('\n', state))
             required = {CYCLE, *(DOMAINS[path.suffix.casefold()] + '/SKILL.md' for path in paths)}
@@ -452,7 +498,6 @@ def handle(event: dict, host: str) -> dict:
                         baseline.pop(str(path), None)
                         state['file_warning'] = 'Some original source snapshots could not be captured; comparison remains unverified.'
         elif name == 'PostToolUse':
-            state['skills_seen'] = sorted(observed_reads(returned, state))
             if (paths or unresolved) and state.pop('check_epoch_closed', False):
                 state['files'] = {}
                 state.pop('file_warning', None)
@@ -461,7 +506,7 @@ def handle(event: dict, host: str) -> dict:
                 state['file_warning'] = 'Some executed source-write destinations remain unverified: ' + '; '.join(unresolved[:3])
             baseline = {str(path): state.get('before', {}).pop(str(path)) for path in paths
                         if str(path) in state.get('before', {})}
-            active = state['files'] if not state.get('check_epoch_closed') else {}
+            active = state['files'] if domains and not state.get('scope_reset_pending') and not state.get('check_epoch_closed') else {}
             messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in active), *paths])), returned, baseline,
                                     baselines=baselines)
             if paths:
@@ -499,12 +544,16 @@ def handle(event: dict, host: str) -> dict:
                 state['paused'] = True
             prior_turn = state.get('latest_prompt', {}).get('turn_id')
             new_turn = not event.get('turn_id') or event['turn_id'] != prior_turn
+            previous_scope_closed = state.get('kh_scope_closed') or state.get('stop_observed') or state.get('stop_notice') or state.get('check_epoch_closed')
             if (isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and
-                    state.get('files') and (state.get('stop_observed') or state.get('stop_notice') or state.get('check_epoch_closed'))):
+                    state.get('files') and previous_scope_closed):
                 try:
                     retire_checks(state, baselines, 'previous_turn_unverified' if not state.get('check_epoch_closed') else 'completed')
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not retire earlier source snapshots safely. Existing records were preserved; inspect ' + str(baselines.directory)}
+                    state['scope_reset_pending'] = True
+            if isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and previous_scope_closed:
+                clear_usage(state)
             previous_user_sequence = max((item['seq'] for item in state['users']), default=0)
             capture(state, event, host)
             if isinstance(prompt, str) and prompt:
@@ -532,7 +581,7 @@ def handle(event: dict, host: str) -> dict:
                     output = context(name, text)
                 if compact:
                     state['restore_pending'] = False
-        elif name == 'Stop' and not state.get('paused') and not state.get('check_epoch_closed'):
+        elif name == 'Stop' and domains and not state.get('paused') and not state.get('check_epoch_closed'):
             state['stop_observed'] = True
             update_files(state, [Path(path) for path in state['files']], baselines=baselines)
             pending = []
@@ -555,5 +604,7 @@ def handle(event: dict, host: str) -> dict:
                     retire_checks(state, baselines, 'completed')
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
+        if name in {'Stop', 'SessionEnd'}:
+            state['kh_scope_closed'] = True
         store.save(connection, key, state)
         return output
