@@ -48,18 +48,102 @@ class HooksContextTests(unittest.TestCase):
             self.assertEqual({}, self.event(name, prompt='안녕', tool_name='Bash', tool_input={'command': 'Get-Date'}, tool_response='today'))
         self.assertFalse((self.root / 'data').exists())
 
-    def test_retry_never_substitutes_for_read_and_truncated_read_is_insufficient(self):
+    def test_unselected_work_is_untouched_and_active_skill_requires_its_cycle(self):
+        for _ in range(3):
+            self.assertEqual({}, self.edit_event('PreToolUse'))
+        self.assertFalse((self.root / 'data').exists())
+        self.event('PostToolUse', tool_name='Bash', tool_response='sql-formatting/SKILL.md opened [truncated]')
+        self.assertEqual({}, self.edit_event('PreToolUse'))
+        body = (ROOT / 'skills/sql-formatting/SKILL.md').read_text(encoding='utf-8-sig')
+        self.event('PostToolUse', tool_name='Read', tool_response=body)
         for _ in range(3):
             denied = self.edit_event('PreToolUse')
             self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
-        self.event('PostToolUse', tool_name='Bash', tool_response='sql-formatting/SKILL.md opened [truncated]')
-        self.assertEqual('deny', self.edit_event('PreToolUse')['hookSpecificOutput']['permissionDecision'])
+            self.assertIn(str(ROOT / 'skills' / CYCLE), denied['hookSpecificOutput']['permissionDecisionReason'])
         self.prerequisites()
         self.assertEqual({}, self.edit_event('PreToolUse'))
 
     def test_read_before_first_write_is_retained(self):
         self.prerequisites()
         self.assertEqual({}, self.edit_event('PreToolUse'))
+
+    def test_non_kh_source_work_has_no_checks_snapshots_or_stop_feedback(self):
+        path = self.project / 'example.sql'
+        with patch('src.runtime.hooks.inspect') as check, patch('src.runtime.hooks.snapshot') as read:
+            self.assertEqual({}, self.edit_event('PreToolUse'))
+            path.write_text('SELECT ISNULL(A.QTY, 0) FROM ITEMS A', encoding='utf-8')
+            self.assertEqual({}, self.edit_event('PostToolUse'))
+            self.assertEqual({}, self.event('Stop'))
+            check.assert_not_called()
+            read.assert_not_called()
+        self.assertFalse((self.root / 'data').exists())
+
+    def test_sql_usage_does_not_activate_unrelated_csharp_or_generic_kh_skills(self):
+        body = (ROOT / 'skills/context-handoff/SKILL.md').read_text(encoding='utf-8-sig')
+        self.event('PostToolUse', tool_name='Read', tool_response=body)
+        self.assertEqual({}, self.edit_event('PreToolUse'))
+        self.prerequisites()
+        path = self.project / 'Other.cs'
+        with patch('src.runtime.hooks.inspect') as check, patch('src.runtime.hooks.snapshot') as read:
+            for name in ('PreToolUse', 'PostToolUse'):
+                self.assertEqual({}, self.event(name, tool_name='Write', tool_input={'file_path': str(path)}))
+            check.assert_not_called()
+            read.assert_not_called()
+
+    def test_legacy_read_history_does_not_activate_current_checks(self):
+        path = self.project / 'old.sql'
+        path.write_text('SELECT ISNULL(A.QTY, 0) FROM ITEMS A', encoding='utf-8')
+        state = {'users': [], 'files': {}, 'skills_seen': ['sql-formatting/SKILL.md']}
+        update_files(state, [path])
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        with store.connect(create=True) as connection:
+            store.save(connection, session_key(self.base, 'codex'), state)
+        with patch('src.runtime.hooks.inspect') as check, patch('src.runtime.hooks.snapshot') as read:
+            self.assertEqual({}, self.event('Stop'))
+            check.assert_not_called()
+            read.assert_not_called()
+        saved = self._state(store)
+        self.assertEqual({}, saved['files'])
+        self.assertEqual('pre_scope_unverified', saved['last_file_checks_outcome'])
+        self.assertEqual([], saved['kh_used_skills'])
+
+    def test_read_only_kh_task_does_not_enable_next_non_kh_task(self):
+        self.event('UserPromptSubmit', prompt='SQL 지침 확인', turn_id='first')
+        self.prerequisites()
+        self.assertEqual({}, self.event('Stop'))
+        self.event('UserPromptSubmit', prompt='별도 작업', turn_id='next')
+        with patch('src.runtime.hooks.snapshot') as read:
+            self.assertEqual({}, self.edit_event('PreToolUse'))
+            read.assert_not_called()
+        state = self._state(Store(self.root / 'data/context-v1', str(self.project)))
+        self.assertEqual([], state['kh_used_skills'])
+        self.assertEqual({}, state['read_coverage'])
+
+    def test_pb_usage_covers_sql_output_without_skipping_sql_prerequisites(self):
+        for relative in (CYCLE, 'pb-to-csharp-migration-harness/SKILL.md'):
+            self.event('PostToolUse', tool_name='Read',
+                       tool_response=(ROOT / 'skills' / relative).read_text(encoding='utf-8-sig'))
+        denied = self.edit_event('PreToolUse')
+        self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
+        self.assertIn(str(ROOT / 'skills/sql-formatting/SKILL.md'), denied['hookSpecificOutput']['permissionDecisionReason'])
+        self.prerequisites()
+        self.assertEqual({}, self.edit_event('PreToolUse'))
+
+    def test_session_end_also_retires_scope_before_a_new_task(self):
+        self.event('UserPromptSubmit', prompt='KH 작업', turn_id='first')
+        self.prerequisites()
+        self.edit_event('PreToolUse')
+        (self.project / 'example.sql').write_text('SELECT 1\n', encoding='utf-8')
+        self.edit_event('PostToolUse')
+        self.event('SessionEnd')
+        self.event('UserPromptSubmit', prompt='별도 작업', turn_id='next')
+        with patch('src.runtime.hooks.snapshot') as read:
+            self.assertEqual({}, self.edit_event('PreToolUse'))
+            self.assertEqual({}, self.event('Stop'))
+            read.assert_not_called()
+        state = self._state(Store(self.root / 'data/context-v1', str(self.project)))
+        self.assertEqual({}, state['files'])
+        self.assertEqual([], state['kh_used_skills'])
 
     def test_changed_file_requires_actual_returned_body_and_later_edit_invalidates_it(self):
         self.prerequisites()
@@ -87,7 +171,7 @@ class HooksContextTests(unittest.TestCase):
         self.prerequisites()
         other = {**self.base, 'session_id': 's2', 'hook_event_name': 'PreToolUse',
                  'tool_name': 'Write', 'tool_input': {'file_path': str(self.project / 'other.sql')}}
-        self.assertEqual('deny', handle(other, 'codex')['hookSpecificOutput']['permissionDecision'])
+        self.assertEqual({}, handle(other, 'codex'))
         output = handle({**other, 'hook_event_name': 'SessionStart'}, 'codex')
         self.assertEqual({}, output)
 
@@ -174,6 +258,8 @@ class HooksContextTests(unittest.TestCase):
         self.assertEqual([], file_paths(shell))
 
     def test_variable_python_and_powershell_destinations_keep_domain_prerequisite(self):
+        body = (ROOT / 'skills/pb-to-csharp-migration-harness/SKILL.md').read_text(encoding='utf-8-sig')
+        self.event('PostToolUse', tool_name='Read', tool_response=body)
         expected = self.project / 'dynamic-path.sru'
         commands = [
             "@'\nfrom pathlib import Path\np = Path.cwd()\nfile = p / ('dynamic-path' + '.sru')\nfile.write_text('export')\n'@ | python -B -",
@@ -188,10 +274,11 @@ class HooksContextTests(unittest.TestCase):
                 self.assertEqual(([expected], []), write_paths(event))
                 result = handle({**event, 'hook_event_name': 'PreToolUse'}, 'codex')
                 self.assertEqual('deny', result['hookSpecificOutput']['permissionDecision'])
-                self.assertIn('pb-to-csharp-migration-harness', result['hookSpecificOutput']['permissionDecisionReason'])
+                self.assertIn(str(ROOT / 'skills' / CYCLE), result['hookSpecificOutput']['permissionDecisionReason'])
                 self.assertFalse(expected.exists())
 
     def test_shell_workdir_unknown_source_and_read_only_examples(self):
+        self.prerequisites()
         event = {**self.base, 'tool_name': 'exec_command',
                  'tool_input': {'cmd': "$p='sample.sql'; Set-Content $p 'SELECT 1'", 'workdir': str(self.root)}}
         self.assertEqual(([self.root / 'sample.sql'], []), write_paths(event))
@@ -289,6 +376,8 @@ class HooksContextTests(unittest.TestCase):
         with store.connect() as connection:
             state = store.load(connection, session_key(self.base, 'codex'))
         self.assertEqual({}, state['files'])
+        self.assertEqual([], state['kh_used_skills'])
+        self.assertEqual({}, state['read_coverage'])
         self.assertEqual('previous_turn_unverified', state['last_file_checks_outcome'])
         self.assertIn(str(path), state['last_file_checks'])
         self.assertNotEqual(state['last_file_checks'][str(path)]['sha256'], state['last_file_checks'][str(path)]['readback'])
@@ -296,6 +385,9 @@ class HooksContextTests(unittest.TestCase):
             self.assertEqual({}, self.event('PostToolUse', tool_name='Bash', tool_input={'command': 'Get-Date'}, tool_response='today'))
             self.assertEqual({}, self.event('Stop', turn_id='new'))
             read.assert_not_called()
+        self.edit_event('PreToolUse')
+        self.assertEqual({}, self._state(store)['before'])
+        self.prerequisites()
         self.edit_event('PreToolUse')
         self.assertEqual(line_hashes('SELECT 1\n'), self._state(store)['before'][str(path)])
 
@@ -478,6 +570,12 @@ class HooksContextTests(unittest.TestCase):
                 args = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', handler['commandWindows']]
             else:
                 args = [handler['command'], *(arg.replace('${CLAUDE_PLUGIN_ROOT}', str(ROOT)) for arg in handler['args'])]
+            selected = {**self.base, 'hook_event_name': 'PostToolUse', 'tool_name': 'Read',
+                        'tool_response': (ROOT / 'skills/sql-formatting/SKILL.md').read_text(encoding='utf-8-sig')}
+            activation = subprocess.run(args, input=json.dumps(selected, ensure_ascii=False).encode('utf-8'),
+                                        capture_output=True, timeout=15, env={**os.environ, 'PLUGIN_ROOT': str(ROOT)},
+                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            self.assertEqual(0, activation.returncode, activation.stderr.decode('utf-8', errors='replace'))
             result = subprocess.run(args, input=json.dumps(event, ensure_ascii=False).encode('utf-8'),
                                     capture_output=True, timeout=15, env={**os.environ, 'PLUGIN_ROOT': str(ROOT)},
                                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
