@@ -16,6 +16,62 @@ def _review_line_number(source: str, offset: int) -> int:
     return len(re.findall(r'\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]', source[:offset])) + 1
 
 
+def _xml_write_sources(source: str) -> tuple[bool, list[tuple[tuple[str, ...], int]]]:
+    """Recognize simple XML-to-staging loads and XML sources in owning DML.
+
+    This observes a preparation boundary; it does not ban a rowset API or
+    establish XML schema, key cardinality, transaction or handle correctness.
+    """
+    tokens = [t for t in _scan_sql_tokens(source)[0] if t.kind not in {'line_comment', 'block_comment'}]
+    staged = False
+    direct = []
+    operation = ''
+    staging_target = False
+    projection = False
+    for index, token in enumerate(tokens):
+        if token.depth:
+            continue
+        word = token.normalized if token.kind == 'word' else ''
+        if token.text == ';' or token.kind == 'batch_separator' or word in {
+                'EXEC', 'EXECUTE', 'DECLARE', 'BEGIN', 'END', 'IF', 'ELSE', 'RETURN', 'THROW'}:
+            operation, projection = '', False
+        elif word in {'INSERT', 'UPDATE', 'DELETE'}:
+            operation, projection = word, False
+            target = index + 1
+            if target < len(tokens) and tokens[target].normalized == 'INTO':
+                target += 1
+            staging_target = word == 'INSERT' and target < len(tokens) and tokens[target].text.startswith(('@', '#'))
+        elif word == 'SELECT':
+            if operation != 'INSERT' or projection:
+                operation = ''
+            projection = True
+        elif word == 'OPENXML' and operation and index + 1 < len(tokens) and tokens[index + 1].text == '(':
+            close = _matching_parenthesis_token(tokens, index + 1, len(tokens))
+            if close is not None:
+                if operation == 'INSERT' and staging_target:
+                    staged = True
+                else:
+                    direct.append(((operation, *(t.normalized for t in tokens[index:close + 1])), token.start))
+    return staged, direct
+
+
+def _review_xml_boundary(candidate: str, original: str | None) -> list[Issue]:
+    before_staged, before_direct = _xml_write_sources(original or '')
+    staged, direct = _xml_write_sources(candidate)
+    if not (staged or before_staged):
+        return []
+    previous = Counter(signature for signature, _ in before_direct)
+    result = []
+    for signature, offset in direct:
+        if previous[signature]:
+            previous[signature] -= 1
+            continue
+        result.append(Issue('xml_save_boundary_review', 'warning',
+            'This added write consumes XML directly while the procedure establishes parsed staging rows elsewhere. Compare the new action with that complete preparation/write boundary and the approved SAVE reference; preserve keys, types, row cardinality and handle/error ownership. Retain a different boundary only for a verified requirement; this is not a blanket OPENXML prohibition.',
+            line=_review_line_number(candidate, offset), details={'operation': signature[0], 'staging_observed': True}))
+    return result
+
+
 def _where_subqueries(source: str) -> Counter[str]:
     """Count direct EXISTS/IN query shapes in recognizable WHERE contexts.
 
@@ -158,89 +214,14 @@ def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]
 def _review_generation_choices(candidate: str, original: str | None) -> list[Issue]:
     previous = Counter((code, identity) for code, identity, _, _ in _generation_choices(original or ''))
     messages = {
-        'locking_hint_review': 'Review this added locking hint against the actual target concurrency and transaction contract. Do not add UPDLOCK/HOLDLOCK routinely; retain them when the requested behavior or verified necessity requires them.',
-        'synthetic_result_field_review': 'This output field is a typed empty or NULL placeholder. Check the requested target result/binding contract; remove excluded source-only fields instead of carrying them as placeholders, and keep a placeholder only when the actual output type contract requires it.',
-    }
-    issues: list[Issue] = []
-    for code, identity, offset, details in _generation_choices(candidate):
-        if previous[(code, identity)]:
-            previous[(code, identity)] -= 1
-            continue
-        issues.append(Issue(code, 'warning', messages[code],
-                            line=_review_line_number(candidate, offset), details=details))
-    return issues
-
-
-def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: bool = False,
-              check_style: bool = True, check_delta: bool = False, check_preferences: bool = True,
-              compare_original: bool = True) -> CheckResult:
-    comparing = original is not None and compare_original
-    result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None and compare_original else CheckResult(
-        checked=["SQL lexical integrity"], not_checked=["SQL Server execution", "complete T-SQL grammar and type semantics", "business equivalence to an unsupplied source"])
-    result.metadata['comparison_baselines'] = {'sql': original is not None}
-    result.metadata['original_comparison'] = 'formatting_preservation' if comparing else 'changed_preferences_only'
-    if original is not None and not compare_original:
-        result.not_checked.append('Original SQL is used for changed review findings, not to forbid requested behavior changes.')
-    tokens, errors = _analyze_sql_integrity(candidate, check_kind="candidate")
-    if not any(t.kind not in {'line_comment', 'block_comment'} for t in tokens):
-        result.incomplete = True
-        result.issues.append(Issue('sql_code_missing', 'warning', 'No SQL code is available beyond comments or whitespace.'))
-    if not comparing:
-        result.issues.extend(Issue(e.code, e.severity, e.message, details={"evidence": e.evidence}) for e in errors)
-    if any(e.severity == "error" for e in errors):
-        return result
-    if check_style:
-        result.checked.append("KH SQL layout preferences")
-        for item in _style_lint(original or candidate, candidate, tokens, tokens,
-                                operation="formatting" if original else "generation"):
-            if preserve_aliases and item.code in {"ad_hoc_outer_alias", "outer_query_uses_derived_table_internal_alias"}:
-                continue
-            result.issues.append(Issue(item.code, "warning", item.message,
-                                      details={"evidence": item.evidence, "scope": "KH SQL style"}))
-            if item.code == 'insert_select_alignment_unverified':
-                result.not_checked.append('unsupported horizontal INSERT/SELECT alignment listed in insert_select_alignment_unverified')
-    if check_delta:
-        result.checked.append("DELETE/INSERT replacement shapes")
-        before = {r["shape_sha256"] for r in _full_replace_records(original or "")}
-        for record in _full_replace_records(candidate):
-            if record["shape_sha256"] not in before:
-                result.issues.append(Issue("review_full_replace", "warning",
-                                          "Confirm the requested NEW/MOD/DEL contract before replacing all related rows.", details=record))
-    masked = _masked_sql(candidate)
-    previous = _masked_sql(original or "")
-    if check_preferences:
-        pattern = r"\b(?:CREATE\s+TABLE\s+#|DECLARE\s+@\w+\s+TABLE|INTO\s+#)"
-        if len(re.findall(pattern, masked, re.I)) > len(re.findall(pattern, previous, re.I)):
-            result.issues.append(Issue('intermediate_table_preference', 'warning',
-                'Use the preferred existing form unless avoiding this construct makes implementation difficult or the alternative performs extremely worse.'))
-        original_tokens = _scan_sql_tokens(original)[0] if original else []
-        previous_ctes = Counter(_identifier_value(token) for token in _cte_declarations(original_tokens))
-        for declaration in _cte_declarations(tokens):
-            name = _identifier_value(declaration)
-            if previous_ctes[name]:
-                previous_ctes[name] -= 1
-                continue
-            result.issues.append(Issue('cte_preference', 'warning',
-                'Review this CTE against the approved procedure style. Retain it when the actual implementation or performance requires it. Check row keys, aggregation and duplicates before any rewrite.',
-                line=_review_line_number(candidate, declaration.start), details={'cte': declaration.text}))
-        added_subqueries = _where_subqueries(candidate) - _where_subqueries(original or '')
-        if added_subqueries:
-            result.issues.append(Issue('subquery_preference', 'warning',
-                'Review added WHERE EXISTS/NOT EXISTS/IN queries against the target JOIN style. Preserve NULL behavior, duplicates and aggregation cardinality; IF EXISTS validation is a separate responsibility. Do not rewrite automatically.',
-                details={'added_where_subqueries': dict(added_subqueries)}))
-        previous_expressions = Counter((clause, identity) for clause, identity, _ in
-                                       _expression_subqueries(original or ''))
-        for clause, identity, offset in _expression_subqueries(candidate):
-            if previous_expressions[(clause, identity)]:
-                previous_expressions[(clause, identity)] -= 1
-                continue
-            result.issues.append(Issue('subquery_preference', 'warning',
-                'Review this query in a SELECT list or scalar WHERE expression against the approved JOIN-based procedure. Resolve lookup or aggregation at its full key and row grain; preserve missing-row, NULL, duplicate and multi-row behavior. Do not substitute a variable or rewrite automatically.',
+        'locking_hint_review': 'Review this added locking hint against the actual target concurrency and transaction contract. Do not add UPDLOCK/HOLDLOCK routine…1545 tokens truncated… NULL, duplicate and multi-row behavior. Do not substitute a variable or rewrite automatically.',
                 line=_review_line_number(candidate, offset), details={'clause': clause}))
         result.checked.append('recognizable statement-level CTE declarations, SELECT-list/scalar-WHERE queries and WHERE EXISTS/NOT EXISTS/IN query counts')
         result.not_checked.append('CTE and subquery necessity, general clause grammar and JOIN-rewrite equivalence')
     result.issues.extend(_review_generation_choices(candidate, original))
     result.issues.extend(review_dispatch(candidate, original))
+    result.issues.extend(_review_xml_boundary(candidate, original))
+    result.checked.append('recognizable new direct XML writes beside an established parsed-staging boundary')
     result.checked.append('explicit added locking hints and aliased typed-empty output fields')
     result.checked.append('supported repeated enclosing scalar-mode guards with no observed mode assignment')
     result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')

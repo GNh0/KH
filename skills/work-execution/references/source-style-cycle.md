@@ -20,6 +20,8 @@ Review the proposed code in the actual execution path against the request, exist
 
 Immediately after writing the unit, re-read the actual saved body and its affected callers/initialization. Check both the requested result and incidental behavior changes, including what it now excludes or overrides. Repair and re-audit that unit before proceeding to another responsibility. Do not defer this to a final build or wait for the user to point it out. A later edit reopens the affected unit.
 
+Use host-observed source edit tools when they fit the work. If a required specialized runtime writes source outside hook coverage, perform the same explicit checks with the actual pre-change original and saved candidate, then complete the source audit yourself. A successful MCP write or checker exit code does not establish hook coverage, resolved warnings or compliance.
+
 ## After the final code write
 
 Re-read the final saved code, or exact final snippet when no file was requested. Compare every created/changed body and Designer block with the selected source and current rules. Include the combined effects of the implementation units already reviewed. Audit the actual production entrypoint and affected control/event/binding and query/save/report path, including prerequisites performed in other methods. Extra setup in a test/export harness does not prove the production path performs it. Preserve compliant work outside scope.

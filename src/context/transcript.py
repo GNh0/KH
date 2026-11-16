@@ -35,8 +35,10 @@ def user_text(record: dict, host: str) -> str | None:
 
 
 def _host_block(text: str) -> bool:
-    return text.lstrip().startswith(('<environment_context>', '<user_instructions>', '<turn_aborted>',
-                                     '<automations_context>', '<recommended_plugins>', '<external_codex_apps_open_page>'))
+    stripped = text.strip()
+    return ((stripped.startswith('<hook_prompt') and stripped.endswith('</hook_prompt>')) or
+            stripped.startswith(('<environment_context>', '<user_instructions>', '<turn_aborted>',
+                                 '<automations_context>', '<recommended_plugins>', '<external_codex_apps_open_page>')))
 
 
 def _sources(item: dict) -> list[dict]:
@@ -66,7 +68,19 @@ def _coalesce_mirrors(users: list[dict], original_ids: set[int], path: str) -> l
     return [*result, *other]
 
 
+def discard_host_records(state: dict) -> None:
+    # Older adapters mistook native Stop continuations for real user requests.
+    # Keep real archive ids stable and never reuse a removed host-record id.
+    state['user_seq'] = max(state.get('user_seq', 0), max((item['seq'] for item in state.get('users', [])), default=0))
+    state['users'] = [item for item in state.get('users', []) if not _host_block(item['text'])]
+    if 'pending_prompts' in state:
+        state['pending_prompts'] = [item for item in state['pending_prompts'] if not _host_block(item['text'])]
+    if _host_block(state.get('latest_prompt', {}).get('text', '')):
+        state.pop('latest_prompt')
+
+
 def capture(state: dict, event: dict, host: str) -> None:
+    discard_host_records(state)
     raw_path = event.get('transcript_path')
     if not raw_path:
         state['capture_warning'] = 'Host supplied no transcript; only observed prompt events are archived.'
@@ -91,7 +105,8 @@ def capture(state: dict, event: dict, host: str) -> None:
             state['backfill_archive_ids'] = [item['seq'] for item in state.get('users', [])]
         cursor = 0
     consumed = 0
-    imported = {'users': [{**item, 'source': dict(item['source'])} for item in state.get('users', [])]}
+    imported = {'users': [{**item, 'source': dict(item['source'])} for item in state.get('users', [])],
+                'user_seq': state['user_seq']}
     original_ids = set(state.get('backfill_archive_ids', [item['seq'] for item in imported['users']]))
     known = {(source.get('path'), source.get('byte_offset'), source.get('sha256')): item
              for item in imported['users'] for source in _sources(item) if source.get('path')}
@@ -142,6 +157,7 @@ def capture(state: dict, event: dict, host: str) -> None:
                     add_user(imported, text, source, merge_prompt=offset >= state.get('rescan_until', 0))
                     known[(str(path), offset, source['sha256'])] = imported['users'][-1]
     state['users'] = _coalesce_mirrors(imported['users'], original_ids, str(path)) if host == 'codex' else imported['users']
+    state['user_seq'] = imported['user_seq']
     state['cursor'] = cursor
     state.update(adapter_version=ADAPTER_VERSION, record_index=record_index, turn_boundary=turn_boundary)
     if cursor >= state.get('rescan_until', 0):
@@ -174,5 +190,7 @@ def add_user(state: dict, text: str, source: dict, *, merge_prompt: bool = True)
                 users[-1]['source'] = source
             return
     clean = redact(text)
-    users.append({'seq': max((item['seq'] for item in users), default=0) + 1, 'sha256': fingerprint, 'text': clean[:TEXT_LIMIT],
+    sequence = max(state.get('user_seq', 0), max((item['seq'] for item in users), default=0)) + 1
+    state['user_seq'] = sequence
+    users.append({'seq': sequence, 'sha256': fingerprint, 'text': clean[:TEXT_LIMIT],
                   'truncated': len(clean) > TEXT_LIMIT, 'source': source})
