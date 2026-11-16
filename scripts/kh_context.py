@@ -94,7 +94,8 @@ def main(argv=None):
                           'latest_users': previews(state['users'][-5:]),
                           'user_count': len(state['users']), 'memories': previews(store.memories(connection)),
                           'files': {path: {field: item.get(field) for field in ('sha256', 'readback', 'error', 'check', 'check_context')}
-                                    for path, item in state.get('files', {}).items()},
+                                    for path, item in (state.get('files') or state.get('last_file_checks', {})).items()},
+                          'file_checks_active': bool(state.get('files')) and not state.get('check_epoch_closed', False),
                           'paused': state.get('paused', False), 'capture_warning': state.get('capture_warning'),
                           'backlog_bytes': state.get('backlog_bytes', 0)}
             print(json.dumps(output, ensure_ascii=False, indent=2))

@@ -15,6 +15,7 @@ from src.common.output import redact
 from src.context.store import Store, data_root, session_key
 from src.context.transcript import add_user, capture
 from src.runtime.check_context import SourceBaselines, companion, literal_project_sources, nearby_projects
+from src.runtime.write_targets import shell_write_targets
 
 ROOT = Path(__file__).resolve().parents[2]
 DOMAINS = {'.sql': 'sql-formatting', '.cs': 'csharp-designer-style-harness',
@@ -134,29 +135,31 @@ def undecorated(text: str) -> str:
 
 
 def file_paths(event: dict) -> list[Path]:
-    """Typed edit tools and literal shell write paths only; no claim to parse arbitrary code."""
+    return write_paths(event)[0]
+
+
+def write_paths(event: dict) -> tuple[list[Path], list[str]]:
+    """Resolve supported source destinations without running the shell program."""
     tool = event.get('tool_name', '')
     data = event.get('tool_input', {})
     if isinstance(data, str) and 'apply_patch' in tool:
         data = {'command': data}
     if not isinstance(data, dict):
-        return []
+        return [], []
     command = data.get('command', data.get('cmd', data.get('patch', '')))
     paths = []
-    if isinstance(command, str):
+    unresolved = []
+    workdir = data.get('workdir') if tool in {'Bash', 'exec_command'} else None
+    cwd = Path(workdir if isinstance(workdir, str) and Path(workdir).is_absolute() else event['cwd']).resolve()
+    if isinstance(command, str) and ('apply_patch' in tool or re.match(r'^\s*apply_patch\b', command)):
         paths.extend(re.findall(r'^\*\*\* (?:Add|Update|Delete) File: (.+)$', command, re.M))
         paths.extend(re.findall(r'^\*\*\* Move to: (.+)$', command, re.M))
     if tool in {'Edit', 'Write', 'MultiEdit'}:
         paths.extend([data.get('file_path', data.get('path', ''))])
     if tool in {'Bash', 'exec_command'} and isinstance(command, str):
-        literal = r'[\'\"]([^\'\"\r\n]+)[\'\"]'
-        for pattern in (r'(?:Set-Content|Add-Content|Out-File)\s+(?:-(?:LiteralPath|FilePath|Path)\s+)?' + literal,
-                        r'WriteAll(?:Text|Bytes)\s*\(\s*' + literal,
-                        r'Path\(\s*' + literal + r'\s*\)\.(?:write_text|write_bytes)\b',
-                        r'(?<!>)>{1,2}\s*' + literal):
-            paths.extend(re.findall(pattern, command, re.I))
+        resolved, unresolved = shell_write_targets(command, cwd)
+        paths.extend(str(path) for path in resolved)
     result = []
-    cwd = Path(event['cwd']).resolve()
     for raw in paths:
         if not isinstance(raw, str) or not raw:
             continue
@@ -164,7 +167,7 @@ def file_paths(event: dict) -> list[Path]:
         path = (cwd / path).resolve() if not path.is_absolute() else path.resolve()
         if path.suffix.casefold() in DOMAINS and path not in result:
             result.append(path)
-    return result
+    return result, unresolved
 
 
 def snapshot(path: Path) -> tuple[str, str]:
@@ -371,18 +374,18 @@ def handle(event: dict, host: str) -> dict:
         return {}
     store = Store(data_root(), event['cwd'])
     key = session_key(event, host)
-    paths = file_paths(event) if name in {'PreToolUse', 'PostToolUse'} else []
+    paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse'} else ([], [])
     returned = flatten(event.get('tool_response', {})) if name == 'PostToolUse' else ''
     observation = {}
     observed_reads(returned, observation)
-    create = bool(paths or observation.get('read_coverage')) or name == 'PreCompact'
+    create = bool(paths or unresolved or observation.get('read_coverage')) or name == 'PreCompact'
     with store.connect(create=create) as connection:
         if connection is None:
             return {}
         state = store.load(connection, key)
         baselines = SourceBaselines(store.path.parent / 'checks' / key, state)
         output = {}
-        if name == 'PreToolUse' and paths:
+        if name == 'PreToolUse' and (paths or unresolved):
             state['skills_seen'] = sorted(observed_reads('\n', state))
             required = {CYCLE, *(DOMAINS[path.suffix.casefold()] + '/SKILL.md' for path in paths)}
             missing = sorted(required - set(state.get('skills_seen', [])))
@@ -393,6 +396,11 @@ def handle(event: dict, host: str) -> dict:
                     output = {'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
                 else:
                     output = context(name, reason)
+            if unresolved:
+                reason = ('The source-write destination is not statically established: ' + '; '.join(unresolved[:3]) +
+                          '. Use a typed source edit or an explicitly resolvable destination; no program was executed to guess a path.')
+                output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
+                          if mode == 'enforce' else context(name, reason))
             if state.get('paused'):
                 reason = 'KH task remains paused. Honor the stop request. Only after explicit user resumption, run ' + str(ROOT / 'scripts/kh_context.py') + ' resume with exact scope: ' + json.dumps({key: event.get(key) for key in ('cwd', 'session_id', 'transcript_path', 'agent_id')}, ensure_ascii=False) + '; host=' + host
                 output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny',
@@ -416,9 +424,16 @@ def handle(event: dict, host: str) -> dict:
                         state['file_warning'] = 'Some original source snapshots could not be captured; comparison remains unverified.'
         elif name == 'PostToolUse':
             state['skills_seen'] = sorted(observed_reads(returned, state))
+            if (paths or unresolved) and state.pop('check_epoch_closed', False):
+                state['files'] = {}
+                state.pop('file_warning', None)
+                state.pop('stop_notice', None)
+            if unresolved:
+                state['file_warning'] = 'Some executed source-write destinations remain unverified: ' + '; '.join(unresolved[:3])
             baseline = {str(path): state.get('before', {}).pop(str(path)) for path in paths
                         if str(path) in state.get('before', {})}
-            messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in state['files']), *paths])), returned, baseline,
+            active = state['files'] if not state.get('check_epoch_closed') else {}
+            messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in active), *paths])), returned, baseline,
                                     baselines=baselines)
             if paths:
                 capture(state, event, host)
@@ -478,7 +493,7 @@ def handle(event: dict, host: str) -> dict:
                     output = context(name, text)
                 if compact:
                     state['restore_pending'] = False
-        elif name == 'Stop' and not state.get('paused'):
+        elif name == 'Stop' and not state.get('paused') and not state.get('check_epoch_closed'):
             update_files(state, [Path(path) for path in state['files']], baselines=baselines)
             pending = []
             for path, item in state['files'].items():
@@ -499,6 +514,10 @@ def handle(event: dict, host: str) -> dict:
                 try:
                     baselines.cleanup()
                     state['before'] = {}
+                    state['last_file_checks'] = {
+                        path: {field: item[field] for field in ('sha256', 'readback', 'error', 'check', 'check_context') if field in item}
+                        for path, item in state['files'].items()}
+                    state['files'] = {}
                     state['check_epoch_closed'] = True
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
