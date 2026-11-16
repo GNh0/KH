@@ -33,6 +33,33 @@ def codes(source, **kwargs):
 
 
 class ControlDefaultsTests(unittest.TestCase):
+    def test_editor_font_literals_compare_by_supported_font_values(self):
+        library = '''namespace Widgets { public class InputBox : TextEdit {
+            public InputBox() { base.Properties.Appearance.Font = new System.Drawing.Font("Example", 10); }
+        } }'''
+        source = 'this.txtCode = new Widgets.InputBox(); this.txtCode.Properties.Appearance.Font = new System.Drawing.Font("Example", 10F);'
+        self.assertNotIn('user_control_default_override', codes(source, control_sources=[library]))
+        for changed in (source.replace('10F', '9F'), source.replace('"Example", 10F', '"Other", 10F')):
+            self.assertIn('user_control_default_override', codes(changed, control_sources=[library]))
+
+    def test_editor_data_initialization_is_not_an_appearance_override(self):
+        library = '''namespace Widgets { public class InputBox : TextEdit {
+            public InputBox() { base.EditValue = string.Empty; base.Properties.ReadOnly = false; }
+        } }'''
+        source = 'this.txtCode = new Widgets.InputBox(); this.txtCode.EditValue = "%";'
+        self.assertNotIn('user_control_default_override', codes(source, control_sources=[library]))
+        self.assertIn('user_control_default_override', codes(source + 'this.txtCode.Properties.ReadOnly = true;', control_sources=[library]))
+
+    def test_retained_narrow_width_does_not_force_expansion_on_a_height_edit(self):
+        library = '''namespace Widgets { public class InputBox : TextEdit {
+            public InputBox() { base.Size = new System.Drawing.Size(150, 25); }
+        } }'''
+        original = 'this.txtCode = new Widgets.InputBox(); this.txtCode.Size = new System.Drawing.Size(94, 25);'
+        for candidate in (original.replace('94, 25', '94, 26'), original.replace('94, 25', '120, 25')):
+            self.assertNotIn('user_control_size_shrink', codes(candidate, original=original, control_sources=[library]))
+        self.assertIn('user_control_size_shrink', codes(original.replace('94, 25', '90, 25'), original=original, control_sources=[library]))
+        self.assertIn('user_control_size_shrink', codes(original, original='', control_sources=[library]))
+
     def test_spin_button_initializer_is_compared_without_inventing_library_defaults(self):
         library = 'namespace Widgets { public class QuantityEdit : DevExpress.XtraEditors.SpinEdit { public QuantityEdit() { } } }'
         candidate = 'this.SpinQTY = new Widgets.QuantityEdit();'

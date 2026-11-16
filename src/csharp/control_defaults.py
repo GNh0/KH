@@ -118,6 +118,7 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
         before = original.controls.get(name) if original else None
         old = before.properties if before else {}
         new_type = before is None or not _same_type(before.type_name, control.type_name)
+        old_size = _parse_size(old.get('Size', '')) if not new_type else None
         matching = [item for item in defaults if _same_type(control.type_name, item.type_name)]
 
         def changed(prop: str) -> bool:
@@ -161,26 +162,31 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
         if len(matching) != 1:
             continue
         for prop, expected in _inherited_defaults(matching[0], defaults).items():
-            if prop in {'Name', 'Location', 'TabIndex', 'BindingField', 'DataPropertyName'} or not changed(prop):
+            if prop in {'Name', 'Location', 'TabIndex', 'BindingField', 'DataPropertyName', 'EditValue'} or not changed(prop):
                 continue
             actual = control.properties[prop]
             equal = _normalized_csharp_value(actual) == _normalized_csharp_value(expected)
             if is_label and check_style and prop in LABEL_PROPERTIES:
                 if prop == 'Size':
                     default_size, screen_size = _parse_size(expected), _parse_size(actual)
-                    if default_size is not None and screen_size is not None and screen_size[0] < default_size[0]:
+                    width_floor = min(default_size[0], old_size[0]) if default_size and old_size else default_size[0] if default_size else None
+                    if width_floor is not None and screen_size is not None and screen_size[0] < width_floor:
                         issues.append(Issue('user_control_size_shrink', 'error',
                                             'The label width is smaller than its supplied constructor width; an explicit compact-size request can establish an exception.',
                                             details={'property': f'{name}.Size', 'constructor_size': default_size, 'screen_size': screen_size}))
                 # Label height/font/alignment use the scoped constructor + approved screen comparison.
                 continue
-            if is_label:
+            if is_label or prop == 'Font' or prop.endswith('.Font'):
                 left, right = label_value_key(prop, actual), label_value_key(prop, expected)
                 equal |= left is not None and left == right
+            if check_style and screen_height and prop in {'Height', 'Bounds', 'MinimumSize', 'MaximumSize'}:
+                # These height contracts are checked with actual screen evidence below.
+                continue
             if check_style and prop == 'Size' and not equal:
                 default_size, screen_size = _parse_size(expected), _parse_size(actual)
                 if default_size is not None and screen_size is not None:
-                    dimensions = zip(screen_size[:1], default_size[:1]) if screen_height else zip(screen_size, default_size)
+                    floor = tuple(min(default, old) for default, old in zip(default_size, old_size)) if old_size else default_size
+                    dimensions = zip(screen_size[:1], floor[:1]) if screen_height else zip(screen_size, floor)
                     if any(screen < default for screen, default in dimensions):
                         issues.append(Issue('user_control_size_shrink', 'error',
                                             'The control width (or a non-single-line control dimension) is smaller than its supplied default. Do not shrink for short text; single-line height is reviewed against the actual screen separately.',

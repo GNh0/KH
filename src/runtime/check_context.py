@@ -32,7 +32,18 @@ def companion(path: Path) -> Path | None:
     if path.suffix.casefold() != '.cs':
         return None
     name = path.name[:-12] + '.cs' if path.name.casefold().endswith('.designer.cs') else path.stem + '.Designer.cs'
-    return path.with_name(name)
+    candidate = path.with_name(name)
+    if not candidate.exists() and candidate.parent.is_dir():
+        matches = [item for item in candidate.parent.iterdir() if item.name.casefold() == name.casefold() and item.is_file()]
+        if len(matches) > 1:
+            raise ValueError('Ambiguous case variants for the companion source; select the actual pair.')
+        if matches:
+            candidate = matches[0]
+    return candidate.resolve()
+
+
+def source_identity(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
 
 
 def nearby_projects(path: Path) -> list[Path]:
@@ -48,8 +59,15 @@ class SourceBaselines:
         self.directory = directory
         self.records = state.setdefault('check_baselines', {})
 
+    def record_key(self, path: Path) -> str:
+        identity = source_identity(path)
+        matches = [key for key in self.records if source_identity(Path(key)) == identity]
+        if len(matches) > 1 and any(self.records[key] != self.records[matches[0]] for key in matches[1:]):
+            raise ValueError('Conflicting original snapshots for the same source file; inspect before comparing.')
+        return matches[0] if matches else identity
+
     def capture(self, path: Path) -> None:
-        key = str(path)
+        key = self.record_key(path)
         if key in self.records:
             return
         if len(self.records) >= BASELINE_LIMIT:
@@ -75,7 +93,7 @@ class SourceBaselines:
         self.records[key] = {'exists': True, 'content_hash': fingerprint}
 
     def original(self, path: Path) -> str | None:
-        item = self.records.get(str(path))
+        item = self.records.get(self.record_key(path))
         if item is None:
             return None
         if not item.get('exists'):

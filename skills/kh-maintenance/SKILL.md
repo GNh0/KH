@@ -17,6 +17,6 @@ Apply the current skill-creator guidance to skill changes. For a reported bad ad
 - Realistic behavior evaluation: [scenario evaluation](references/scenario-evaluation.md). Implementation/audit workflow changes need actual tool-order and returned-source evidence as well as a correct final artifact.
 - Keep audit and validation scratch outside source trees using [workspace files](../work-execution/references/workspace-files.md).
 
-Check the skills and paths actually discovered. Do not report test counts, self-ratings, role JSON, or simulations as actual agent execution. Distinguish source, branch, manifest, and installed cache; keep installation and publication within the actual request.
+Check the skills and paths actually discovered. Reproduce reported checker failures against the supplied/current project source and compare the repaired result with its actual contract; use regression tests to preserve those confirmed cases. Test/CI counts, self-ratings and simulations do not establish overall correctness, independent validation or actual agent execution. Distinguish source, branch, manifest, and installed cache; keep installation and publication within the actual request.
 
 Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

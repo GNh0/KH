@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from src.context.store import Store, session_key
-from src.runtime.check_context import SourceBaselines, literal_project_sources
+from src.runtime.check_context import SourceBaselines, companion, literal_project_sources
 from src.runtime.hooks import CYCLE, ROOT, handle, inspect, update_files
 from src.sql.checks import check_sql
 
@@ -33,6 +33,32 @@ CODE = 'partial class Screen { void Load() { } }\n'
 
 
 class HookCheckContextTests(unittest.TestCase):
+    def test_companion_preserves_actual_lowercase_designer_identity(self):
+        code = self.project / 'Example.cs'
+        designer = self.project / 'Example.designer.cs'
+        code.write_text('partial class Example {}', encoding='utf-8', newline='')
+        designer.write_text('partial class Example { int value; }', encoding='utf-8', newline='')
+        state = {}
+        baselines = SourceBaselines(self.root / 'snapshots', state)
+        baselines.capture(designer)
+        inferred = companion(code)
+        self.assertEqual(designer.resolve(), inferred)
+        self.assertEqual('partial class Example { int value; }', baselines.original(inferred))
+
+    @unittest.skipUnless(os.name == 'nt', 'Legacy aliases refer to the same file only on this filesystem')
+    def test_legacy_windows_alias_keeps_the_first_original(self):
+        code = self.project / 'Example.cs'
+        code.write_text('class Example {}', encoding='utf-8', newline='')
+        state = {}
+        baselines = SourceBaselines(self.root / 'snapshots', state)
+        baselines.capture(code)
+        key = next(iter(baselines.records))
+        baselines.records[str(code).upper()] = baselines.records.pop(key)
+        code.write_text('class Example { int changed; }', encoding='utf-8', newline='')
+        baselines.capture(code)
+        self.assertEqual('class Example {}', baselines.original(code))
+        self.assertEqual(1, len(baselines.records))
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

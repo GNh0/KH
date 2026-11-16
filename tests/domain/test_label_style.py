@@ -41,6 +41,33 @@ def review(source=SCREEN, **kwargs):
 
 
 class LabelStyleTests(unittest.TestCase):
+    def test_unchanged_same_screen_label_supplies_height_and_text_options(self):
+        original = REFERENCE + 'this.pnMain.Controls.Add(this.lblReference);'
+        candidate = original + SCREEN + 'this.pnMain.Controls.Add(this.lblName);'
+        result = check_designer(candidate, original=original, control_sources=[LABEL])
+        self.assertFalse([i for i in result.issues if i.severity != 'info'])
+        self.assertEqual(['lblReference'], result.metadata['label_style']['same_screen_members']['lblName'])
+        wrong = original + SCREEN.replace('Size(113, 25)', 'Size(113, 23)') + 'this.pnMain.Controls.Add(this.lblName);'
+        self.assertIn('label_height_mismatch', {i.code for i in check_designer(wrong, original=original, control_sources=[LABEL]).issues})
+
+    def test_changed_or_hidden_peers_are_not_automatic_references(self):
+        original = REFERENCE + 'this.pnMain.Controls.Add(this.lblReference);'
+        for altered in (original.replace('Size(113, 25)', 'Size(113, 30)'), original + 'this.lblReference.Visible = false;'):
+            candidate = altered + SCREEN + 'this.pnMain.Controls.Add(this.lblName);'
+            result = check_designer(candidate, original=original, control_sources=[LABEL])
+            self.assertNotIn('lblName', result.metadata['label_style']['same_screen_members'])
+            self.assertTrue(result.incomplete)
+
+    def test_bounds_without_a_serialized_peer_bound_use_height_compatibility(self):
+        original = 'this.txtExisting = new TextEdit(); this.txtExisting.Size = new Size(150, 25); this.pnMain.Controls.Add(this.txtExisting);'
+        new = 'this.txtNew = new TextEdit(); this.txtNew.Size = new Size(150, 25); this.txtNew.MinimumSize = new Size(0, 25); this.txtNew.MaximumSize = new Size(65535, 25); this.pnMain.Controls.Add(this.txtNew);'
+        result = check_designer(original + new, original=original)
+        self.assertFalse(result.incomplete)
+        self.assertFalse([i for i in result.issues if i.severity != 'info'])
+        for changed in (new.replace('Size(0, 25)', 'Size(0, 30)'), new.replace('Size(65535, 25)', 'Size(65535, 20)')):
+            result = check_designer(original + changed, original=original)
+            self.assertIn('control_height_mismatch', {i.code for i in result.issues})
+
     def test_actual_default_fallback_and_approved_scaled_height_are_accepted(self):
         result = review()
         self.assertEqual('passed', result.status)
