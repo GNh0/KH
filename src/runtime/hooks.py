@@ -9,10 +9,12 @@ import json
 import os
 from pathlib import Path
 import re
+from collections import Counter
 from src.common.files import read_file
 from src.common.output import redact
 from src.context.store import Store, data_root, session_key
 from src.context.transcript import add_user, capture
+from src.runtime.check_context import SourceBaselines, companion, literal_project_sources, nearby_projects
 
 ROOT = Path(__file__).resolve().parents[2]
 DOMAINS = {'.sql': 'sql-formatting', '.cs': 'csharp-designer-style-harness',
@@ -175,28 +177,39 @@ def snapshot(path: Path) -> tuple[str, str]:
     return raw.sha256, text
 
 
-def inspect(path: Path, text: str) -> dict:
+def inspect(path: Path, text: str, *, original: str | None = None, peer: str | None = None,
+            original_peer: str | None = None, control_sources: list[str] | None = None) -> dict:
     suffix = path.suffix.casefold()
     if suffix == '.sql':
         from src.sql.checks import check_sql
-        result = check_sql(text)
+        result = check_sql(text, original=original, compare_original=False)
     elif suffix == '.cs':
         if path.name.casefold().endswith('.designer.cs'):
             from src.csharp.designer import check_designer
-            result = check_designer(text)
+            result = check_designer(text, original=original, code_behind=peer or '', control_sources=control_sources or [])
         else:
             from src.csharp.checks import check_csharp
-            result = check_csharp(text)
+            result = check_csharp(text, original=original, designer=peer,
+                                  original_designer=original_peer, control_sources=control_sources or [])
     else:
         from src.pb.checks import check_pb_export
         result = check_pb_export(text, path=str(path))
-    return {'errors': [item.code for item in result.issues if item.severity == 'error'],
-            'warnings': [item.code for item in result.issues if item.severity != 'error'],
-            'incomplete': result.incomplete, 'not_checked': result.not_checked,
-            'review_status': result.metadata.get('review_status', 'unverified')}
+    errors = Counter(item.code for item in result.issues if item.severity == 'error')
+    warnings = Counter(item.code for item in result.issues if item.severity == 'warning')
+    ordered = sorted(result.issues, key=lambda issue: {'error': 0, 'warning': 1, 'info': 2}[issue.severity])
+    return {'status': result.status if errors else 'review_required' if warnings else result.status,
+            'errors': list(errors), 'warnings': list(warnings),
+            'warning_counts': dict(warnings),
+            'findings': [item.to_dict() for item in ordered[:8]],
+            'finding_count': len(result.issues),
+            'incomplete': result.incomplete, 'not_checked': result.not_checked[:8],
+            'not_checked_count': len(result.not_checked),
+            'comparison_baselines': result.metadata.get('comparison_baselines', {'original': original is not None}),
+            'review_status': 'needs_review' if warnings else result.metadata.get('review_status', 'static_checks_only')}
 
 
-def update_files(state: dict, paths: list[Path], returned: str = '', before: dict | None = None) -> list[str]:
+def update_files(state: dict, paths: list[Path], returned: str = '', before: dict | None = None,
+                 baselines: SourceBaselines | None = None) -> list[str]:
     messages = []
     files = state.setdefault('files', {})
     for path in paths:
@@ -207,7 +220,14 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
         try:
             sha, text = snapshot(path)
             item = files.setdefault(name, {})
-            item.pop('error', None)
+            had_error = bool(item.pop('error', None))
+            peer_path = companion(path)
+            peer_sha, peer_text = snapshot(peer_path) if peer_path is not None else ('', '')
+            project_candidates = [str(project) for project in nearby_projects(path)] if path.suffix.casefold() == '.cs' else []
+            dependencies_changed = any(
+                snapshot(Path(dep['path']))[0] != dep['sha256'] for dep in item.get('check_dependencies', []))
+            needs_check = (had_error or sha != item.get('sha256') or peer_sha != item.get('peer_sha256') or
+                           dependencies_changed or project_candidates != item.get('project_candidates'))
             if sha != item.get('sha256'):
                 previous = (before or {}).get(name)
                 current_lines = line_hashes(text)
@@ -221,8 +241,30 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
                     item['read_scope'] = 'unverified change range; inspect actual coherent unit directly'
                 item['read_buffer'] = []
                 item['numbered_seen'] = []
-                item.update(sha256=sha, readback=None, check=inspect(path, text) if sha != 'deleted' else {})
+                item.update(sha256=sha, readback=None)
                 item['line_hashes'] = current_lines
+            if needs_check:
+                original = baselines.original(path) if baselines is not None else None
+                original_peer = baselines.original(peer_path) if baselines is not None and peer_path is not None else None
+                controls, project = literal_project_sources(path, [text, peer_text]) if path.suffix.casefold() == '.cs' else ([], {})
+                item['check'] = inspect(path, text, original=original, peer=peer_text if peer_sha not in {'', 'deleted'} else None,
+                                        original_peer=original_peer, control_sources=controls) if sha != 'deleted' else {}
+                item['peer_sha256'] = peer_sha
+                item['project_candidates'] = project_candidates
+                item['check_context'] = project
+                if item['check']:
+                    item['check']['automatic_context'] = {
+                        'original': original is not None,
+                        'companion': str(peer_path) if peer_path is not None and peer_sha != 'deleted' else None,
+                        'control_sources': [entry['path'] for entry in project.get('sources', [])[:4]],
+                        'control_source_count': len(project.get('sources', [])),
+                    }
+                    missing = project.get('unverified', [])
+                    item['check']['not_checked'] = (missing + item['check']['not_checked'])[:8]
+                    item['check']['not_checked_count'] += len(missing)
+                item['check_dependencies'] = [
+                    {'path': dependency, 'sha256': snapshot(Path(dependency))[0]}
+                    for dependency in dict.fromkeys(entry['path'] for entry in project.get('dependencies', []))]
                 if sha != 'deleted':
                     messages.append(name + ': ' + json.dumps({**item['check'], 'read_scope': item['read_scope']}, ensure_ascii=False))
             returned_body = undecorated(returned)
@@ -338,6 +380,7 @@ def handle(event: dict, host: str) -> dict:
         if connection is None:
             return {}
         state = store.load(connection, key)
+        baselines = SourceBaselines(store.path.parent / 'checks' / key, state)
         output = {}
         if name == 'PreToolUse' and paths:
             state['skills_seen'] = sorted(observed_reads('\n', state))
@@ -355,22 +398,41 @@ def handle(event: dict, host: str) -> dict:
                 output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny',
                            'permissionDecisionReason': reason}} if mode == 'enforce' else context(name, reason))
             if not output or output.get('hookSpecificOutput', {}).get('permissionDecision') != 'deny':
+                if state.pop('check_epoch_closed', False):
+                    state['files'] = {}
+                    state.pop('file_warning', None)
+                    state.pop('stop_notice', None)
                 baseline = state.setdefault('before', {})
                 for path in paths:
                     try:
                         _sha, body = snapshot(path)
                         baseline[str(path)] = line_hashes(body)
+                        baselines.capture(path)
+                        peer = companion(path)
+                        if peer is not None:
+                            baselines.capture(peer)
                     except (OSError, ValueError, UnicodeError, RuntimeError):
                         baseline.pop(str(path), None)
+                        state['file_warning'] = 'Some original source snapshots could not be captured; comparison remains unverified.'
         elif name == 'PostToolUse':
             state['skills_seen'] = sorted(observed_reads(returned, state))
             baseline = {str(path): state.get('before', {}).pop(str(path)) for path in paths
                         if str(path) in state.get('before', {})}
-            messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in state['files']), *paths])), returned, baseline)
+            messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in state['files']), *paths])), returned, baseline,
+                                    baselines=baselines)
             if paths:
                 capture(state, event, host)
             if messages:
-                output = context(name, ('KH saved-file checks (partial, not semantic audit). Read back each changed unit, resolve findings against actual requirements/reference sources, then audit combined changes and regressions.\n' + '\n'.join(messages))[:6000])
+                notice = ('KH saved-file checks (partial, not semantic audit). review_required is unresolved, not completion. '
+                          'Read back each changed unit, resolve findings against actual requirements/reference sources, then audit combined changes and regressions.\n')
+                shown = []
+                for message in messages:
+                    if len(notice) + sum(map(len, shown)) + len(message) > 5600:
+                        break
+                    shown.append(message)
+                if len(shown) < len(messages):
+                    shown.append('Additional saved-file checks were omitted here; use scoped kh_context recall for the remaining file results.')
+                output = context(name, notice + '\n'.join(shown))
         elif name in {'PreCompact', 'SessionEnd', 'Interrupt'}:
             capture(state, event, host)
             if name == 'PreCompact':
@@ -417,20 +479,28 @@ def handle(event: dict, host: str) -> dict:
                 if compact:
                     state['restore_pending'] = False
         elif name == 'Stop' and not state.get('paused'):
-            update_files(state, [Path(path) for path in state['files']])
+            update_files(state, [Path(path) for path in state['files']], baselines=baselines)
             pending = []
             for path, item in state['files'].items():
-                if item.get('error') or (item.get('pending_spans') and item.get('readback') != item.get('sha256')) or item.get('check', {}).get('errors'):
+                check = item.get('check', {})
+                if item.get('error') or (item.get('pending_spans') and item.get('readback') != item.get('sha256')) or check.get('errors') or check.get('warnings') or check.get('incomplete'):
                     pending.append(path)
             fingerprint = hashlib.sha256(json.dumps(state['files'], sort_keys=True).encode()).hexdigest()
             if pending or state.get('file_warning'):
                 reason = ('KH cannot verify completion for these saved files: ' + ', '.join(pending) + '. '
-                          'Read back current bodies, inspect actual project/reference contracts, repair confirmed violations only, re-audit and check introduced regressions. '
+                          'Read back current bodies, inspect actual project/reference contracts, resolve new review findings and repair confirmed violations only, re-audit and check introduced regressions. '
                           'Report unsupported/unresolved evidence accurately; do not claim a checker proves full compliance. ' + state.get('file_warning', ''))
                 if mode == 'enforce' and not event.get('stop_hook_active') and state.get('stop_notice') != fingerprint:
                     state['stop_notice'] = fingerprint
                     output = {'decision': 'block', 'reason': reason}
                 else:
                     output = {'systemMessage': reason}
+            else:
+                try:
+                    baselines.cleanup()
+                    state['before'] = {}
+                    state['check_epoch_closed'] = True
+                except (OSError, ValueError, UnicodeError):
+                    output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
         store.save(connection, key, state)
         return output

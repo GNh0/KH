@@ -93,7 +93,7 @@ def main(argv=None):
                           'pending_prompt_count': len(state.get('pending_prompts', [])),
                           'latest_users': previews(state['users'][-5:]),
                           'user_count': len(state['users']), 'memories': previews(store.memories(connection)),
-                          'files': {path: {field: item.get(field) for field in ('sha256', 'readback', 'error')}
+                          'files': {path: {field: item.get(field) for field in ('sha256', 'readback', 'error', 'check', 'check_context')}
                                     for path, item in state.get('files', {}).items()},
                           'paused': state.get('paused', False), 'capture_warning': state.get('capture_warning'),
                           'backlog_bytes': state.get('backlog_bytes', 0)}

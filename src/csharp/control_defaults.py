@@ -170,7 +170,7 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
                     default_size, screen_size = _parse_size(expected), _parse_size(actual)
                     if default_size is not None and screen_size is not None and screen_size[0] < default_size[0]:
                         issues.append(Issue('user_control_size_shrink', 'error',
-                                            'The new label width is smaller than its supplied constructor width; an explicit compact-size request can establish an exception.',
+                                            'The label width is smaller than its supplied constructor width; an explicit compact-size request can establish an exception.',
                                             details={'property': f'{name}.Size', 'constructor_size': default_size, 'screen_size': screen_size}))
                 # Label height/font/alignment use the scoped constructor + approved screen comparison.
                 continue
@@ -183,7 +183,7 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
                     dimensions = zip(screen_size[:1], default_size[:1]) if screen_height else zip(screen_size, default_size)
                     if any(screen < default for screen, default in dimensions):
                         issues.append(Issue('user_control_size_shrink', 'error',
-                                            'The new control width (or a non-single-line control dimension) is smaller than its supplied default. Do not shrink for short text; single-line height is reviewed against the actual screen separately.',
+                                            'The control width (or a non-single-line control dimension) is smaller than its supplied default. Do not shrink for short text; single-line height is reviewed against the actual screen separately.',
                                             details={'property': f'{name}.Size', 'constructor_size': default_size,
                                                      'screen_size': screen_size}))
                     # Single-line height belongs to the actual screen comparison.
