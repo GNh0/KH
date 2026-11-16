@@ -30,7 +30,7 @@ Check both cases: a missing customer keeps an approved order; a missing approval
 
 Do not let matching detail rows multiply a header result, or fetch a total with a SELECT inside the output list. Aggregate to the header key before joining.
 
-ORDER_HEADER has one row per COMPANY_ID/ORDER_NO and ORDER_DETAIL has multiple lines per header. The example preserves NULL totals when no detail exists; only add a zero fallback if the real result contract requires it.
+ORDER_HEADER has one row per COMPANY_ID/ORDER_NO and ORDER_DETAIL has multiple lines per header. The example preserves NULL totals when no detail exists; add a zero fallback only when the user explicitly requests that missing-result substitution.
 
 ```sql
 SELECT A.COMPANY_ID
