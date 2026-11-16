@@ -6,6 +6,27 @@ from src.sql.layout import normalize_sql_join_layout
 
 
 class SqlPreservationTests(unittest.TestCase):
+    def test_new_xml_action_is_compared_with_established_preparation_boundary(self):
+        staged = """DECLARE @ROWS TABLE (ID INT);
+INSERT INTO @ROWS (ID) SELECT ID FROM OPENXML(@DOC, '/ROOT/ROW', 1) WITH (ID INT);
+UPDATE A SET A.VALUE=B.ID FROM TARGET A JOIN @ROWS B ON A.ID=B.ID;"""
+        direct = """UPDATE A SET A.FLAG='Y' FROM TARGET A
+INNER JOIN OPENXML(@OTHER, '/ROOT/KEY', 1) WITH (ID INT) B ON A.ID=B.ID;"""
+        def findings(candidate, original=None):
+            return [i for i in check_sql(candidate, original=original, compare_original=False).issues
+                    if i.code == 'xml_save_boundary_review']
+        self.assertEqual([], findings(staged, staged))
+        self.assertEqual(1, len(findings(staged + direct, staged)))
+        self.assertEqual(1, len(findings(staged + direct)))
+        self.assertEqual([], findings(staged + direct, staged + direct))
+        self.assertEqual(1, len(findings(staged + direct + direct, staged + direct)))
+        # The API itself, an existing approved direct form and read-only XML are not banned.
+        self.assertEqual([], findings(direct))
+        self.assertEqual([], findings(direct, direct))
+        self.assertEqual([], findings(staged + "SELECT * FROM OPENXML(@DOC, '/ROOT/ROW', 1) WITH(ID INT);"))
+        self.assertEqual([], findings(staged + "-- " + direct.replace('\n', ' ')))
+        self.assertEqual([], findings(staged + "PRINT 'UPDATE A JOIN OPENXML(@DOC)';"))
+
     def test_alias_references_rename_with_source(self):
         before = "SELECT X.ID, Y.NM FROM ORDERS X LEFT OUTER JOIN ITEMS Y ON X.ID = Y.ID WHERE X.ACTIVE = 'Y'"
         scope = describe_sources(before)[0]['scope_id']

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from src.context.store import Store, session_key
 from src.context.transcript import capture, user_text
-from src.runtime.hooks import CYCLE, ROOT, handle
+from src.runtime.hooks import CYCLE, ROOT, handle, inspect
 from src.runtime.hooks import file_paths, write_paths, line_hashes, update_files, restore
 
 
@@ -236,6 +236,118 @@ class HooksContextTests(unittest.TestCase):
         self.assertEqual({}, state['files'])
         self.assertIn(str(path), state['last_file_checks'])
         self.assertNotIn('line_hashes', state['last_file_checks'][str(path)])
+
+    def test_upgrade_refreshes_unchanged_source_cache_and_preserves_readback(self):
+        plugin = self.root / 'versioned-plugin'
+        (plugin / '.codex-plugin').mkdir(parents=True)
+        manifest = plugin / '.codex-plugin/plugin.json'
+        path = self.project / 'same.sql'
+        path.write_text('SELECT 1\n', encoding='utf-8')
+        state = {'files': {}}
+        with patch('src.runtime.hooks.ROOT', plugin):
+            manifest.write_text('{"version":"3.5.5"}')
+            update_files(state, [path], 'SELECT 1\n')
+            item = state['files'][str(path)]
+            digest = item['sha256']
+            old_result = item['check']
+            with patch('src.runtime.hooks.inspect', wraps=inspect) as check:
+                update_files(state, [path])
+                check.assert_not_called()
+                manifest.write_text('{"version":"3.5.6"}')
+                update_files(state, [path])
+                check.assert_called_once()
+            self.assertIsNot(old_result, item['check'])
+            self.assertEqual('saved-file-v2:3.5.6', item['checker_generation'])
+            self.assertEqual(digest, item['sha256'])
+            self.assertEqual(digest, item['readback'])
+            item.pop('checker_generation')  # Real pre-upgrade records had no generation.
+            with patch('src.runtime.hooks.inspect', wraps=inspect) as check:
+                update_files(state, [path])
+                check.assert_called_once()
+
+    def test_new_user_turn_retires_previous_stop_findings_without_claiming_pass(self):
+        self.prerequisites()
+        self.event('UserPromptSubmit', prompt='이 파일 수정', turn_id='old')
+        self.edit_event('PreToolUse')
+        path = self.project / 'example.sql'
+        path.write_text('SELECT 1\n', encoding='utf-8')
+        self.edit_event('PostToolUse')
+        self.assertEqual('block', self.event('Stop', turn_id='old')['decision'])
+        # Native continuation and same-turn steering must keep the active repair.
+        self.event('UserPromptSubmit', prompt='<hook_prompt hook_run_id="stop:15">Read back example.sql</hook_prompt>', turn_id='host')
+        self.event('UserPromptSubmit', prompt='같은 작업 계속', turn_id='old')
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        with store.connect() as connection:
+            self.assertIn(str(path), store.load(connection, session_key(self.base, 'codex'))['files'])
+        self.event('PreCompact')
+        self.event('SessionStart', source='compact')
+        with store.connect() as connection:
+            legacy = store.load(connection, session_key(self.base, 'codex'))
+            legacy.pop('stop_observed')  # 3.5.5 retained only stop_notice.
+            store.save(connection, session_key(self.base, 'codex'), legacy)
+        self.event('UserPromptSubmit', prompt='다른 화면 검토', turn_id='new')
+        with store.connect() as connection:
+            state = store.load(connection, session_key(self.base, 'codex'))
+        self.assertEqual({}, state['files'])
+        self.assertEqual('previous_turn_unverified', state['last_file_checks_outcome'])
+        self.assertIn(str(path), state['last_file_checks'])
+        self.assertNotEqual(state['last_file_checks'][str(path)]['sha256'], state['last_file_checks'][str(path)]['readback'])
+        with patch('src.runtime.hooks.snapshot') as read:
+            self.assertEqual({}, self.event('PostToolUse', tool_name='Bash', tool_input={'command': 'Get-Date'}, tool_response='today'))
+            self.assertEqual({}, self.event('Stop', turn_id='new'))
+            read.assert_not_called()
+        self.edit_event('PreToolUse')
+        self.assertEqual(line_hashes('SELECT 1\n'), self._state(store)['before'][str(path)])
+
+    def _state(self, store):
+        with store.connect() as connection:
+            return store.load(connection, session_key(self.base, 'codex'))
+
+    def test_stop_request_preserves_pending_originals_after_stop_feedback(self):
+        self.prerequisites()
+        self.event('UserPromptSubmit', prompt='수정', turn_id='old')
+        self.edit_event('PreToolUse')
+        path = self.project / 'example.sql'
+        path.write_text('SELECT 1\n', encoding='utf-8')
+        self.edit_event('PostToolUse')
+        self.event('Stop', turn_id='old')
+        self.event('UserPromptSubmit', prompt='우선 작업 멈춰', turn_id='new')
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        state = self._state(store)
+        self.assertTrue(state['paused'])
+        self.assertIn(str(path), state['files'])
+        self.assertTrue(state['check_baselines'])
+        self.assertNotIn('last_file_checks_outcome', state)
+
+    def test_host_stop_prompts_are_not_user_evidence_and_archive_ids_survive_filtering(self):
+        host = '<hook_prompt hook_run_id="stop:15:old-version">Review PR100210</hook_prompt>'
+        self.append_user('real first')
+        self.append_user(host)
+        self.append_user('real second')
+        state = {'users': [
+            {'seq': 1, 'text': 'real first', 'sha256': hashlib.sha256(b'real first').hexdigest(), 'truncated': False, 'source': {'event': 'UserPromptSubmit'}},
+            {'seq': 2, 'text': host, 'sha256': hashlib.sha256(host.encode()).hexdigest(), 'truncated': False, 'source': {'event': 'UserPromptSubmit'}},
+        ]}
+        capture(state, self.base, 'codex')
+        self.assertNotIn(host, [item['text'] for item in state['users']])
+        self.assertEqual(1, state['users'][0]['seq'])
+        self.assertEqual(3, state['users'][-1]['seq'])
+        self.assertIsNone(user_text({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': host}}, 'codex'))
+        quoted_request = host + '\n이 알림 원인을 설명해줘'
+        self.assertEqual(quoted_request, user_text({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': quoted_request}}, 'codex'))
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        state['checkpoint'] = {'text': 'first captured', 'user_seq': 1}
+        self.assertIn('newer user records=1', restore(state, [], store))
+        with store.connect(create=True) as connection:
+            store.save(connection, session_key(self.base, 'codex'), state)
+        checkpoint = self.root / 'gap-checkpoint.md'
+        checkpoint.write_text('through real second', encoding='utf-8')
+        result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/kh_context.py'),
+                                 '--cwd', str(self.project), '--session', 's1', '--transcript', str(self.log),
+                                 'checkpoint', '--file', str(checkpoint)], capture_output=True, text=True,
+                                encoding='utf-8', check=True, timeout=10)
+        self.assertEqual('saved', json.loads(result.stdout)['status'])
+        self.assertEqual(3, self._state(store)['checkpoint']['user_seq'])
 
     def test_numbered_and_segmented_reads_and_version_change(self):
         for relative in (CYCLE, 'sql-formatting/SKILL.md'):

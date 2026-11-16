@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.output import configure_utf8_streams, redact
 from src.context.store import Store, data_root, session_key
-from src.context.transcript import capture
+from src.context.transcript import capture, discard_host_records
 
 
 def main(argv=None):
@@ -46,12 +46,13 @@ def main(argv=None):
                 print(json.dumps({'status': 'empty', 'storage': str(store.path)}))
                 return 0
             state = store.load(connection, key)
+            discard_host_records(state)
             if args.command == 'checkpoint':
                 text = Path(args.file).read_text(encoding='utf-8-sig')
                 if not text.strip() or len(text) > 12000:
                     raise ValueError('checkpoint must be nonempty and <=12000 characters; keep original source pointers')
                 capture(state, event, args.host)
-                state['checkpoint'] = {'text': redact(text), 'user_seq': len(state['users'])}
+                state['checkpoint'] = {'text': redact(text), 'user_seq': max((item['seq'] for item in state['users']), default=0)}
                 store.save(connection, key, state)
                 output = {'status': 'saved', 'session_key': key, 'storage': str(store.path),
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0)}
@@ -93,9 +94,11 @@ def main(argv=None):
                           'pending_prompt_count': len(state.get('pending_prompts', [])),
                           'latest_users': previews(state['users'][-5:]),
                           'user_count': len(state['users']), 'memories': previews(store.memories(connection)),
-                          'files': {path: {field: item.get(field) for field in ('sha256', 'readback', 'error', 'check', 'check_context')}
+                          'files': {path: {field: item.get(field) for field in ('sha256', 'readback', 'error', 'check', 'check_context', 'checker_generation')}
                                     for path, item in (state.get('files') or state.get('last_file_checks', {})).items()},
                           'file_checks_active': bool(state.get('files')) and not state.get('check_epoch_closed', False),
+                          'last_file_checks_outcome': state.get('last_file_checks_outcome'),
+                          'last_file_warning': state.get('last_file_warning'),
                           'paused': state.get('paused', False), 'capture_warning': state.get('capture_warning'),
                           'backlog_bytes': state.get('backlog_bytes', 0)}
             print(json.dumps(output, ensure_ascii=False, indent=2))
