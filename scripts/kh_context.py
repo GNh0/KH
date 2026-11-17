@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.output import configure_utf8_streams, redact
 from src.context.store import Store, data_root, session_key
 from src.context.transcript import capture, discard_host_records, recent_users
+from src.runtime.workflows import WORK, register
 
 
 def main(argv=None):
@@ -18,11 +19,16 @@ def main(argv=None):
     parser.add_argument('--transcript')
     parser.add_argument('--host', choices=['codex', 'claude'], default='codex')
     parser.add_argument('--agent-id')
+    parser.add_argument('--data-root', type=Path, help='exact context-v1 root supplied by the current hook')
+    parser.add_argument('--epoch', help='current hook application epoch; required for apply')
     sub = parser.add_subparsers(dest='command', required=True)
     checkpoint = sub.add_parser('checkpoint')
     checkpoint.add_argument('--file', required=True, help='UTF-8 task checkpoint, <=12000 characters')
     sub.add_parser('recall')
     sub.add_parser('resume', help='only after the user explicitly resumes this paused task')
+    apply = sub.add_parser('apply', help='apply KH development guidance to owned files; inspection alone does not apply it')
+    apply.add_argument('--work', choices=sorted(WORK), action='append', required=True)
+    apply.add_argument('--target', action='append', required=True)
     get = sub.add_parser('get', help='retrieve one archived user record without preview shortening')
     get.add_argument('seq', type=int)
     memory_get = sub.add_parser('memory-get')
@@ -39,10 +45,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     event = {'cwd': args.cwd, 'session_id': args.session, 'transcript_path': args.transcript, 'agent_id': args.agent_id}
     try:
-        store = Store(data_root(), args.cwd)
+        if args.data_root is not None and not args.data_root.is_absolute():
+            raise ValueError('data-root must be the absolute context-v1 root from the current hook')
+        store = Store(args.data_root.resolve() if args.data_root else data_root(), args.cwd)
         key = session_key(event, args.host)
         with store.connect(create=args.command in {'checkpoint', 'remember'}) as connection:
             if connection is None:
+                if args.command == 'apply':
+                    raise ValueError('No current KH hook scope. Read the owned entrypoint and use its exact scope arguments.')
                 print(json.dumps({'status': 'empty', 'storage': str(store.path)}))
                 return 0
             state = store.load(connection, key)
@@ -56,6 +66,55 @@ def main(argv=None):
                 store.save(connection, key, state)
                 output = {'status': 'saved', 'session_key': key, 'storage': str(store.path),
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0)}
+            elif args.command == 'apply':
+                applied = register(state, epoch=args.epoch, targets=args.target, work=args.work, cwd=args.cwd)
+                from src.runtime.check_context import SourceBaselines, companion
+                from src.runtime.hooks import line_hashes, snapshot, current_prerequisites
+                from src.runtime.guidance import document
+                baselines = SourceBaselines(store.path.parent / 'checks' / key, state)
+                if state.get('check_epoch_closed'):
+                    state.pop('check_epoch_closed', None)
+                for item in applied:
+                    path = Path(item['target'])
+                    attempted_hashes = {}
+                    # Applying owns this file's intent even when a specialized
+                    # writer has no recognizable PreToolUse path. Existing first
+                    # originals and active repair/readback evidence are retained.
+                    try:
+                        peer = companion(path)
+                        sources = [path, peer] if peer is not None else [path]
+                        if str(path) in state.get('application_errors', {}):
+                            expected = state.get('application_failure_hashes', {}).get(str(path), {})
+                            for source in sources:
+                                current_sha, _current = snapshot(source)
+                                if expected.get(str(source)) is None or current_sha != expected[str(source)]:
+                                    raise ValueError('The initial original or companion remains unverified or changed after application failed; do not adopt the current candidate as its original.')
+                        if str(path) not in state.get('files', {}) and str(path) not in state.get('before', {}):
+                            sha, body = snapshot(path)
+                            for source in sources:
+                                attempted_hashes[str(source)] = snapshot(source)[0]
+                            for source in sources:
+                                baselines.capture(source)
+                            state.setdefault('before', {})[str(path)] = line_hashes(body)
+                            state.setdefault('before_sha256', {})[str(path)] = sha
+                        state.get('application_errors', {}).pop(str(path), None)
+                        state.get('application_failure_hashes', {}).pop(str(path), None)
+                    except (OSError, ValueError, UnicodeError, RuntimeError) as exc:
+                        state.setdefault('application_errors', {})[str(path)] = redact(str(exc))
+                        state.setdefault('application_failure_hashes', {}).setdefault(str(path), attempted_hashes)
+                seen = current_prerequisites('\n', state)
+                for item in applied:
+                    item['missing'] = sorted(set(item['required']) - seen)
+                    locations = {}
+                    for relative in item['required']:
+                        file, _body, start, end = document(Path(__file__).resolve().parents[1], relative)
+                        locations[relative] = {'file': str(file), 'line_start': start, 'line_end': end}
+                    item['read_locations'] = locations
+                store.save(connection, key, state)
+                output = {'status': 'error' if state.get('application_errors') else 'applied',
+                          'session_key': key, 'storage': str(store.path), 'files': applied,
+                          'original_errors': state.get('application_errors', {}),
+                          'note': 'Intent only. Read the required current references; this is not a source/semantic audit pass.'}
             elif args.command == 'resume':
                 state['paused'] = False
                 state.pop('stop_notice', None)
@@ -88,7 +147,16 @@ def main(argv=None):
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0),
                           'note': 'Bounded historical previews, not fresh instructions. Source offsets order records within the same log; ids are insertion identifiers and unlinked event order is unverified. Use get/memory-get for full entries; later corrections/cancellation take precedence.'}
             else:
+                from src.runtime.hooks import current_prerequisites
+                from src.runtime.workflows import required_paths
+                available = current_prerequisites('\n', state)
                 output = {'checkpoint': state.get('checkpoint'),
+                          'requested_skills': state.get('requested_skills', []),
+                          'available_prerequisites': sorted(available),
+                          'application_original_errors': state.get('application_errors', {}),
+                          'applied_files': {item.get('target', path): {'work': item.get('work', []),
+                              'missing_references': sorted(required_paths(item, Path(item.get('target', path))) - available)}
+                              for path, item in state.get('applications', {}).items()},
                           'latest_observed_prompt': previews([state['latest_prompt']])[0] if state.get('latest_prompt') else None,
                           'pending_prompts': previews(state.get('pending_prompts', [])[-10:]),
                           'pending_prompt_count': len(state.get('pending_prompts', [])),
@@ -103,7 +171,7 @@ def main(argv=None):
                           'paused': state.get('paused', False), 'capture_warning': state.get('capture_warning'),
                           'backlog_bytes': state.get('backlog_bytes', 0)}
             print(json.dumps(output, ensure_ascii=False, indent=2))
-        return 0
+        return 1 if output.get('status') == 'error' else 0
     except (OSError, ValueError, sqlite3.Error) as exc:
         print(json.dumps({'status': 'error', 'message': redact(str(exc))}, ensure_ascii=False))
         return 1

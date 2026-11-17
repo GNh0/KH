@@ -1,10 +1,12 @@
 # Required source-style cycle for code work
 
-Apply this while writing SQL, PB or C# project code, including Designer and reports: review the proposed change before applying it, audit each completed implementation unit, then check the combined result. An implementation unit is a coherent method, query branch or related UI change, not every line or tool call. Use the current working context; no separate draft file, checklist or audit log is required.
+This is the shared audit procedure for SQL, PB and C# project code, including Designer and reports. Domain skills and explicit compliance reviews reuse this cycle and current evidence; they do not start another copy of the audit. Review the proposed change, audit each saved implementation unit, then check the combined result. A unit is a coherent method, query branch or related UI change, not every line/tool call. No separate draft file, checklist or audit log is required.
 
 When long work needs continuation across compaction/restart, preserve exact critical constraints, latest corrections and unfinished verification through [context handoff](../../context-handoff/SKILL.md). After restoration, retrieve omitted original evidence and recheck current sources; an older checkpoint cannot revive cancelled work or replace newer instructions.
 
 ## Before the first code write
+
+Follow the current domain entrypoint's application route and retrieve the missing references for the actual changed responsibilities. Reading a skill for inspection is not development application. Hook read checks establish availability only; source comparison and semantic judgment below still belong to the agent.
 
 Select an actual existing reference **program, screen or procedure for each changed responsibility** in the user's designated comparison project. If none is designated, use an available approved other project with the same framework. A query/layout example does not establish a printing or save path it does not implement. Read the relevant complete bodies and follow their called preparation/initialization through the point where the result is consumed. A project name, search hit, file opening or fixed first-lines excerpt does not establish this coverage. Do not substitute unapproved generated drafts or user-rejected code for a working reference.
 
@@ -26,8 +28,10 @@ Use host-observed source edit tools when they fit the work. If a required specia
 
 Re-read the final saved code, or exact final snippet when no file was requested. Compare every created/changed body and Designer block with the selected source and current rules. Include the combined effects of the implementation units already reviewed. Audit the actual production entrypoint and affected control/event/binding and query/save/report path, including prerequisites performed in other methods. Extra setup in a test/export harness does not prove the production path performs it. Preserve compliant work outside scope.
 
-Complete the shared [rule audit](../../rule-audit/SKILL.md) using that comparison. Repair only confirmed violations, re-read the repaired code and re-audit the affected rules. Repeat until violations are resolved in the verifiable scope; unresolved evidence is not a pass. A reference read, compiler result or internal test count cannot replace this final source comparison.
+Compare the latest user requirements, applicable domain rules and saved implementation. Classify relevant rules as verified, violated or unverified; explain material exclusions. Missing evidence is neither a guessed violation nor a pass. Use supported checkers with actual originals, selected control/reference sources and scoped profiles; resolve warnings and not_checked against the real requirement. Do not invent a baseline or weaken a rule to obtain a pass.
 
-Finally check whether the combined repairs introduced problems in related callers, initialization, bindings, data contracts or previously working behavior. A further edit reopens its affected audit and regression checks. Honor existing limits on builds, DB writes and external actions; do not replay them just to obtain a passing result.
+Repair only confirmed violations, preserve compliant work, re-read the repair and re-audit affected rules. Repeat until violations are resolved in the verifiable scope. Reuse unaffected observations/tests; a later edit reopens affected evidence. An earlier process omission cannot be erased by a later read or test pass. A reference read, compiler result or internal test count cannot replace the final source comparison.
+
+Finally check whether combined repairs introduced problems in related callers, initialization, bindings, data contracts or previously working behavior. Broaden/repeat tests only for an affected behavior or unresolved risk. Honor stop requests, review-only scope and existing limits on builds, DB writes and external actions; do not replay them merely to obtain a passing result.
 
 At handover, briefly identify the programs/flows actually compared and any material unverified scope. Do not report a complete source comparison from a read log or test pass alone.

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from src.context.store import Store, session_key
 from src.runtime.hooks import CYCLE, ROOT, handle
 from src.runtime.skill_usage import explicit_skill_requests
+from hook_application_fixture import apply_files
 
 
 class ExplicitSkillTests(unittest.TestCase):
@@ -104,9 +105,12 @@ class ExplicitSkillTests(unittest.TestCase):
 
     def test_explicit_request_requires_observed_body_and_cycle_before_edit(self):
         self.event('UserPromptSubmit', prompt='$sql-formatting task', turn_id='first')
-        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        self.assertEqual(['sql-formatting'], self.state()['requested_skills'])
+        self.assertEqual([], self.state()['kh_used_skills'])
         self.assertEqual({}, self.state().get('native_skill_reads', {}))
         self.assertEqual([], self.state()['skills_seen'])
+        self.assertEqual({}, self.write('.sql'))
+        apply_files(self.scope, 'codex', ['sql-select'], [self.project / 'Target.sql'], deliver=False)
         denied = self.write('.sql')['hookSpecificOutput']
         self.assertEqual('deny', denied['permissionDecision'])
         self.assertIn('sql-formatting', denied['permissionDecisionReason'])
@@ -115,6 +119,8 @@ class ExplicitSkillTests(unittest.TestCase):
         self.event('PostToolUse', tool_name='Read', tool_response=(ROOT / 'skills/sql-formatting/SKILL.md').read_text(encoding='utf-8'))
         self.assertEqual('deny', self.write('.sql')['hookSpecificOutput']['permissionDecision'])
         self.event('PostToolUse', tool_name='Read', tool_response=(ROOT / 'skills' / CYCLE).read_text(encoding='utf-8'))
+        self.assertEqual('deny', self.write('.sql')['hookSpecificOutput']['permissionDecision'])
+        apply_files(self.scope, 'codex', ['sql-select'], [self.project / 'Target.sql'])
         self.assertEqual({}, self.write('.sql'))
 
     def test_stop_then_unrelated_request_clears_explicit_selection_and_read_coverage(self):
@@ -128,6 +134,7 @@ class ExplicitSkillTests(unittest.TestCase):
 
     def test_same_turn_steering_preserves_selected_scope_and_stop_does_not_resume(self):
         self.event('UserPromptSubmit', prompt='$sql-formatting task', turn_id='same')
+        apply_files(self.scope, 'codex', ['sql-select'], [self.project / 'Target.sql'], deliver=False)
         self.event('UserPromptSubmit', prompt='same task correction', turn_id='same')
         self.assertEqual('deny', self.write('.sql')['hookSpecificOutput']['permissionDecision'])
         self.event('UserPromptSubmit', prompt='stop', turn_id='cancel')
@@ -135,9 +142,13 @@ class ExplicitSkillTests(unittest.TestCase):
         self.assertTrue(self.state()['paused'])
         self.assertIn('paused', self.write('.sql')['hookSpecificOutput']['permissionDecisionReason'])
 
-    def test_pb_request_covers_only_migration_outputs(self):
+    def test_pb_selection_does_not_apply_unregistered_output_files(self):
         self.event('UserPromptSubmit', prompt='$pb-to-csharp-migration-harness migrate', turn_id='first')
         for suffix in ('.sql', '.cs', '.srw'):
-            self.assertEqual('deny', self.write(suffix)['hookSpecificOutput']['permissionDecision'])
+            self.assertEqual({}, self.write(suffix))
+        apply_files(self.scope, 'codex', ['pb-edit'], [self.project / 'Target.srw'], deliver=False)
+        self.assertEqual('deny', self.write('.srw')['hookSpecificOutput']['permissionDecision'])
+        self.assertEqual({}, self.write('.sql'))
+        self.assertEqual({}, self.write('.cs'))
         self.assertEqual({}, self.write('.py'))
         self.assertNotIn('migrate', json.dumps(self.state().get('native_skill_reads', {})))

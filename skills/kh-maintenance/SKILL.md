@@ -18,5 +18,3 @@ Apply the current skill-creator guidance to skill changes. For a reported bad ad
 - Keep audit and validation scratch outside source trees using [workspace files](../work-execution/references/workspace-files.md).
 
 Check the skills and paths actually discovered. Reproduce reported checker failures against the supplied/current project source and compare the repaired result with its actual contract; use regression tests to preserve those confirmed cases. Test/CI counts, self-ratings and simulations do not establish overall correctness, independent validation or actual agent execution. Distinguish source, branch, manifest, and installed cache; keep installation and publication within the actual request.
-
-Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

@@ -10,6 +10,8 @@ When several files define the same procedure, identify the source used by the ap
 
 Trace the requested operation through the actual caller and relevant complete procedure bodies. Compare what the existing path already handles with the concrete gap the change must resolve. Select the simplest sufficient implementation that follows the agreed style and preserves input cardinality, full keys, related writes, validation and transaction/error ownership. An available API or familiar technique alone does not establish a need for added code. Justify necessary differences from actual behavior, API constraints or measured performance; classify neither necessity nor correctness from a technique's name or shape. Resolve material omissions from truncated output.
 
+### XML preparation and writes
+
 When adding an XML action, compare its parsing, typed input rows and owning writes with the target's complete existing SAVE preparation boundary before drafting. Trace which input documents the new caller actually sends and which preprocessing/output phases apply. Preserve the established boundary unless the real operation requires a different one; do not improvise a separate transport merely because the new action is short, or parse unrelated documents simply because another mode does. Compare the complete saved procedure after the addition, including its shared phases and error cleanup.
 
 Keep XML/selected row values in their rowset and consume them through the approved INSERT SELECT, UPDATE FROM and DELETE JOIN flow. Do not first copy available row fields into a list of scalar variables or normalize a staging table merely to prepare the following write. Apply required value expressions at their owning write when that preserves the contract. Variables for real numbering, single-document outputs or required API calls, and staging updates that record generated keys, remain valid. Compare responsibilities with the [source-based patterns](procedure-patterns.md), not variable counts or a blanket ban on staging UPDATEs.
@@ -18,9 +20,15 @@ Keep XML/selected row values in their rowset and consume them through the approv
 
 Give each operation a coherent dispatch branch, following the target's IF/ELSE IF structure. Keep that operation's ordered result sets together; three returned tables do not require three independent conditions repeating the same mode. Conversely, when modes use different source keys, JOIN paths or exclusions, write their queries in their own branches instead of combining them through mode-dependent OR conditions and conditional JOINs merely to share text. Shared validation or preprocessing remains valid when it has a real responsibility; do not mechanically merge it into dispatch or change independent phases into ELSE IF. Trace every mode's path and result-table order against its caller.
 
+### Save row operations
+
 For save/XML flows, match actual edit-mode strings and Added/Modified/Deleted states to SP branches. A target that sends EDIT must not be implemented only as MOD. Preserve `sp_XML_LOG_SAVE` where the target contract requires it.
 
+### Composite keys
+
 For composite keys, inspect the target's existing parser/function and its complete same-project usage. Follow that form to split the key and JOIN on the typed components and full business key. Do not reconstruct table keys by concatenating columns in a JOIN, hand-parse an already supported key, or introduce a separate mode-driven scalar-variable preprocessing layer just to simplify writing the query. Preserve actual component types, NULL behavior and cardinality; function names and component counts are not universal.
+
+### Save batches and transitions
 
 Separate removal of detail rows from deletion of persisted master documents. Multiple selected master keys must remain a set through XML parsing and UPDATE/DELETE JOINs. Do not replace those keys with one scalar `@PURNUM`-like assignment. A scalar header value can still be appropriate in an actual single-document NEW/EDIT branch.
 

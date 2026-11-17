@@ -12,6 +12,9 @@ from src.context.store import Store, session_key
 from src.context.transcript import add_user, capture, recent_users, user_text
 from src.runtime.hooks import CYCLE, ROOT, handle, inspect
 from src.runtime.hooks import file_paths, write_paths, line_hashes, update_files, restore
+from hook_application_fixture import apply_files
+from src.runtime.workflows import guidance_paths
+from src.runtime.guidance import document
 
 
 class HooksContextTests(unittest.TestCase):
@@ -38,7 +41,8 @@ class HooksContextTests(unittest.TestCase):
     def prerequisites(self):
         body = '\n'.join((ROOT / 'skills' / relative).read_text(encoding='utf-8-sig')
                          for relative in (CYCLE, 'sql-formatting/SKILL.md'))
-        return self.event('PostToolUse', tool_name='Bash', tool_input={'command': 'read skills'}, tool_response={'output': body})
+        self.event('PostToolUse', tool_name='Bash', tool_input={'command': 'read skills'}, tool_response={'output': body})
+        return apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'])
 
     def edit_event(self, name):
         return self.event(name, tool_name='apply_patch', tool_input={'command': '*** Begin Patch\n*** Add File: example.sql\n+SELECT 1\n*** End Patch'}, tool_response={'output': 'Success'})
@@ -56,6 +60,7 @@ class HooksContextTests(unittest.TestCase):
         self.assertEqual({}, self.edit_event('PreToolUse'))
         body = (ROOT / 'skills/sql-formatting/SKILL.md').read_text(encoding='utf-8-sig')
         self.event('PostToolUse', tool_name='Read', tool_response=body)
+        apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'], deliver=False)
         for _ in range(3):
             denied = self.edit_event('PreToolUse')
             self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
@@ -109,7 +114,8 @@ class HooksContextTests(unittest.TestCase):
 
     def test_read_only_kh_task_does_not_enable_next_non_kh_task(self):
         self.event('UserPromptSubmit', prompt='SQL 지침 확인', turn_id='first')
-        self.prerequisites()
+        for relative in (CYCLE, 'sql-formatting/SKILL.md'):
+            self.event('PostToolUse', tool_name='Read', tool_response=(ROOT / 'skills' / relative).read_text(encoding='utf-8'))
         self.assertEqual({}, self.event('Stop'))
         self.event('UserPromptSubmit', prompt='별도 작업', turn_id='next')
         with patch('src.runtime.hooks.snapshot') as read:
@@ -123,6 +129,7 @@ class HooksContextTests(unittest.TestCase):
         for relative in (CYCLE, 'pb-to-csharp-migration-harness/SKILL.md'):
             self.event('PostToolUse', tool_name='Read',
                        tool_response=(ROOT / 'skills' / relative).read_text(encoding='utf-8-sig'))
+        apply_files(self.base, 'codex', ['pb-migrate', 'sql-select'], [self.project / 'example.sql'], deliver=False)
         denied = self.edit_event('PreToolUse')
         self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
         self.assertIn(str(ROOT / 'skills/sql-formatting/SKILL.md'), denied['hookSpecificOutput']['permissionDecisionReason'])
@@ -261,6 +268,7 @@ class HooksContextTests(unittest.TestCase):
         body = (ROOT / 'skills/pb-to-csharp-migration-harness/SKILL.md').read_text(encoding='utf-8-sig')
         self.event('PostToolUse', tool_name='Read', tool_response=body)
         expected = self.project / 'dynamic-path.sru'
+        apply_files(self.base, 'codex', ['pb-edit'], [expected], deliver=False)
         commands = [
             "@'\nfrom pathlib import Path\np = Path.cwd()\nfile = p / ('dynamic-path' + '.sru')\nfile.write_text('export')\n'@ | python -B -",
             "$root = (Get-Location); $file = Join-Path $root 'dynamic-path.sru'; Set-Content -LiteralPath $file -Value 'export'",
@@ -297,9 +305,9 @@ class HooksContextTests(unittest.TestCase):
         paths, unresolved = write_paths(event)
         self.assertEqual([], paths)
         self.assertTrue(unresolved)
-        denied = handle({**event, 'hook_event_name': 'PreToolUse'}, 'codex')
-        self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
-        self.assertNotIn('private-name', denied['hookSpecificOutput']['permissionDecisionReason'])
+        # An unresolved destination is not proof that this command owns an
+        # applied file. Do not globally gate unrelated work by extension.
+        self.assertEqual({}, handle({**event, 'hook_event_name': 'PreToolUse'}, 'codex'))
         event['tool_input'] = {'cmd': '$root=unknown; $p="$root/private-name.sql"; $dest=$p; Set-Content $dest "SELECT 1"'}
         self.assertEqual([], write_paths(event)[0])
         self.assertTrue(write_paths(event)[1])
@@ -387,6 +395,7 @@ class HooksContextTests(unittest.TestCase):
             read.assert_not_called()
         self.edit_event('PreToolUse')
         self.assertEqual({}, self._state(store)['before'])
+        self.event('UserPromptSubmit', prompt='이제 해당 SQL 작업을 계속해', turn_id='implementation')
         self.prerequisites()
         self.edit_event('PreToolUse')
         self.assertEqual(line_hashes('SELECT 1\n'), self._state(store)['before'][str(path)])
@@ -448,13 +457,18 @@ class HooksContextTests(unittest.TestCase):
             for start, end in ((0, len(lines)//2), (len(lines)//2, len(lines))):
                 returned = '\n'.join(f'{i+1}: {lines[i]}' for i in range(start, end))
                 self.event('PostToolUse', tool_name='Read', tool_response=returned)
+        self.assertTrue({CYCLE, 'sql-formatting/SKILL.md'} <= set(self._state(Store(self.root / 'data/context-v1', str(self.project)))['skills_seen']))
+        applied = apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'], deliver=False)
+        for relative in set(applied[0]['required']) - {CYCLE, 'sql-formatting/SKILL.md'}:
+            self.event('PostToolUse', tool_name='Read', tool_response=document(ROOT, relative)[1])
         self.assertEqual({}, self.edit_event('PreToolUse'))
         # Change the expected prerequisite in a separate fixture, preserving the production tree.
         fake = self.root / 'plugin'
-        for relative in (CYCLE, *(domain + '/SKILL.md' for domain in ('sql-formatting', 'csharp-designer-style-harness', 'pb-to-csharp-migration-harness'))):
+        for relative in {path.partition('#')[0] for path in guidance_paths()}:
             destination = fake / 'skills' / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text((ROOT / 'skills' / relative).read_text(encoding='utf-8-sig') + '\nNEW REQUIRED TEXT\n', encoding='utf-8')
+            extra = '\nNEW REQUIRED TEXT\n' if relative in {CYCLE, 'sql-formatting/SKILL.md'} else ''
+            destination.write_text((ROOT / 'skills' / relative).read_text(encoding='utf-8-sig') + extra, encoding='utf-8')
         with patch('src.runtime.hooks.ROOT', fake):
             self.assertEqual('deny', self.edit_event('PreToolUse')['hookSpecificOutput']['permissionDecision'])
 
@@ -485,6 +499,10 @@ class HooksContextTests(unittest.TestCase):
             for line in (ROOT / 'skills' / relative).read_text(encoding='utf-8-sig').splitlines():
                 if line.strip():
                     self.event('PostToolUse', tool_name='Read', tool_response=line)
+        self.assertTrue({CYCLE, 'sql-formatting/SKILL.md'} <= set(self._state(Store(self.root / 'data/context-v1', str(self.project)))['skills_seen']))
+        applied = apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'], deliver=False)
+        for relative in set(applied[0]['required']) - {CYCLE, 'sql-formatting/SKILL.md'}:
+            self.event('PostToolUse', tool_name='Read', tool_response=document(ROOT, relative)[1])
         self.assertEqual({}, self.edit_event('PreToolUse'))
 
     def test_large_existing_file_only_requires_changed_range_with_context(self):
@@ -576,6 +594,7 @@ class HooksContextTests(unittest.TestCase):
                                         capture_output=True, timeout=15, env={**os.environ, 'PLUGIN_ROOT': str(ROOT)},
                                         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertEqual(0, activation.returncode, activation.stderr.decode('utf-8', errors='replace'))
+            apply_files(self.base, host, ['sql-select'], [self.project / '한글 example.sql'], deliver=False)
             result = subprocess.run(args, input=json.dumps(event, ensure_ascii=False).encode('utf-8'),
                                     capture_output=True, timeout=15, env={**os.environ, 'PLUGIN_ROOT': str(ROOT)},
                                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
