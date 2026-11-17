@@ -1,6 +1,6 @@
 ---
 name: csharp-designer-style-harness
-description: Generate, modify, or review WinForms/DevExpress C#, Designer and XtraReports preview/printing against actual project controls, patterns, bindings and save contracts.
+description: Develop or review WinForms/DevExpress source, Designer layouts and XtraReports against actual project contracts.
 ---
 
 # C# and Designer
@@ -9,7 +9,7 @@ Execute in the current agent by default. Use the [KH delegation flow](../work-ex
 
 Apply to the actual target project. Do not impose WinForms architecture on MAUI/PDA or other C# projects.
 
-Complete the required [source-style cycle](../work-execution/references/source-style-cycle.md). Before applying each coherent change, review the proposed code against the request, the actual existing flow and its owning responsibilities; remove unsupported additions before writing. Re-read and audit the saved implementation unit before moving to another responsibility, then audit the combined final result. Inspect and briefly identify the actual reference program/methods and complete relevant call path. A file opening or unrelated example does not establish that comparison.
+For project-file work, use the [scoped application](../work-execution/references/application.md) for the named files and actual C# responsibilities, then follow the shared [source-style cycle](../work-execution/references/source-style-cycle.md). Include `csharp-control` for control/Repository changes in code-behind too. Skill-document inspection alone does not apply development checks.
 
 For C# body work, first read the relevant [coding-style](references/coding-style.md) sections. For Designer creation/edits, first read [Designer](references/designer.md). These are the baseline routes; then select the task-specific references below. Loading this entrypoint alone does not load those rules.
 
@@ -39,8 +39,6 @@ Use the [necessity criteria](../work-execution/references/preferences.md) for LI
 
 When scope moves from analysis to implementation or adds SQL/report work, enter that artifact's workflow before writing it. An earlier PB analysis or C# style excerpt does not cover the new responsibility.
 
-After the final write, compare changed C# bodies and Designer blocks with the selected sources through the source-style cycle and shared rule audit. Resolve unsupported differences, checker warnings and `not_checked` from actual source/requirements. A read, pass or build is not style verification. Imports/full style corrections need standalone inspection too, so differential suppression does not hide retained mistakes.
+Resolve unsupported differences, checker warnings and `not_checked` from actual source/requirements through the shared cycle. Imports/full style corrections need standalone inspection too, so differential suppression does not hide retained mistakes.
 
 With snippets only, perform the clear scoped edit. Mark unavailable project APIs, inherited paths and registration as unverified; seek missing information only when it determines the implementation. Do not substitute another project's APIs for missing target evidence.
-
-Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

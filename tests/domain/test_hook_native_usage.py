@@ -11,6 +11,9 @@ from unittest.mock import patch
 from src.context.store import Store, session_key
 from src.runtime.hooks import CYCLE, ROOT, handle
 from src.runtime.check_context import SourceBaselines
+from hook_application_fixture import apply_files
+from src.runtime.workflows import required_paths
+from src.runtime.guidance import document
 
 
 class NativeHookTests(unittest.TestCase):
@@ -37,15 +40,22 @@ class NativeHookTests(unittest.TestCase):
             return self.store.load(connection, self.key)
 
     def cycle(self):
-        self.event('PostToolUse', tool_name='Read',
-                   tool_response=(ROOT / 'skills' / CYCLE).read_text(encoding='utf-8-sig'))
+        for relative in sorted(required_paths({'work': ['sql-select']}, self.project / 'Save.sql') - {'sql-formatting/SKILL.md'}):
+            _path, body, _start, _end = document(ROOT, relative)
+            self.event('PostToolUse', tool_name='Read', tool_response=body)
 
-    def test_native_skill_delivery_activates_only_its_domain_without_storing_arguments(self):
+    def apply_sql(self, path=None, *, deliver=False, work=None):
+        return apply_files(self.scope, 'claude', work or ['sql-select'],
+                           [path or self.project / 'Save.sql'], deliver=deliver)
+
+    def test_native_delivery_is_available_and_apply_owns_only_its_target(self):
         self.event('PostToolUse', tool_name='Skill',
                    tool_input={'skill': 'kh-skills:sql-formatting', 'args': 'private-argument-sentinel'},
                    tool_response={'success': True})
         sql = self.project / 'Save.sql'
         edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(sql)}}
+        self.assertEqual([], self.state()['kh_used_skills'])
+        self.apply_sql()
         self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
         self.assertNotIn('private-argument-sentinel', json.dumps(self.state()))
         self.assertEqual('deny', self.event('PreToolUse', **edit)['hookSpecificOutput']['permissionDecision'])
@@ -64,8 +74,9 @@ class NativeHookTests(unittest.TestCase):
             self.assertFalse(self.store.path.exists())
         self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting',
                    command_source='plugin', expansion_type='slash_command')
-        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        self.assertEqual([], self.state()['kh_used_skills'])
         self.cycle()
+        self.apply_sql()
         self.assertEqual({}, self.event('PreToolUse', tool_name='Write',
                                         tool_input={'file_path': str(self.project / 'Save.sql')}))
 
@@ -102,6 +113,8 @@ class NativeHookTests(unittest.TestCase):
                 self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
                            expansion_type='slash_command', prompt=prompt, prompt_id=prompt_id)
                 self.event('UserPromptSubmit', prompt=prompt, prompt_id=prompt_id)
+                self.assertIn('sql-formatting/SKILL.md', self.state()['skills_seen'])
+                self.apply_sql()
                 self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
                 result = self.event('PreToolUse', tool_name='Write',
                                     tool_input={'file_path': str(self.project / 'Save.sql')})
@@ -120,7 +133,8 @@ class NativeHookTests(unittest.TestCase):
                 self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
                            expansion_type='slash_command', prompt_id='a')
                 self.event('UserPromptSubmit', prompt='steering', prompt_id='b')
-                self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+                self.assertIn('sql-formatting/SKILL.md', self.state()['skills_seen'])
+                self.assertEqual([], self.state()['kh_used_skills'])
 
     def test_repeated_pending_expansion_does_not_turn_old_pending_into_delivery(self):
         for prompt_id in ('a', 'b', 'c'):
@@ -138,6 +152,7 @@ class NativeHookTests(unittest.TestCase):
                    command_source='plugin', expansion_type='slash_command', prompt_id='pending-csharp')
         sql = self.project / 'Save.sql'
         sql.write_text('SELECT A.QTY FROM INPUT_ROWS A;', encoding='utf-8')
+        self.apply_sql(sql)
         edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(sql)}}
         self.assertEqual({}, self.event('PreToolUse', **edit))
         self.event('PostToolUse', **edit, tool_response=sql.read_text(encoding='utf-8'))
@@ -166,6 +181,7 @@ class NativeHookTests(unittest.TestCase):
         sql = self.project / 'Output.sql'
         before = 'SELECT A.QTY FROM INPUT_ROWS A;'
         sql.write_text(before, encoding='utf-8')
+        self.apply_sql(sql, deliver=True, work=['pb-migrate', 'sql-select'])
         edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(sql)}}
         self.assertEqual({}, self.event('PreToolUse', **edit))
         sql.write_text(before.replace('A.QTY', 'ISNULL(A.QTY, 0)'), encoding='utf-8')
@@ -176,15 +192,18 @@ class NativeHookTests(unittest.TestCase):
         self.assertEqual('block', self.event('Stop')['decision'])
         self.assertEqual(before, SourceBaselines(self.store.path.parent / 'checks' / self.key, self.state()).original(sql))
 
-    def test_denied_action_does_not_settle_an_unmatched_expansion(self):
+    def test_denied_action_keeps_correlation_separate_from_applied_intent(self):
         self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting',
                    command_source='plugin', expansion_type='slash_command', prompt_id='pending')
         edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(self.project / 'Save.sql')}}
+        self.event('PostToolUse', tool_name='Read', tool_response='unrelated non-guidance output')
+        self.apply_sql()
         self.assertEqual('deny', self.event('PreToolUse', **edit)['hookSpecificOutput']['permissionDecision'])
         self.assertTrue(self.state()['native_skill_reads']['sql-formatting']['pending_submission'])
         self.event('UserPromptSubmit', prompt='unrelated task', prompt_id='different')
-        self.assertEqual([], self.state()['kh_used_skills'])
-        self.assertEqual({}, self.event('PreToolUse', **edit))
+        self.assertNotIn('sql-formatting', self.state()['native_skill_reads'])
+        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        self.assertEqual('deny', self.event('PreToolUse', **edit)['hookSpecificOutput']['permissionDecision'])
 
     def test_used_expansion_keeps_its_audit_after_cancel_and_resume(self):
         sql = self.project / 'Save.sql'
@@ -194,6 +213,7 @@ class NativeHookTests(unittest.TestCase):
         self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
                    expansion_type='slash_command', prompt_id='a')
         self.cycle()
+        self.apply_sql(sql)
         self.assertEqual({}, self.event('PreToolUse', **edit))
         sql.write_text(before.replace('A.QTY', 'ISNULL(A.QTY, 0)'), encoding='utf-8')
         self.event('UserPromptSubmit', prompt='stop', prompt_id='b')
@@ -209,9 +229,11 @@ class NativeHookTests(unittest.TestCase):
         self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting',
                    command_source='plugin', expansion_type='slash_command', prompt_id='current')
         self.event('UserPromptSubmit', prompt='/kh-skills:sql-formatting', prompt_id='current')
-        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        self.assertIn('sql-formatting/SKILL.md', self.state()['skills_seen'])
+        self.assertEqual([], self.state()['kh_used_skills'])
         self.assertEqual({}, self.state()['read_coverage'])
         self.cycle()
+        self.apply_sql()
         self.assertEqual({}, self.event('PreToolUse', tool_name='Write',
                                         tool_input={'file_path': str(self.project / 'Save.sql')}))
         self.event('Stop')
@@ -225,6 +247,7 @@ class NativeHookTests(unittest.TestCase):
         sql = self.project / 'Save.sql'
         before = 'SELECT A.QTY FROM INPUT_ROWS A;'
         sql.write_text(before, encoding='utf-8')
+        self.apply_sql(sql)
         data = {'file_path': str(sql)} if tool == 'Write' else {'command': "Set-Content -LiteralPath '" + str(sql) + "' -Value 'partial'"}
         edit = {'tool_name': tool, 'tool_input': data}
         self.assertEqual({}, self.event('PreToolUse', **edit))
@@ -238,7 +261,8 @@ class NativeHookTests(unittest.TestCase):
                    command_source='plugin', expansion_type='slash_command', prompt=prompt)
         self.assertNotIn('private-argument-sentinel', json.dumps(self.state()))
         self.event('UserPromptSubmit', prompt=prompt)
-        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        self.assertIn('sql-formatting/SKILL.md', self.state()['skills_seen'])
+        self.assertEqual([], self.state()['kh_used_skills'])
         self.event('Stop')
         self.event('UserPromptSubmit', prompt=prompt)
         self.assertEqual([], self.state()['kh_used_skills'])
@@ -344,6 +368,7 @@ class NativeHookTests(unittest.TestCase):
     def test_completion_of_one_write_preserves_another_outstanding_write(self):
         first, _before, edit = self.prepare_write()
         second = self.project / 'Other.sql'
+        self.apply_sql(second)
         second.write_text('SELECT A.QTY FROM OTHER_ROWS A;', encoding='utf-8')
         other_edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(second)}}
         self.event('PreToolUse', **other_edit)

@@ -1,13 +1,13 @@
 ---
 name: sql-formatting
-description: Generate, edit, or format SQL/T-SQL using the scoped KH layout while preserving query behavior and explicit alias-preservation requests.
+description: Create, change, format or review SQL/T-SQL query and procedure artifacts using the user's style.
 ---
 
 # SQL formatting
 
 Execute in the current agent by default. Use the [KH delegation flow](../work-execution/references/delegation.md) only when a bounded specialist task or independent review benefits from a separate agent. An assigned SQL worker completes its scope and returns evidence without further delegation.
 
-For project code generation/edits, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md). Review the proposed change against actual comparison-project SQL, target behavior and its owning branch before applying it. Re-read and audit each saved implementation unit before moving to another responsibility, then audit the combined final SQL.
+For project-file work, use the [scoped application](../work-execution/references/application.md) for the actual `sql-format`, `sql-query`, `sql-select` and/or `sql-save` responsibility and named files. Read the returned required references, then complete the shared [source-style cycle](../work-execution/references/source-style-cycle.md). Document inspection or query explanation alone does not apply code-writing checks.
 
 Do not add or change a value fallback unless the user explicitly requested that substitution. Preserve the actual supplied/stored value; NULLs, blanks, missing legacy data or defensive coding do not authorize replacing it with another field, master/default value, zero or a literal. A request to initialize an input default does not authorize replacing submitted values during SAVE or later SELECT. Changing ISNULL to COALESCE, CASE or another form does not change this rule; preserve unchanged existing handling outside the requested correction.
 
@@ -32,5 +32,3 @@ For other SQL work, use the [checker](references/checks.md) when it adds evidenc
 Keep temporary query files and verification output outside the source project; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
 
 Use the approved JOIN-based form for lookups, aggregation and inclusion/exclusion in both SELECT and SAVE. Keep query sources in FROM/JOIN rather than adding SELECT/WHERE subqueries or copying row values into scalar variables for convenience. Preserve required IF EXISTS validations and necessary key/output variables. Apply [preferences and exceptions](../work-execution/references/preferences.md) when an actual requirement makes the preferred form unsuitable; verify full keys, NULLs and row cardinality before rewriting. Return the requested complete SQL or exact replacement block.
-
-Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

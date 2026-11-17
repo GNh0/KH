@@ -1,6 +1,6 @@
 ---
 name: pb-to-csharp-migration-harness
-description: Analyze PowerBuilder/PBL/DataWindow sources or migrate them to C# WinForms, Designer code, and SQL Server procedures with source-grounded behavior mapping.
+description: Analyze PowerBuilder/PBL/DataWindow artifacts or migrate them to WinForms and SQL Server with source-grounded mapping.
 ---
 
 # PB to C# migration
@@ -9,7 +9,7 @@ Execute in the current agent by default. Use the [KH delegation flow](../work-ex
 
 First read the exact PBL/object, base classes, linked DataWindows, and actual event/SQL/report relationships. If only exports are supplied, stay within their evidence scope; do not claim analysis of an unread complete PBL.
 
-For generated/edited PB, C# or SQL, complete the required [source-style cycle](../work-execution/references/source-style-cycle.md). Review the proposed change against the actual source/target flow and comparison-project style before applying it. Re-read and audit each saved implementation unit before moving to another responsibility, then audit the combined final code. Analysis/extraction alone does not require generating code.
+For project-file changes, use the [scoped application](../work-execution/references/application.md): `pb-edit` for native PB edits, or `pb-migrate` together with each named C#/SQL output's actual responsibility. Read its required references and follow the shared [source-style cycle](../work-execution/references/source-style-cycle.md). Analysis/extraction alone needs no development application or code generation.
 
 Put temporary exports, probes, and conversion output outside the source project. Supply an explicit output path for ORCA conversion and follow [workspace files](../work-execution/references/workspace-files.md) for auxiliary files.
 
@@ -25,5 +25,3 @@ Distinguish raw key components from display keys; do not fix particular ORD/PUR/
 For C# migration targets, prefer appropriate available user controls and their initialization defaults. Apply [user-control selection and initialization](../csharp-designer-style-harness/references/user-controls.md) without restricting them to KoneLib. If none are available, preserve behavior using available DevExpress or standard controls. Do not overwrite user-control defaults by adding PB properties or familiar DevExpress options without justification.
 
 Distinguish verified static scope, execution results, and unverified screen/DB behavior in the handover.
-
-Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.

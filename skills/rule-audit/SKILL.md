@@ -1,42 +1,16 @@
 ---
 name: rule-audit
-description: Audit skill-guided work for applicable rules and omitted required steps, repair confirmed violations within scope, and check introduced regressions before completion.
+description: Audit explicit skill/user-rule compliance requests or repair a known violation; reuse existing code-audit evidence.
 ---
 
 # Rule audit
 
-Audit code work during implementation through the [source-style cycle](../work-execution/references/source-style-cycle.md): check the proposed change before applying it, the actual saved implementation unit before moving on, and the combined final result. Also use this skill for an explicit compliance request. Keep the audit proportional to the changed responsibility. Include required domain guidance omitted as the scope changed; auditing only the loaded list would miss a skipped prerequisite. Do not load the whole catalog, recursively audit this audit, or audit ordinary conversation. Stop/cancellation overrides inspection and repair.
+Use for an explicit compliance review or confirmed rule violation. Ordinary conversation, planning, handoff and a completed compliant code review do not trigger another audit merely because they used a skill. Stop/cancellation overrides inspection and repair.
 
-## Establish the applicable rules
+For SQL/PB/C# project code, use the single [source-style cycle](../work-execution/references/source-style-cycle.md). Review its applicable rules and evidence at the current stage; do not restart a completed cycle, recursively audit this skill or reload the catalog. Include domain guidance omitted as responsibilities changed.
 
-Compare latest user instructions, applicable skill requirements and actual sources under host instruction priority. Examples are not rules; later authorized exceptions do not excuse earlier unrequested changes. Keep relevant rule/source locations, preserved edits and process limits in working context. No extra checklist, profile, receipt or approval form is required.
+For other skill-guided work, compare the latest user requirements, applicable instructions and actual result. Distinguish verified, violated and unverified rules. Findings need a rule source, affected location, observed mismatch and correction. Examples, a source read, intention, test counts and prior claimed passes do not establish compliance. Retrieve missing/truncated evidence and preserve unrelated user work.
 
-## Compare rules with evidence
+Within authorized implementation, repair confirmed violations without another permission request. For review-only work, report without editing. Inspect the actual repair, re-audit its affected rules and check introduced regressions; reuse unaffected evidence. Do not invent inputs, weaken checks, replay external writes or expand scope to obtain a pass. Diagnose repeated failures; report unsupported or blocked evidence accurately.
 
-For code work, audit the required [source-style cycle](../work-execution/references/source-style-cycle.md): was an actual reference program identified and its complete relevant flow inspected before writing, and was final production code compared with it after all edits? Check coverage separately for each changed responsibility. A short excerpt, unrelated query/layout example, or extra setup in a test harness cannot establish a complete print/save/initialization comparison. Inspect missing source and repair affected work without erasing an earlier process violation.
-
-For a proposed change, inspect the actual baseline and the proposed body in context; approval of a draft verifies only that proposal. For a written change, inspect the saved artifacts/diff, relevant callers/initialization and execution results yourself. Trace every introduced or changed behavior to its actual need and owning path, including incidental additions outside the feature's main calculation. A source read, intention or checker's pass is not this audit. Retrieve omitted or truncated prerequisites and recheck the affected implementation. Whole-file imports/style corrections need inspection beyond unchanged-line suppression.
-
-Classify relevant rules as verified, violated or unverified; exclude inapplicable rules with a scope reason. Findings need a rule source, affected location, observed mismatch and correction. Missing evidence is neither a guessed violation nor a pass.
-
-Use the applied skill's existing checkers with actual baselines, control sources, active style policy and other required inputs. Read errors, warnings and `not_checked`; resolve warnings from requirements/source evidence. Check unsupported rules directly. Do not invent baselines, weaken rules or add exemptions to obtain a pass.
-
-## Repair only the violations, then re-audit
-
-During authorized implementation, correct findings without making the user repeat the request. For audit/review-only requests, report without editing.
-
-Repair the responsible path using the cited rule/source. Preserve compliant work and user edits outside its dependency path; avoid unrelated regeneration, reformatting or removal of needed behavior. Delegation/messaging still needs host/user authorization.
-
-Inspect each repair's diff and recheck affected properties, bindings, result order and other touched contracts. Edits invalidate affected evidence; retain verified unaffected work and repeat full tests only for a regression reason.
-
-Repeat while violations remain and supported repairs are available. Diagnose persistent findings before retrying unchanged instructions. Finish independent corrections and report unresolved evidence/permission limits without calling them compliant. Do not replay DB writes/deployment or expand external-write authorization just to recheck.
-
-## Final regression check
-
-Review the combined final diff against the pre-repair baseline and trace effects through relevant callers, helpers, initialization, bindings and data/result contracts. Check corrected and previously working related paths, including affected failure/cancellation paths. A clean rule check alone is not regression evidence.
-
-Reuse relevant tests/direct checks and broaden only for shared changes or unresolved risk. Preserve user edits, distinguish pre-existing defects and honor build/execution/write limits. Fix introduced regressions within scope, then repeat affected rule/regression checks. Later edits reopen affected checks. Complete only when findings and introduced regressions are resolved in the verified scope; unavailable runtime/DB/UI evidence remains unverified.
-
-## Handover
-
-Briefly report corrections, final regression checks and material unresolved/unverified scope. A build, exit code or self-rating alone is insufficient. An already performed process violation cannot be erased from the record; address its consequences and report accurately. This is an agent procedure, not a host-enforced completion hook.
+Briefly report the actual corrections, regression checks and material unresolved scope. An already performed process violation remains part of the record. This procedure guides the agent; the hooks' observed-reference and saved-file checks do not prove a semantic audit.

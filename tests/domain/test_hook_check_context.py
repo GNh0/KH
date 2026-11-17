@@ -11,6 +11,7 @@ from src.context.store import Store, session_key
 from src.runtime.check_context import SourceBaselines, companion, literal_project_sources
 from src.runtime.hooks import CYCLE, ROOT, handle, inspect, update_files
 from src.sql.checks import check_sql
+from hook_application_fixture import apply_files
 
 
 CONTROL = '''namespace Widgets {
@@ -81,6 +82,11 @@ class HookCheckContextTests(unittest.TestCase):
         body = '\n'.join((ROOT / 'skills' / path).read_text(encoding='utf-8-sig')
                          for path in (CYCLE, domain + '/SKILL.md'))
         self.event('PostToolUse', tool_name='exec_command', tool_response={'output': body})
+        if domain == 'sql-formatting':
+            apply_files(self.scope, 'codex', ['sql-select'], [self.project / 'Save.sql'])
+        else:
+            apply_files(self.scope, 'codex', ['csharp-code', 'csharp-designer'],
+                        [self.project / 'Screen.cs', self.project / 'Screen.Designer.cs'])
 
     def write_event(self, name, path):
         return self.event(name, tool_name='Write', tool_input={'file_path': str(path)})

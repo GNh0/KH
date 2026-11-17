@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review actual changes for correctness, source-contract regressions, and appropriate verification before reporting completion.
+description: Review a concrete code diff for correctness, contract regressions and verification; use rule-audit for explicit compliance reviews.
 ---
 
 # Code review
@@ -14,5 +14,3 @@ Choose the checks from the actual change and its target using [verification scop
 Keep review probes and temporary test output outside the target project; follow [workspace files](../work-execution/references/workspace-files.md) when generating them.
 
 Explain findings with the file, location, actual impact, and reproduction conditions. A passing build is not evidence of screen layout, database persistence, or actual agent execution. If completion includes applying the result, distinguish file creation from application and finish the authorized application. Clearly identify anything unverified.
-
-Before final handover, complete the shared [rule audit](../rule-audit/SKILL.md) for this task's applicable rules.
