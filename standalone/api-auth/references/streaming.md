@@ -3,7 +3,7 @@
 The `stream` command reuses a registered service and its origin/expiry/authentication checks. It connects only for the requested operation; loading a skill starts no connection, viewer, watcher or daemon. HTTP streams currently support SSE, NDJSON and incremental UTF-8 text. WebSockets, bidirectional protocols and arbitrary binary framing need their actual protocol adapter; do not claim this HTTP path covers them.
 
 ```powershell
-python -B <KH-root>/scripts/kh_api.py stream <service> --method POST --path /actual-stream-path --body-file <public-request.json> --protocol auto --mapping <display-mapping.json> --output-dir <absolute-task-artifacts>
+python -B <api-auth-root>/scripts/api_auth.py stream <service> --method POST --path /actual-stream-path --body-file <public-request.json> --protocol auto --mapping <display-mapping.json> --output-dir <absolute-task-artifacts>
 ```
 
 Set streaming in the request body as the provider actually requires. `--protocol auto` recognizes `text/event-stream`, `application/x-ndjson`, `application/ndjson` or `text/plain`. Choose a known explicit protocol for another documented media type. The command does not silently turn an ordinary JSON response into a stream.

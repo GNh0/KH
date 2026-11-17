@@ -48,6 +48,10 @@ class CheckResult:
     def to_dict(self) -> dict[str, Any]:
         review_keys = ('comparison_baselines', 'review_status', 'project_style_verified', 'designer_preservation')
         review = {key: self.metadata[key] for key in review_keys if key in self.metadata}
+        if any(item.severity == 'warning' for item in self.issues):
+            review['review_status'] = 'needs_review'
+        else:
+            review.setdefault('review_status', 'static_checks_only')
         other = {key: value for key, value in self.metadata.items() if key not in review_keys}
         return {"status": self.status, **review, "issues": [i.to_dict() for i in self.issues],
                 "checked": self.checked, "not_checked": self.not_checked, **other}

@@ -13,7 +13,7 @@ from src.api_auth.store import Store
 from src.api_auth.transport import StreamLimits, Transport
 from src.api_auth.input import clipboard_sequence, clear_owned_clipboard, read_credential
 from src.api_auth.streaming import strict_json
-from src.common.output import configure_utf8_streams
+from src.api_auth.output import configure_utf8_streams
 
 
 def handoff(store, service, args, action):

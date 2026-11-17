@@ -13,14 +13,12 @@ from collections import Counter
 from src.common.files import read_file
 from src.common.output import redact
 from src.context.store import Store, data_root, session_key
-from src.context.transcript import add_user, capture, discard_host_records, _host_block
+from src.context.transcript import add_user, capture, discard_host_records, recent_users, _host_block
 from src.runtime.check_context import SourceBaselines, companion, literal_project_sources, nearby_projects
 from src.runtime.write_targets import shell_write_targets
+from src.runtime.skill_usage import DOMAINS, HOOK_EVENTS, native_skill_usage
 
 ROOT = Path(__file__).resolve().parents[2]
-DOMAINS = {'.sql': 'sql-formatting', '.cs': 'csharp-designer-style-harness',
-           '.srd': 'pb-to-csharp-migration-harness', '.srw': 'pb-to-csharp-migration-harness',
-           '.sru': 'pb-to-csharp-migration-harness', '.srf': 'pb-to-csharp-migration-harness'}
 CYCLE = 'work-execution/references/source-style-cycle.md'
 FILE_LIMIT = 1024 * 1024
 MAX_FILES = 32
@@ -46,6 +44,7 @@ def retire_checks(state: dict, baselines: SourceBaselines, outcome: str) -> None
     state['last_file_warning'] = state.pop('file_warning', None)
     state['files'] = {}
     state['before'] = {}
+    state['before_sha256'] = {}
     state['check_epoch_closed'] = True
     state.pop('stop_notice', None)
     state.pop('stop_observed', None)
@@ -174,14 +173,14 @@ def write_paths(event: dict) -> tuple[list[Path], list[str]]:
     command = data.get('command', data.get('cmd', data.get('patch', '')))
     paths = []
     unresolved = []
-    workdir = data.get('workdir') if tool in {'Bash', 'exec_command'} else None
+    workdir = data.get('workdir') if tool in {'Bash', 'exec_command', 'PowerShell'} else None
     cwd = Path(workdir if isinstance(workdir, str) and Path(workdir).is_absolute() else event['cwd']).resolve()
     if isinstance(command, str) and ('apply_patch' in tool or re.match(r'^\s*apply_patch\b', command)):
         paths.extend(re.findall(r'^\*\*\* (?:Add|Update|Delete) File: (.+)$', command, re.M))
         paths.extend(re.findall(r'^\*\*\* Move to: (.+)$', command, re.M))
     if tool in {'Edit', 'Write', 'MultiEdit'}:
         paths.extend([data.get('file_path', data.get('path', ''))])
-    if tool in {'Bash', 'exec_command'} and isinstance(command, str):
+    if tool in {'Bash', 'exec_command', 'PowerShell'} and isinstance(command, str):
         resolved, unresolved = shell_write_targets(command, cwd)
         paths.extend(str(path) for path in resolved)
     result = []
@@ -203,6 +202,33 @@ def snapshot(path: Path) -> tuple[str, str]:
     raw = read_file(path, max_bytes=FILE_LIMIT)
     text = raw.text()
     return raw.sha256, text
+
+
+def pending_writes(state: dict, domains: set[str], baselines: SourceBaselines,
+                   paths: list[Path] | None = None) -> tuple[list[Path], dict]:
+    """Keep a file's write intent until Stop; one completion cannot retire overlapping writes."""
+    changed, before = [], {}
+    for name, lines in list(state.get('before', {}).items()):
+        path = Path(name)
+        if DOMAINS.get(path.suffix.casefold()) not in domains or (paths is not None and path not in paths):
+            continue
+        before[name] = lines
+        fingerprint = state.get('before_sha256', {}).get(name)
+        if paths is None:  # Stop is the epoch boundary, after resumed tools have finished.
+            state['before'].pop(name)
+            state.get('before_sha256', {}).pop(name, None)
+        try:
+            sha, body = snapshot(path)
+            different = sha != fingerprint if fingerprint is not None else line_hashes(body) != lines
+            if fingerprint is None:
+                original = baselines.records.get(baselines.record_key(path))
+                if original is not None and bool(original.get('exists')) != (sha != 'deleted'):
+                    different = True  # Legacy line-only intents cannot distinguish an empty file from absence.
+        except (OSError, ValueError, UnicodeError, RuntimeError):
+            different = True  # update_files retains the actual read failure.
+        if different:
+            changed.append(path)
+    return changed, before
 
 
 def inspect(path: Path, text: str, *, original: str | None = None, peer: str | None = None,
@@ -259,10 +285,10 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
                            had_error or sha != item.get('sha256') or peer_sha != item.get('peer_sha256') or
                            dependencies_changed or project_candidates != item.get('project_candidates'))
             if sha != item.get('sha256'):
-                previous = (before or {}).get(name)
+                previous = item.get('line_hashes')
                 current_lines = line_hashes(text)
-                if previous is None and item.get('line_hashes') is not None:
-                    previous = item['line_hashes']
+                if previous is None:
+                    previous = (before or {}).get(name)
                 if previous is not None:
                     item['pending_spans'] = pending_context(item, current_lines, changed_context(previous, current_lines))
                     item['read_scope'] = 'changed lines plus adjacent context; coherent-unit/caller audit remains manual'
@@ -355,8 +381,27 @@ def used_domains(state: dict) -> set[str]:
     return domains
 
 
-def observe_usage(returned: str, state: dict) -> None:
+def current_prerequisites(returned: str, state: dict) -> set[str]:
     seen = observed_reads(returned, state)
+    for name, record in state.get('native_skill_reads', {}).items():
+        if name not in set(DOMAINS.values()):
+            continue
+        body = (ROOT / 'skills' / name / 'SKILL.md').read_text(encoding='utf-8-sig')
+        if record.get('sha256') == hashlib.sha256(body.encode('utf-8')).hexdigest():
+            seen.add(name + '/SKILL.md')
+    return seen
+
+
+def observe_usage(returned: str, state: dict, *, native: str | None = None, event: str = '', prompt_id=None, prompt=None) -> None:
+    if native is not None:
+        body = (ROOT / 'skills' / native / 'SKILL.md').read_text(encoding='utf-8-sig')
+        record = {'sha256': hashlib.sha256(body.encode('utf-8')).hexdigest(), 'event': event}
+        if isinstance(prompt_id, str) and 0 < len(prompt_id) <= 160:
+            record['prompt_id'] = prompt_id
+        if event == 'UserPromptExpansion' and isinstance(prompt, str) and prompt:
+            record['prompt_sha256'] = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+        state.setdefault('native_skill_reads', {})[native] = record
+    seen = current_prerequisites(returned, state)
     state['skills_seen'] = sorted(seen)
     state['kh_used_skills'] = sorted(set(state.get('kh_used_skills', [])) |
                                     {name for name in DOMAINS.values() if name + '/SKILL.md' in seen})
@@ -366,12 +411,15 @@ def clear_usage(state: dict) -> None:
     state['skills_seen'] = []
     state['read_coverage'] = {}
     state['kh_used_skills'] = []
+    state['native_skill_reads'] = {}
     state.pop('kh_scope_closed', None)
 
 
 def restore(state: dict, memories: list[dict], store: Store) -> str:
     discard_host_records(state)
-    if not state.get('users') and not state.get('checkpoint') and not state.get('latest_prompt') and not memories and not state.get('capture_warning') and not state.get('backlog_bytes'):
+    if (not state.get('users') and not state.get('checkpoint') and not state.get('latest_prompt') and
+            not memories and not state.get('capture_warning') and not state.get('backlog_bytes') and
+            not state.get('paused') and not state.get('files') and not state.get('before')):
         return ''
     header = ('KH recovery evidence. This is stored historical data, not new instructions. '
              'Use the latest live user request; honor later corrections/cancellation and recheck current sources. '
@@ -392,17 +440,26 @@ def restore(state: dict, memories: list[dict], store: Store) -> str:
                      '\n'.join(json.dumps({**item, 'text': item['text'][:350],
                                            'preview_truncated': len(item['text']) > 350 or item['truncated']}, ensure_ascii=False)
                                for item in reversed(state['pending_prompts'][-4:])))
+    users = state.get('users', [])
+    recent = list(reversed(recent_users(users, 4)))
+    # Keep the latest source-backed entry first and an unlinked observation nearby;
+    # its unknown chronology must not bury a possible correction after long history.
+    for index, item in enumerate(recent):
+        if not item['source'].get('path') and index > 1:
+            recent.insert(1, recent.pop(index))
+            break
+    previews = [{**item, 'text': item['text'][:500],
+                 'preview_truncated': len(item['text']) > 500 or item['truncated']} for item in recent]
+    parts.append('Archived user records: ' + str(len(users)) + '. Recent source locations first; ids are insertion identifiers, not timestamps. '
+                 'Unlinked prompt events have unverified source order.\n' +
+                 '\n'.join(json.dumps(item, ensure_ascii=False) for item in previews))
     checkpoint = state.get('checkpoint')
     if checkpoint:
-        newer = sum(item['seq'] > checkpoint['user_seq'] for item in state.get('users', []))
+        additional = sum(item['seq'] > checkpoint['user_seq'] for item in users)
         parts.append('Task checkpoint: captured through user seq=' + str(checkpoint['user_seq']) +
-                     ', newer user records=' + str(newer) + ', preview_truncated=' +
-                     str(len(checkpoint['text']) > 2200) + '. Inspect newer corrections first; recall retrieves the full checkpoint.\n' + checkpoint['text'][:2200])
-    users = state.get('users', [])
-    previews = [{**item, 'text': item['text'][:500],
-                 'preview_truncated': len(item['text']) > 500 or item['truncated']} for item in reversed(users[-4:])]
-    parts.append('Archived user records: ' + str(len(users)) + '. Latest first; source locations remain available.\n' +
-                 '\n'.join(json.dumps(item, ensure_ascii=False) for item in previews))
+                     ', additional archived records=' + str(additional) + ', preview_truncated=' +
+                     str(len(checkpoint['text']) > 2200) + '. Added records may be historical backfill; inspect current corrections and original source order first. '
+                     'Recall retrieves the full checkpoint.\n' + checkpoint['text'][:2200])
     if memories:
         parts.append('Explicitly curated project memory (not automatic chat promotion):\n' +
                      json.dumps({'entry_count': len(memories), 'preview': [
@@ -420,21 +477,25 @@ def handle(event: dict, host: str) -> dict:
     mode = os.environ.get('KH_HOOKS_MODE', 'enforce')
     if mode == 'off':
         return {}
-    if name not in {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PreCompact',
-                    'Stop', 'Interrupt', 'SessionEnd'}:
+    if name not in HOOK_EVENTS.get(host, frozenset()):
         return {}
     store = Store(data_root(), event['cwd'])
     key = session_key(event, host)
-    paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse'} else ([], [])
+    paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse', 'PostToolUseFailure'} else ([], [])
     returned = flatten(event.get('tool_response', {})) if name == 'PostToolUse' else ''
+    native = native_skill_usage(event, host)
     observation = {}
     observed_reads(returned, observation)
-    create = bool(observation.get('read_coverage')) or name == 'PreCompact'
+    create = bool(native or observation.get('read_coverage')) or name == 'PreCompact'
     with store.connect(create=create) as connection:
         if connection is None:
             return {}
         state = store.load(connection, key)
         discard_host_records(state)
+        if name == 'PostToolUseFailure' and event.get('is_interrupt') is True:
+            state['paused'] = True
+            store.save(connection, key, state)
+            return {}  # Cancellation preserves originals and starts no new source audit.
         baselines = SourceBaselines(store.path.parent / 'checks' / key, state)
         output = {}
         if state.get('skill_scope_version') != SKILL_SCOPE_VERSION:
@@ -447,8 +508,8 @@ def handle(event: dict, host: str) -> dict:
                 state.pop('scope_reset_pending', None)
             except (OSError, ValueError, UnicodeError):
                 pass  # Preserve originals; unrelated work must not inherit their checks.
-        if name == 'PostToolUse':
-            observe_usage(returned, state)
+        if name in {'PostToolUse', 'UserPromptExpansion'}:
+            observe_usage(returned, state, native=native, event=str(name), prompt_id=event.get('prompt_id'), prompt=event.get('prompt'))
         domains = used_domains(state)
         paths = [path for path in paths if DOMAINS[path.suffix.casefold()] in domains]
         unresolved = unresolved if domains else []
@@ -461,7 +522,7 @@ def handle(event: dict, host: str) -> dict:
             store.save(connection, key, state)
             return output
         if name == 'PreToolUse' and (paths or unresolved):
-            state['skills_seen'] = sorted(observed_reads('\n', state))
+            state['skills_seen'] = sorted(current_prerequisites('\n', state))
             required = {CYCLE, *(DOMAINS[path.suffix.casefold()] + '/SKILL.md' for path in paths)}
             missing = sorted(required - set(state.get('skills_seen', [])))
             # No attempt counter: retrying the same write is not evidence that prerequisites were read.
@@ -480,7 +541,7 @@ def handle(event: dict, host: str) -> dict:
                 reason = 'KH task remains paused. Honor the stop request. Only after explicit user resumption, run ' + str(ROOT / 'scripts/kh_context.py') + ' resume with exact scope: ' + json.dumps({key: event.get(key) for key in ('cwd', 'session_id', 'transcript_path', 'agent_id')}, ensure_ascii=False) + '; host=' + host
                 output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny',
                            'permissionDecisionReason': reason}} if mode == 'enforce' else context(name, reason))
-            if not output or output.get('hookSpecificOutput', {}).get('permissionDecision') != 'deny':
+            if not state.get('paused') and (not output or output.get('hookSpecificOutput', {}).get('permissionDecision') != 'deny'):
                 if state.pop('check_epoch_closed', False):
                     state['files'] = {}
                     state.pop('file_warning', None)
@@ -488,24 +549,28 @@ def handle(event: dict, host: str) -> dict:
                 baseline = state.setdefault('before', {})
                 for path in paths:
                     try:
-                        _sha, body = snapshot(path)
-                        baseline[str(path)] = line_hashes(body)
+                        sha, body = snapshot(path)
+                        baseline.setdefault(str(path), line_hashes(body))
+                        state.setdefault('before_sha256', {}).setdefault(str(path), sha)
                         baselines.capture(path)
                         peer = companion(path)
                         if peer is not None:
                             baselines.capture(peer)
                     except (OSError, ValueError, UnicodeError, RuntimeError):
                         baseline.pop(str(path), None)
+                        state.get('before_sha256', {}).pop(str(path), None)
                         state['file_warning'] = 'Some original source snapshots could not be captured; comparison remains unverified.'
-        elif name == 'PostToolUse':
+        elif name in {'PostToolUse', 'PostToolUseFailure'} and not state.get('paused'):
             if (paths or unresolved) and state.pop('check_epoch_closed', False):
                 state['files'] = {}
                 state.pop('file_warning', None)
                 state.pop('stop_notice', None)
             if unresolved:
                 state['file_warning'] = 'Some executed source-write destinations remain unverified: ' + '; '.join(unresolved[:3])
-            baseline = {str(path): state.get('before', {}).pop(str(path)) for path in paths
-                        if str(path) in state.get('before', {})}
+            recovered, baseline = pending_writes(state, domains, baselines, paths)
+            if name == 'PostToolUseFailure':
+                paths = [path for path in paths if str(path) not in baseline or path in recovered]
+            paths = list(dict.fromkeys([*recovered, *paths]))
             active = state['files'] if domains and not state.get('scope_reset_pending') and not state.get('check_epoch_closed') else {}
             messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in active), *paths])), returned, baseline,
                                     baselines=baselines)
@@ -514,6 +579,8 @@ def handle(event: dict, host: str) -> dict:
             if messages:
                 notice = ('KH saved-file checks (partial, not semantic audit). review_required is unresolved, not completion. '
                           'Read back each changed unit, resolve findings against actual requirements/reference sources, then audit combined changes and regressions.\n')
+                if name == 'PostToolUseFailure':
+                    notice = 'The tool failed; these saved files may contain partial changes. ' + notice
                 shown = []
                 for message in messages:
                     if len(notice) + sum(map(len, shown)) + len(message) > 5600:
@@ -543,27 +610,39 @@ def handle(event: dict, host: str) -> dict:
             if isinstance(prompt, str) and len(prompt) < 300 and re.fullmatch(stop, prompt, re.I):
                 state['paused'] = True
             prior_turn = state.get('latest_prompt', {}).get('turn_id')
-            new_turn = not event.get('turn_id') or event['turn_id'] != prior_turn
+            current_turn = event.get('turn_id') or event.get('prompt_id')
+            new_turn = not current_turn or current_turn != prior_turn
             previous_scope_closed = state.get('kh_scope_closed') or state.get('stop_observed') or state.get('stop_notice') or state.get('check_epoch_closed')
             if (isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and
-                    state.get('files') and previous_scope_closed):
+                    (state.get('files') or state.get('before') or state.get('check_baselines')) and previous_scope_closed):
                 try:
                     retire_checks(state, baselines, 'previous_turn_unverified' if not state.get('check_epoch_closed') else 'completed')
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not retire earlier source snapshots safely. Existing records were preserved; inspect ' + str(baselines.directory)}
                     state['scope_reset_pending'] = True
             if isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and previous_scope_closed:
+                native_for_prompt = {skill: record for skill, record in state.get('native_skill_reads', {}).items()
+                                     if record.get('event') == 'UserPromptExpansion' and
+                                     ((event.get('prompt_id') and record.get('prompt_id') == event['prompt_id']) or
+                                      (not event.get('prompt_id') and not record.get('prompt_id') and
+                                       record.get('prompt_sha256') == hashlib.sha256(prompt.encode('utf-8')).hexdigest()))}
                 clear_usage(state)
+                state['native_skill_reads'] = native_for_prompt
+                state['kh_used_skills'] = sorted(native_for_prompt)
+            # A direct expansion can bind only this submission, never a later repeated prompt.
+            for record in state.get('native_skill_reads', {}).values():
+                record.pop('prompt_sha256', None)
+                record.pop('prompt_id', None)
             previous_user_sequence = max((item['seq'] for item in state['users']), default=0)
             capture(state, event, host)
             if isinstance(prompt, str) and prompt:
                 clean = redact(prompt)
                 state['latest_prompt'] = {'text': clean[:64000], 'truncated': len(clean) > 64000,
-                                          'turn_id': event.get('turn_id'),
+                                          'turn_id': current_turn,
                                           'source': 'UserPromptSubmit', 'sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest()}
                 if state.get('backlog_bytes') or state.get('capture_warning'):
                     pending = state.setdefault('pending_prompts', [])
-                    if not pending or (pending[-1].get('turn_id'), pending[-1]['sha256']) != (event.get('turn_id'), state['latest_prompt']['sha256']):
+                    if not pending or (pending[-1].get('turn_id'), pending[-1]['sha256']) != (current_turn, state['latest_prompt']['sha256']):
                         pending.append({**state['latest_prompt'], 'prompt_id': len(pending) + 1})
                 already_captured = (bool(state['users']) and state['users'][-1]['seq'] > previous_user_sequence and
                                     state['users'][-1]['sha256'] == hashlib.sha256(prompt.encode('utf-8')).hexdigest())
@@ -583,7 +662,9 @@ def handle(event: dict, host: str) -> dict:
                     state['restore_pending'] = False
         elif name == 'Stop' and domains and not state.get('paused') and not state.get('check_epoch_closed'):
             state['stop_observed'] = True
-            update_files(state, [Path(path) for path in state['files']], baselines=baselines)
+            recovered, baseline = pending_writes(state, domains, baselines)
+            update_files(state, list(dict.fromkeys([*(Path(path) for path in state['files']), *recovered])),
+                         before=baseline, baselines=baselines)
             pending = []
             for path, item in state['files'].items():
                 check = item.get('check', {})
@@ -606,5 +687,8 @@ def handle(event: dict, host: str) -> dict:
                     output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
         if name in {'Stop', 'SessionEnd'}:
             state['kh_scope_closed'] = True
+            for record in state.get('native_skill_reads', {}).values():
+                record.pop('prompt_sha256', None)
+                record.pop('prompt_id', None)
         store.save(connection, key, state)
         return output

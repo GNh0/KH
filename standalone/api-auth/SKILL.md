@@ -1,15 +1,15 @@
 ---
 name: api-auth
-description: Register or maintain external API credentials and run authenticated API requests or live HTTP streams through KH's shared secure tool. Use for API setup, expiry/authentication failures, streamed responses, progress and intermediate artifacts; not native Codex/Claude login or already-managed MCP/database connections.
+description: Register or maintain external API credentials and run authenticated API requests or live HTTP streams through its bundled secure tool. Use for API setup, expiry/authentication failures, streamed responses, progress and intermediate artifacts; not native Codex/Claude login or already-managed MCP/database connections.
 ---
 
 # Shared API authentication and streaming
 
-Use the [shared API tool](../../scripts/kh_api.py) for this user's external API credentials. First inspect `status` for the service; reuse its registration across chats and plugin updates. Read [usage and provider setup](references/usage.md) for the relevant operation. The current storage backend requires Windows and Python 3.11+.
+Use the [shared API tool](scripts/api_auth.py) for this user's external API credentials. First inspect `status` for the service; reuse its registration across chats and plugin updates. Read [usage and provider setup](references/usage.md) for the relevant operation. The current storage backend requires Windows and Python 3.11+.
 
 Identify the actual service/account, API endpoint and permissions from the task and current official documentation. Configure non-secret service metadata; do not guess a renewal endpoint or treat one key as universal authority. Keep workload keys separate from administrative credentials. A new service uses the same public lifecycle with a supported profile/adapter; unsupported programmatic issuance uses the approved official account/session flow where the host can hand off the credential safely.
 
-For a new service matching Bearer/header authentication, OAuth refresh or a documented JSON issuance API, create its non-secret profile from the official contract; routine onboarding does not require editing KH or publishing another plugin version. The `http-json` mode maps an issuance request and response fields without hardcoding a provider. Use a new code adapter only when the actual protocol exceeds those supported contracts.
+For a new service matching Bearer/header authentication, OAuth refresh or a documented JSON issuance API, create its non-secret profile from the official contract; routine onboarding does not require editing this skill or publishing a new version. The `http-json` mode maps an issuance request and response fields without hardcoding a provider. Use a new code adapter only when the actual protocol exceeds those supported contracts.
 
 A registration identifies a credential/account, not one model. Reuse it with `request --api-base` across the registered/configured origins; Google Cloud profiles also allow HTTPS Google API hosts. Check the selected API's enablement and actual credential restrictions instead of registering the same key for every model/API. Additional arbitrary domains require a reviewed authority configuration.
 
@@ -29,4 +29,4 @@ Inspect the actual result. Reconnection failure preserves the encrypted candidat
 
 An unfinished issuance also blocks fresh plans or older planned nonces for that service. Use `reconcile` only after actual provider inventory shows no credential was issued, or an issued orphan was identified and revoked within authorized scope. Supply a non-secret evidence reference; the command records that caller-supported outcome and does not independently establish it. Never clear ambiguity merely to retry.
 
-After a change, verify a real authorized request, applicable expiry and any approved revocation. Distinguish independent loopback/OS tests from a live provider/account test. Finish the shared [rule audit](../rule-audit/SKILL.md) and [runtime cleanup](../runtime-cleanup/SKILL.md) when those procedures apply.
+After a change, verify a real authorized request, applicable expiry and any approved revocation. Distinguish independent loopback/OS tests from a live provider/account test. Recheck the saved configuration and actual result against the approved scope. Release task-owned HTTP connections, stream handles and temporary files after completion, failure or cancellation; preserve shared host sessions.

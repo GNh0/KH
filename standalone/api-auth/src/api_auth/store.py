@@ -13,11 +13,11 @@ from src.api_auth.security import AuthError, UserCipher
 
 
 def data_directory() -> Path:
-    selected = os.environ.get('KH_API_DATA')
+    selected = os.environ.get('API_AUTH_DATA') or os.environ.get('KH_API_DATA')
     if selected:
         path = Path(selected).expanduser()
         if not path.is_absolute():
-            raise AuthError('invalid_storage', 'KH_API_DATA must be absolute.')
+            raise AuthError('invalid_storage', 'API_AUTH_DATA (or legacy KH_API_DATA) must be absolute.')
         return path
     home = os.environ.get('LOCALAPPDATA')
     if not home:

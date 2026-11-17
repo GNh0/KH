@@ -1,21 +1,21 @@
 # Shared API tool
 
-Run `python -B <absolute-KH-root>/scripts/kh_api.py <command>`. All KH skills use this one tool. Loading the skill starts no daemon, timer, MCP or connection. Commands connect only when their actual operation needs it. Credentials live under `%LOCALAPPDATA%/KH/api-auth-v1`, encrypted with Windows current-user DPAPI; plugin upgrades do not own that directory. `KH_API_DATA` selects an absolute isolated data directory for an explicitly scoped test. There is no plaintext or non-Windows fallback in this release.
+Run `python -B <absolute-api-auth-root>/scripts/api_auth.py <command>`. This standalone skill uses its bundled tool without KH. Loading the skill starts no daemon, timer, MCP or connection. Commands connect only when their actual operation needs it. Credentials live under `%LOCALAPPDATA%/KH/api-auth-v1`, encrypted with Windows current-user DPAPI; plugin upgrades do not own that directory. `API_AUTH_DATA` (or the legacy `KH_API_DATA`) selects an absolute isolated data directory for an explicitly scoped test. There is no plaintext or non-Windows fallback in this release.
 
 ## Registration and reuse
 
 For a normal user-owned OpenAI project key:
 
 ```powershell
-python -B <KH-root>/scripts/kh_api.py init openai --provider openai
-python -B <KH-root>/scripts/kh_api.py registration-plan openai --source-url https://platform.openai.com/api-keys --session-label <observed-host-session> --account-label <actual-account> --create-key-if-needed --clipboard-source
+python -B <api-auth-root>/scripts/api_auth.py init openai --provider openai
+python -B <api-auth-root>/scripts/api_auth.py registration-plan openai --source-url https://platform.openai.com/api-keys --session-label <observed-host-session> --account-label <actual-account> --create-key-if-needed --clipboard-source
 # Explain the displayed scope and obtain actual user approval in the conversation.
-python -B <KH-root>/scripts/kh_api.py authorize-registration --plan <registration-plan-id>
+python -B <api-auth-root>/scripts/api_auth.py authorize-registration --plan <registration-plan-id>
 # Use the approved official browser/session, handle login/MFA if necessary, then copy the key without exposing it to the model.
-python -B <KH-root>/scripts/kh_api.py clipboard-state
-python -B <KH-root>/scripts/kh_api.py register openai --approved-plan <registration-plan-id> --clipboard --clipboard-sequence <fresh-sequence>
-python -B <KH-root>/scripts/kh_api.py check openai
-python -B <KH-root>/scripts/kh_api.py request openai --path /models
+python -B <api-auth-root>/scripts/api_auth.py clipboard-state
+python -B <api-auth-root>/scripts/api_auth.py register openai --approved-plan <registration-plan-id> --clipboard --clipboard-sequence <fresh-sequence>
+python -B <api-auth-root>/scripts/api_auth.py check openai
+python -B <api-auth-root>/scripts/api_auth.py request openai --path /models
 ```
 
 Registration is conversational: identify the actual service/account and host-owned session, ask whether to register using it (including key creation only if needed and approved), then the agent performs the official account/authorization/key-management flow. The user intervenes only when login, MFA or service consent cannot be handled by the approved agent session. There is no separate key-entry window. The acquisition session remains managed by its host; this helper does not scrape global cookies or native Codex/Claude tokens. Session/account labels record the approved scope and are not independent identity attestation.
@@ -33,9 +33,9 @@ For a Google Cloud API key, specify the actual API's read-only check URL with `i
 ## Review and approve maintenance
 
 ```powershell
-python -B <KH-root>/scripts/kh_api.py plan openai --reason expiry_due
+python -B <api-auth-root>/scripts/api_auth.py plan openai --reason expiry_due
 # Show the returned plan and obtain actual explicit user approval.
-python -B <KH-root>/scripts/kh_api.py renew --approved-plan <returned-plan-id>
+python -B <api-auth-root>/scripts/api_auth.py renew --approved-plan <returned-plan-id>
 ```
 
 The initial plan expires after 15 minutes without approval. Its nonce binds service, credential revision, immutable registered profile and management revision. A completed plan cannot issue again. Approval attribution is supplied by the trusted caller/current conversation; the CLI cannot independently verify chat consent. Do not create an approval merely because a plan exists. The supplied consent applies to the displayed save/reconnect/revocation steps; further privilege or account changes are not implied.

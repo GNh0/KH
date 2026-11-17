@@ -1,7 +1,7 @@
 {
   "name": "kh-skills",
   "displayName": "KH Skills",
-  "version": "3.5.9",
+  "version": "3.5.10",
   "agents": [
     "./agents/kh-sql-worker.md",
     "./agents/kh-csharp-worker.md",

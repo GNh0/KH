@@ -20,7 +20,7 @@ Zero type errors and passing unit tests do not replace C# compilation, Designer 
 
 The `tests/domain` suite is in-repository regression coverage, not an independent evaluation of skill selection or agent behavior. Validate important assumptions against user requirements, source-based counterexamples and separate evaluators where available; see [scenario evaluation](../skills/kh-maintenance/references/scenario-evaluation.md).
 
-API authentication tests use an independent HTTP protocol fixture and actual Windows current-user DPAPI, including cold CLI reuse, revision/approval boundaries, refresh-token rotation and interrupted maintenance. They do not establish live OpenAI/Google account permissions or successful provider reissue. Live checks require conversational approval for the actual account/session, a secret-safe internal handoff and an authorized real request; never substitute native Codex/Claude login tokens. The runtime remains standard-library-only. Test fixtures and optional development dependencies belong outside the source tree and must be cleaned.
+The independent [API skill](../standalone/api-auth/README.md) has its own runtime and test suite. Run its tests and type checks from `standalone/api-auth`; the KH distribution test separately builds and executes its ZIP without the KH checkout. Its HTTP/DPAPI tests do not establish live provider/account permissions. Test fixtures and optional development dependencies belong outside the source tree and must be cleaned.
 
 ## GitHub publication
 

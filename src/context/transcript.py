@@ -45,6 +45,31 @@ def _sources(item: dict) -> list[dict]:
     return [item['source'], *item.get('source_aliases', [])]
 
 
+def recent_users(users: list[dict], limit: int) -> list[dict]:
+    """Stable ids identify records; offsets order records from the same selected log."""
+    if limit <= 0:
+        return []
+    ordered = sorted(users, key=lambda item: item['seq'])
+    groups: dict[str, list[int]] = {}
+    unlinked = []
+    for index, item in enumerate(ordered):
+        source = item['source']
+        if isinstance(source.get('path'), str) and isinstance(source.get('byte_offset'), int):
+            groups.setdefault(source['path'], []).append(index)
+        else:
+            unlinked.append(item)
+    for indices in groups.values():
+        chronological = sorted((ordered[index] for index in indices), key=lambda item: item['source']['byte_offset'])
+        for index, item in zip(indices, chronological):
+            ordered[index] = item
+    selected = ordered[-limit:]
+    # Unlinked prompt events have no comparable source time. Do not silently lose the
+    # newest observed one merely because older transcript records were backfilled.
+    if unlinked and unlinked[-1] not in selected:
+        selected = [unlinked[-1], *selected[-(limit - 1):]] if limit > 1 else [unlinked[-1]]
+    return selected
+
+
 def _coalesce_mirrors(users: list[dict], original_ids: set[int], path: str) -> list[dict]:
     ordered = sorted((item for item in users if item['source'].get('path') == path),
                      key=lambda item: item['source']['byte_offset'])
@@ -65,14 +90,15 @@ def _coalesce_mirrors(users: list[dict], original_ids: set[int], path: str) -> l
         else:
             result.append(item)
             previous = item
-    return [*result, *other]
+    return sorted([*result, *other], key=lambda item: item['seq'])
 
 
 def discard_host_records(state: dict) -> None:
     # Older adapters mistook native Stop continuations for real user requests.
     # Keep real archive ids stable and never reuse a removed host-record id.
     state['user_seq'] = max(state.get('user_seq', 0), max((item['seq'] for item in state.get('users', [])), default=0))
-    state['users'] = [item for item in state.get('users', []) if not _host_block(item['text'])]
+    state['users'] = sorted((item for item in state.get('users', []) if not _host_block(item['text'])),
+                            key=lambda item: item['seq'])
     if 'pending_prompts' in state:
         state['pending_prompts'] = [item for item in state['pending_prompts'] if not _host_block(item['text'])]
     if _host_block(state.get('latest_prompt', {}).get('text', '')):

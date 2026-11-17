@@ -11,6 +11,25 @@ from src.maintenance.session_report import inspect_sessions
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_package_rejects_claude_only_events_in_the_codex_registration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / '.codex-plugin').mkdir()
+            (root / '.codex-plugin/plugin.json').write_text(json.dumps({
+                'name': 'sample', 'hooks': './hooks/codex-hooks.json'}), encoding='utf-8')
+            (root / 'skills/sample').mkdir(parents=True)
+            (root / 'skills/sample/SKILL.md').write_text('---\nname: sample\ndescription: Sample\n---\nUse it.', encoding='utf-8')
+            (root / 'scripts').mkdir()
+            (root / 'scripts/kh_hook.py').write_text('', encoding='utf-8')
+            (root / 'hooks').mkdir()
+            config = {'hooks': {'PostToolUseFailure': [{'hooks': [{'type': 'command', 'command': 'python hook.py', 'timeout': 10}]}]}}
+            (root / 'hooks/codex-hooks.json').write_text(json.dumps(config), encoding='utf-8')
+            self.assertEqual({'hook_event_unsupported'}, {i.code for i in check_package(root).issues})
+            (root / 'hooks/codex-hooks.json').unlink()
+            (root / '.codex-plugin/plugin.json').write_text('{"name":"sample"}', encoding='utf-8')
+            (root / 'hooks/hooks.json').write_text(json.dumps(config), encoding='utf-8')
+            self.assertEqual([], check_package(root).issues)
+
     def test_ooxml_structure_does_not_claim_rendering(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'document.docx'
