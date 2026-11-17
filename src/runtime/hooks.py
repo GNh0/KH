@@ -16,7 +16,7 @@ from src.context.store import Store, data_root, session_key
 from src.context.transcript import add_user, capture, discard_host_records, recent_users, _host_block
 from src.runtime.check_context import SourceBaselines, companion, literal_project_sources, nearby_projects
 from src.runtime.write_targets import shell_write_targets
-from src.runtime.skill_usage import DOMAINS, HOOK_EVENTS, native_skill_usage
+from src.runtime.skill_usage import DOMAINS, HOOK_EVENTS, explicit_skill_requests, matching_prompt, native_skill_usage
 
 ROOT = Path(__file__).resolve().parents[2]
 CYCLE = 'work-execution/references/source-style-cycle.md'
@@ -395,16 +395,55 @@ def current_prerequisites(returned: str, state: dict) -> set[str]:
 def observe_usage(returned: str, state: dict, *, native: str | None = None, event: str = '', prompt_id=None, prompt=None) -> None:
     if native is not None:
         body = (ROOT / 'skills' / native / 'SKILL.md').read_text(encoding='utf-8-sig')
-        record = {'sha256': hashlib.sha256(body.encode('utf-8')).hexdigest(), 'event': event}
+        record: dict[str, object] = {'sha256': hashlib.sha256(body.encode('utf-8')).hexdigest(), 'event': event}
         if isinstance(prompt_id, str) and 0 < len(prompt_id) <= 160:
             record['prompt_id'] = prompt_id
         if event == 'UserPromptExpansion' and isinstance(prompt, str) and prompt:
             record['prompt_sha256'] = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+        if event == 'UserPromptExpansion':
+            prior = state.get('native_skill_reads', {}).get(native, {})
+            prior = prior.get('previous_native', {}) if pending_native(prior) else prior
+            if prior:
+                record['previous_native'] = settled_native(prior)
+            record['pending_submission'] = True
         state.setdefault('native_skill_reads', {})[native] = record
     seen = current_prerequisites(returned, state)
     state['skills_seen'] = sorted(seen)
     state['kh_used_skills'] = sorted(set(state.get('kh_used_skills', [])) |
                                     {name for name in DOMAINS.values() if name + '/SKILL.md' in seen})
+
+
+def pending_native(record: dict) -> bool:
+    return bool(record.get('pending_submission') or (record.get('event') == 'UserPromptExpansion' and
+                ('prompt_id' in record or 'prompt_sha256' in record)))
+
+
+def settled_native(record: dict) -> dict:
+    return {field: record[field] for field in ('sha256', 'event') if field in record}
+
+
+def bind_native_submission(state: dict, event: dict) -> dict:
+    """Validate even the cold first submission, preserving independently delivered evidence."""
+    reads = state.setdefault('native_skill_reads', {})
+    pending = {name: record for name, record in reads.items() if pending_native(record)}
+    matched = {}
+    for name, record in pending.items():
+        reads.pop(name)
+        if matching_prompt(record, event):
+            matched[name] = settled_native(record)
+            reads[name] = matched[name]
+        elif record.get('previous_native'):
+            reads[name] = record['previous_native']
+    state['kh_used_skills'] = sorted(set(state.get('kh_used_skills', [])) - pending.keys())
+    return matched
+
+
+def settle_native_usage(state: dict, action_domains: set[str] | None = None) -> None:
+    # Once the selected scope is used for a source action, a later steering/cancel
+    # prompt must not erase that action's audit just because no submit followed expansion.
+    state['native_skill_reads'] = {
+        name: settled_native(record) if action_domains is None or name in action_domains else record
+        for name, record in state.get('native_skill_reads', {}).items()}
 
 
 def clear_usage(state: dict) -> None:
@@ -484,9 +523,10 @@ def handle(event: dict, host: str) -> dict:
     paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse', 'PostToolUseFailure'} else ([], [])
     returned = flatten(event.get('tool_response', {})) if name == 'PostToolUse' else ''
     native = native_skill_usage(event, host)
+    explicit = explicit_skill_requests(event, host, plugin_root=ROOT)
     observation = {}
     observed_reads(returned, observation)
-    create = bool(native or observation.get('read_coverage')) or name == 'PreCompact'
+    create = bool(native or explicit or observation.get('read_coverage')) or name == 'PreCompact'
     with store.connect(create=create) as connection:
         if connection is None:
             return {}
@@ -542,6 +582,7 @@ def handle(event: dict, host: str) -> dict:
                 output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny',
                            'permissionDecisionReason': reason}} if mode == 'enforce' else context(name, reason))
             if not state.get('paused') and (not output or output.get('hookSpecificOutput', {}).get('permissionDecision') != 'deny'):
+                settle_native_usage(state, {DOMAINS[path.suffix.casefold()] for path in paths})
                 if state.pop('check_epoch_closed', False):
                     state['files'] = {}
                     state.pop('file_warning', None)
@@ -613,6 +654,7 @@ def handle(event: dict, host: str) -> dict:
             current_turn = event.get('turn_id') or event.get('prompt_id')
             new_turn = not current_turn or current_turn != prior_turn
             previous_scope_closed = state.get('kh_scope_closed') or state.get('stop_observed') or state.get('stop_notice') or state.get('check_epoch_closed')
+            matched = bind_native_submission(state, event) if isinstance(prompt, str) and prompt.strip() else {}
             if (isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and
                     (state.get('files') or state.get('before') or state.get('check_baselines')) and previous_scope_closed):
                 try:
@@ -621,18 +663,11 @@ def handle(event: dict, host: str) -> dict:
                     output = {'systemMessage': 'KH could not retire earlier source snapshots safely. Existing records were preserved; inspect ' + str(baselines.directory)}
                     state['scope_reset_pending'] = True
             if isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and previous_scope_closed:
-                native_for_prompt = {skill: record for skill, record in state.get('native_skill_reads', {}).items()
-                                     if record.get('event') == 'UserPromptExpansion' and
-                                     ((event.get('prompt_id') and record.get('prompt_id') == event['prompt_id']) or
-                                      (not event.get('prompt_id') and not record.get('prompt_id') and
-                                       record.get('prompt_sha256') == hashlib.sha256(prompt.encode('utf-8')).hexdigest()))}
                 clear_usage(state)
-                state['native_skill_reads'] = native_for_prompt
-                state['kh_used_skills'] = sorted(native_for_prompt)
-            # A direct expansion can bind only this submission, never a later repeated prompt.
-            for record in state.get('native_skill_reads', {}).values():
-                record.pop('prompt_sha256', None)
-                record.pop('prompt_id', None)
+                state['native_skill_reads'] = matched
+            observe_usage('\n', state)  # Re-evaluate accumulated body evidence after resolving pending delivery.
+            # This is selection intent, not evidence that the host delivered SKILL.md.
+            state['kh_used_skills'] = sorted(set(state.get('kh_used_skills', [])) | explicit)
             previous_user_sequence = max((item['seq'] for item in state['users']), default=0)
             capture(state, event, host)
             if isinstance(prompt, str) and prompt:
@@ -687,8 +722,6 @@ def handle(event: dict, host: str) -> dict:
                     output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
         if name in {'Stop', 'SessionEnd'}:
             state['kh_scope_closed'] = True
-            for record in state.get('native_skill_reads', {}).values():
-                record.pop('prompt_sha256', None)
-                record.pop('prompt_id', None)
+            settle_native_usage(state)
         store.save(connection, key, state)
         return output
