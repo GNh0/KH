@@ -138,19 +138,21 @@ def register(state: dict, *, epoch: str, targets: list[str], work: list[str], cw
         if path.name.casefold().endswith('.designer.cs'):
             relevant.add('csharp-designer')
         prior = binding(state, path)
-        merged = set(prior.get('work', [])) if prior else set()
+        merged = set(prior.get('declared_work', prior.get('work', []))) if prior else set()
         merged.update(relevant)
         key = path_key(path)
         if prior is not None:
             key = next(name for name, value in state['applications'].items() if value is prior)
-        prepared[key] = {'target': prior.get('target', str(path)) if prior else str(path), 'work': sorted(merged)}
+        prepared[key] = {**(prior or {}), 'target': prior.get('target', str(path)) if prior else str(path),
+                         'declared_work': sorted(merged), 'work': sorted(merged | set(prior.get('inferred_work', []) if prior else []))}
     if chosen - used:
         raise ValueError('Selected responsibility has no matching target: ' + ', '.join(sorted(chosen - used)))
     if len(set(state.get('applications', {})) | prepared.keys()) > 32:
         raise ValueError('Application scope exceeds 32 files; split the actual work scope.')
     state.setdefault('applications', {}).update(prepared)
     state['kh_used_skills'] = sorted(applications_domains(state))
-    return [{'target': item['target'], 'work': item['work'], 'required': sorted(required_paths(item, Path(item['target'])))}
+    return [{'target': item['target'], 'work': item['work'], 'declared_work': item['declared_work'],
+             'inferred_work': item.get('inferred_work', []), 'required': sorted(required_paths(item, Path(item['target'])))}
             for name, item in prepared.items()]
 
 
@@ -175,5 +177,6 @@ def application_hint(state: dict, event: dict, host: str, data_root: Path, root:
             str(root / 'scripts/kh_context.py') + ' with these exact scope arguments, then apply '
             '--work <artifact responsibility> --target <owned source file> (repeat flags as needed). '
             'Apply records intent only and returns the required references; retrieve missing bodies before writing. '
+            'For development other than SQL formatting alone, also select --reference <actual comparison source[#Lstart-Lend]> and retrieve that current source through Read/read_file or a supported explicit shell read. '
             'Use the skill routing for responsibilities; analysis/extraction alone needs no development apply. '
             'Scope arguments: ' + json.dumps(arguments, ensure_ascii=False))

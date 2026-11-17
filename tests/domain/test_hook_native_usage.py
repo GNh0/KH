@@ -344,7 +344,8 @@ class NativeHookTests(unittest.TestCase):
         self.event('PostToolUse', **edit)
         self.event('PostToolUse', tool_name='Read', tool_response=before)
         self.assertEqual({}, self.event('Stop'))
-        self.assertEqual('completed', self.state()['last_file_checks_outcome'])
+        self.assertEqual('checks_complete', self.state()['last_file_checks_outcome'])
+        self.assertFalse(self.state()['semantic_audit_verified'])
         self.assertFalse((self.store.path.parent / 'checks' / self.key).exists())
 
     def test_unchanged_cancel_resume_creates_no_saved_file_audit(self):

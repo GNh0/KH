@@ -5,6 +5,7 @@ from src.context.store import Store, data_root, session_key
 from src.runtime.guidance import document
 from src.runtime.hooks import ROOT, handle
 from src.runtime.workflows import register
+from src.runtime.source_evidence import select_references
 
 
 def apply_files(scope, host, work, targets, *, deliver=True):
@@ -16,7 +17,19 @@ def apply_files(scope, host, work, targets, *, deliver=True):
         state = store.load(connection, key)
         applied = register(state, epoch=state['application_epoch'], work=work,
                            targets=[str(path) for path in targets], cwd=scope['cwd'])
+        reference_directory = Path(scope['cwd']) / '.comparison-fixture'
+        reference_directory.mkdir(exist_ok=True)
+        refs = []
+        for suffix in {Path(path).suffix.casefold() for path in targets}:
+            reference = reference_directory / ('Reference' + suffix)
+            body = 'class Reference { public int Read() { return 1; } }\n' if suffix == '.cs' else 'SELECT A.VALUE FROM REFERENCE_ROWS A;\n' if suffix == '.sql' else 'global type reference from window\nend type\n'
+            reference.write_text(body, encoding='utf-8')
+            refs.append(str(reference))
+        select_references(state, applied, refs, scope['cwd'])
         store.save(connection, key, state)
+    for reference in refs:
+        handle({**scope, 'hook_event_name': 'PostToolUse', 'tool_name': 'Read',
+                'tool_input': {'file_path': reference}, 'tool_response': Path(reference).read_text(encoding='utf-8')}, host)
     if deliver:
         for relative in sorted({relative for item in applied for relative in item['required']}):
             path, body, _start, _end = document(ROOT, relative)
