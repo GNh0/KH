@@ -76,6 +76,132 @@ class NativeHookTests(unittest.TestCase):
             self.event('PostToolUse', tool_name='Skill', tool_input={'skill': skill}, tool_response=response)
             self.assertFalse(self.store.path.exists())
 
+    def test_first_submit_rejects_unrelated_expansion_without_prior_stop(self):
+        for label, expansion_id, submitted_id, submitted in [
+                ('different_ids', 'a', 'b', '/kh-skills:sql-formatting'),
+                ('missing_submit_id', 'a', None, '/kh-skills:sql-formatting'),
+                ('missing_expansion_id', None, 'b', '/kh-skills:sql-formatting'),
+                ('different_text', None, None, 'unrelated request')]:
+            with self.subTest(label=label):
+                self.scope['session_id'] = label
+                self.key = session_key(self.scope, 'claude')
+                self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
+                           expansion_type='slash_command', prompt='/kh-skills:sql-formatting', prompt_id=expansion_id)
+                self.event('UserPromptSubmit', prompt=submitted, prompt_id=submitted_id)
+                self.assertEqual([], self.state()['kh_used_skills'])
+                self.assertEqual({}, self.event('PreToolUse', tool_name='Write',
+                                                tool_input={'file_path': str(self.project / 'Other.sql')}))
+                self.assertEqual({}, self.state().get('before', {}))
+
+    def test_first_submit_accepts_matching_id_or_exact_no_id_prompt(self):
+        for prompt_id in ('same-id', None):
+            with self.subTest(prompt_id=prompt_id):
+                self.scope['session_id'] = 'matching-' + str(prompt_id)
+                self.key = session_key(self.scope, 'claude')
+                prompt = '/kh-skills:sql-formatting task'
+                self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
+                           expansion_type='slash_command', prompt=prompt, prompt_id=prompt_id)
+                self.event('UserPromptSubmit', prompt=prompt, prompt_id=prompt_id)
+                self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+                result = self.event('PreToolUse', tool_name='Write',
+                                    tool_input={'file_path': str(self.project / 'Save.sql')})
+                self.assertEqual('deny', result['hookSpecificOutput']['permissionDecision'])
+                self.assertNotIn('sql-formatting/SKILL.md', result['hookSpecificOutput']['permissionDecisionReason'].replace('\\', '/'))
+
+    def test_mismatched_expansion_preserves_independent_skill_or_body_delivery(self):
+        for delivery in ('native', 'body'):
+            with self.subTest(delivery=delivery):
+                self.scope['session_id'] = 'prior-' + delivery
+                self.key = session_key(self.scope, 'claude')
+                if delivery == 'native':
+                    self.event('PostToolUse', tool_name='Skill', tool_input={'skill': 'kh-skills:sql-formatting'})
+                else:
+                    self.event('PostToolUse', tool_name='Read', tool_response=(ROOT / 'skills/sql-formatting/SKILL.md').read_text(encoding='utf-8'))
+                self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
+                           expansion_type='slash_command', prompt_id='a')
+                self.event('UserPromptSubmit', prompt='steering', prompt_id='b')
+                self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+
+    def test_repeated_pending_expansion_does_not_turn_old_pending_into_delivery(self):
+        for prompt_id in ('a', 'b', 'c'):
+            self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
+                       expansion_type='slash_command', prompt_id=prompt_id)
+        self.event('UserPromptSubmit', prompt='unrelated', prompt_id='different')
+        self.assertEqual([], self.state()['kh_used_skills'])
+        self.assertEqual({}, self.state()['native_skill_reads'])
+
+    def check_unmatched_output_domain(self, pending):
+        self.event('PostToolUse', tool_name='Skill', tool_input={'skill': 'kh-skills:sql-formatting'})
+        self.cycle()
+        self.event('UserPromptSubmit', prompt='SQL-only task', prompt_id='sql')
+        self.event('UserPromptExpansion', command_name='kh-skills:' + pending,
+                   command_source='plugin', expansion_type='slash_command', prompt_id='pending-csharp')
+        sql = self.project / 'Save.sql'
+        sql.write_text('SELECT A.QTY FROM INPUT_ROWS A;', encoding='utf-8')
+        edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(sql)}}
+        self.assertEqual({}, self.event('PreToolUse', **edit))
+        self.event('PostToolUse', **edit, tool_response=sql.read_text(encoding='utf-8'))
+        self.assertTrue(self.state()['native_skill_reads'][pending]['pending_submission'])
+        self.event('UserPromptSubmit', prompt='SQL-only correction', prompt_id='different')
+        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        cs = self.project / 'Ordinary.cs'
+        cs_edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(cs)}}
+        self.assertEqual({}, self.event('PreToolUse', **cs_edit))
+        cs.write_text('class Ordinary { }', encoding='utf-8')
+        self.assertEqual({}, self.event('PostToolUse', **cs_edit))
+        self.assertNotIn(str(cs), self.state().get('before', {}))
+        self.assertNotIn(str(cs), self.state()['files'])
+
+    def test_sql_action_does_not_settle_an_unmatched_csharp_expansion(self):
+        self.check_unmatched_output_domain('csharp-designer-style-harness')
+
+    def test_sql_action_does_not_settle_an_unmatched_pb_expansion(self):
+        self.check_unmatched_output_domain('pb-to-csharp-migration-harness')
+
+    def test_pb_sql_output_keeps_its_needed_audit_after_cancel(self):
+        self.event('UserPromptExpansion', command_name='kh-skills:pb-to-csharp-migration-harness',
+                   command_source='plugin', expansion_type='slash_command', prompt_id='pending-pb')
+        self.event('PostToolUse', tool_name='Read', tool_response=(ROOT / 'skills/sql-formatting/SKILL.md').read_text(encoding='utf-8'))
+        self.cycle()
+        sql = self.project / 'Output.sql'
+        before = 'SELECT A.QTY FROM INPUT_ROWS A;'
+        sql.write_text(before, encoding='utf-8')
+        edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(sql)}}
+        self.assertEqual({}, self.event('PreToolUse', **edit))
+        sql.write_text(before.replace('A.QTY', 'ISNULL(A.QTY, 0)'), encoding='utf-8')
+        self.event('UserPromptSubmit', prompt='stop', prompt_id='different')
+        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        self.assertEqual({}, self.event('Stop'))
+        self.resume()
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertEqual(before, SourceBaselines(self.store.path.parent / 'checks' / self.key, self.state()).original(sql))
+
+    def test_denied_action_does_not_settle_an_unmatched_expansion(self):
+        self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting',
+                   command_source='plugin', expansion_type='slash_command', prompt_id='pending')
+        edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(self.project / 'Save.sql')}}
+        self.assertEqual('deny', self.event('PreToolUse', **edit)['hookSpecificOutput']['permissionDecision'])
+        self.assertTrue(self.state()['native_skill_reads']['sql-formatting']['pending_submission'])
+        self.event('UserPromptSubmit', prompt='unrelated task', prompt_id='different')
+        self.assertEqual([], self.state()['kh_used_skills'])
+        self.assertEqual({}, self.event('PreToolUse', **edit))
+
+    def test_used_expansion_keeps_its_audit_after_cancel_and_resume(self):
+        sql = self.project / 'Save.sql'
+        before = 'SELECT A.QTY FROM INPUT_ROWS A;'
+        sql.write_text(before, encoding='utf-8')
+        edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(sql)}}
+        self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting', command_source='plugin',
+                   expansion_type='slash_command', prompt_id='a')
+        self.cycle()
+        self.assertEqual({}, self.event('PreToolUse', **edit))
+        sql.write_text(before.replace('A.QTY', 'ISNULL(A.QTY, 0)'), encoding='utf-8')
+        self.event('UserPromptSubmit', prompt='stop', prompt_id='b')
+        self.assertEqual({}, self.event('Stop'))
+        self.resume()
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertEqual(before, SourceBaselines(self.store.path.parent / 'checks' / self.key, self.state()).original(sql))
+
     def test_expansion_before_submit_is_bound_to_its_prompt_not_the_previous_task(self):
         self.event('UserPromptSubmit', prompt='previous', prompt_id='previous')
         self.event('PostToolUse', tool_name='Skill', tool_input={'skill': 'kh-skills:sql-formatting'})
