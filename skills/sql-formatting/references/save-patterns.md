@@ -53,6 +53,75 @@ WHERE A.CHANGE_STATE = 'NEW'
 
 Do not use the XML row index as a persisted key merely because it is available. If the target generates new keys, follow its actual numbering scope, deterministic ordering and concurrency contract. A necessary numbering variable or staging UPDATE recording the generated key remains valid.
 
+## Operation ownership
+
+Compare the complete owning flow, not just whether each individual IF looks valid. This scattered layout is a review failure when the phases belong to the same operation and no real dependency needs their separation:
+
+```text
+IF CREATE: prepare operation values
+IF CREATE: validate that operation
+IF CREATE: write its header
+IF CREATE: write its details
+IF CREATE: return its result
+```
+
+Calling the blocks preparation, validation or postprocessing does not establish a separate responsibility. Follow the approved procedure's dispatch structure and keep those operation-owned steps together. A working result or five individually valid conditions does not establish style compliance. Inspect all occurrences and the full execution order before applying the draft; recheck the complete saved procedure afterward.
+
+The following fictional shape assumes parsed input rows and an owning transaction/error boundary. Only in this example, CREATE rejects an existing document and records one generated timestamp in both the new header and its creation event. RENAME changes the caption. Both return the same persisted result. These fictional conditions, tables, action strings and types do not authorize adding validation or an event table to a real target.
+
+```sql
+DECLARE @EVENT_TIME DATETIME
+
+IF @ACTION = 'CREATE'
+BEGIN
+    IF EXISTS (
+               SELECT 1
+               FROM DOCUMENTS A
+                       INNER JOIN @TMP_DOCUMENT B
+                               ON A.DOCUMENT_NO = B.DOCUMENT_NO
+               WHERE A.COMPANY_ID = @COMPANY_ID
+              )
+    BEGIN
+        RAISERROR('The document already exists.', 16, 1);
+        RETURN;
+    END
+
+    SET @EVENT_TIME = GETDATE()
+
+    INSERT INTO DOCUMENTS
+    (
+           COMPANY_ID  , DOCUMENT_NO   , CAPTION   , CREATED_AT  , CREATED_BY
+    )
+    SELECT @COMPANY_ID , A.DOCUMENT_NO , A.CAPTION , @EVENT_TIME , @USER_ID
+    FROM @TMP_DOCUMENT A
+
+    INSERT INTO DOCUMENT_EVENTS
+    (
+           COMPANY_ID  , DOCUMENT_NO   , EVENT_TYPE , EVENT_AT    , CREATED_BY
+    )
+    SELECT @COMPANY_ID , A.DOCUMENT_NO , 'CREATED'  , @EVENT_TIME , @USER_ID
+    FROM @TMP_DOCUMENT A
+END
+ELSE IF @ACTION = 'RENAME'
+BEGIN
+    UPDATE A
+    SET A.CAPTION = B.CAPTION
+    FROM DOCUMENTS A
+            INNER JOIN @TMP_DOCUMENT B
+                    ON A.DOCUMENT_NO = B.DOCUMENT_NO
+    WHERE A.COMPANY_ID = @COMPANY_ID
+END
+
+SELECT A.DOCUMENT_NO
+     , A.CAPTION
+FROM DOCUMENTS A
+        INNER JOIN @TMP_DOCUMENT B
+                ON A.DOCUMENT_NO = B.DOCUMENT_NO
+WHERE A.COMPANY_ID = @COMPANY_ID
+```
+
+The final SELECT is genuinely shared here, so it remains outside the dispatch without another action guard. Shared XML preparation, required validation, cleanup and transaction/error ownership may likewise remain separate when the actual caller/data dependencies establish that need. Do not merge every IF, forbid IF EXISTS, count IF statements as violations or move necessary work merely to imitate this shape. In a real SAVE, keep its own parameters, preparation, validation, related writes and ordered outputs aligned with the complete approved comparison source; fictional actions and fields do not authorize adding behavior.
+
 ## MOD and DEL
 
 Do not normalize the input table or introduce a scalar-field copying phase merely to prepare these writes. Use parsed row values directly in their owning UPDATE/DELETE.

@@ -29,6 +29,7 @@ def main(argv=None):
     apply = sub.add_parser('apply', help='apply KH development guidance to owned files; inspection alone does not apply it')
     apply.add_argument('--work', choices=sorted(WORK), action='append', required=True)
     apply.add_argument('--target', action='append', required=True)
+    apply.add_argument('--reference', action='append', default=[], help='actual comparison source, optionally #Lstart-Lend; selection does not establish a read or approval')
     get = sub.add_parser('get', help='retrieve one archived user record without preview shortening')
     get.add_argument('seq', type=int)
     memory_get = sub.add_parser('memory-get')
@@ -68,6 +69,8 @@ def main(argv=None):
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0)}
             elif args.command == 'apply':
                 applied = register(state, epoch=args.epoch, targets=args.target, work=args.work, cwd=args.cwd)
+                from src.runtime.source_evidence import select_references, reference_problem
+                select_references(state, applied, args.reference, args.cwd)
                 from src.runtime.check_context import SourceBaselines, companion
                 from src.runtime.hooks import line_hashes, snapshot, current_prerequisites
                 from src.runtime.guidance import document
@@ -110,6 +113,9 @@ def main(argv=None):
                         file, _body, start, end = document(Path(__file__).resolve().parents[1], relative)
                         locations[relative] = {'file': str(file), 'line_start': start, 'line_end': end}
                     item['read_locations'] = locations
+                    item['comparison_sources'] = [{key: ref.get(key) for key in ('path', 'start', 'end', 'work', 'read_sha256')}
+                        for ref in (next(value for value in state['applications'].values() if value['target'] == item['target'])).get('references', [])]
+                    item['comparison_evidence_missing'] = reference_problem(state, Path(item['target']))
                 store.save(connection, key, state)
                 output = {'status': 'error' if state.get('application_errors') else 'applied',
                           'session_key': key, 'storage': str(store.path), 'files': applied,
@@ -149,13 +155,22 @@ def main(argv=None):
             else:
                 from src.runtime.hooks import current_prerequisites
                 from src.runtime.workflows import required_paths
+                from src.runtime.source_evidence import reference_problem
                 available = current_prerequisites('\n', state)
                 output = {'checkpoint': state.get('checkpoint'),
+                          'completion_status': state.get('completion_status', 'no_current_completion_claim'),
+                          'semantic_audit_verified': False,
+                          'audit_note': 'Static checks and observed reference/readback evidence do not establish semantic necessity, source approval, full comparison or regression audit.',
                           'requested_skills': state.get('requested_skills', []),
                           'available_prerequisites': sorted(available),
                           'application_original_errors': state.get('application_errors', {}),
                           'applied_files': {item.get('target', path): {'work': item.get('work', []),
-                              'missing_references': sorted(required_paths(item, Path(item.get('target', path))) - available)}
+                              'declared_work': item.get('declared_work', item.get('work', [])),
+                              'inferred_work': item.get('inferred_work', []),
+                              'missing_references': sorted(required_paths(item, Path(item.get('target', path))) - available),
+                              'comparison_evidence_missing': reference_problem(state, Path(item.get('target', path))),
+                              'comparison_sources': [{key: ref.get(key) for key in ('path', 'start', 'end', 'work', 'source_sha256', 'read_sha256')}
+                                  for ref in item.get('references', [])]}
                               for path, item in state.get('applications', {}).items()},
                           'latest_observed_prompt': previews([state['latest_prompt']])[0] if state.get('latest_prompt') else None,
                           'pending_prompts': previews(state.get('pending_prompts', [])[-10:]),
@@ -172,7 +187,7 @@ def main(argv=None):
                           'backlog_bytes': state.get('backlog_bytes', 0)}
             print(json.dumps(output, ensure_ascii=False, indent=2))
         return 1 if output.get('status') == 'error' else 0
-    except (OSError, ValueError, sqlite3.Error) as exc:
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         print(json.dumps({'status': 'error', 'message': redact(str(exc))}, ensure_ascii=False))
         return 1
 

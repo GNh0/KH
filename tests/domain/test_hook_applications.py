@@ -58,13 +58,25 @@ class ApplicationTests(unittest.TestCase):
             args.extend(['--work', kind])
         for path in targets:
             args.extend(['--target', str(path)])
+        references = []
+        for suffix in {path.suffix for path in targets}:
+            reference = self.project / ('Reference' + suffix)
+            reference.write_text('class Reference { public int Read() { return 1; } }\n' if suffix == '.cs' else 'SELECT A.VALUE FROM REFERENCE_ROWS A;\n' if suffix == '.sql' else 'global type reference from window\nend type\n', encoding='utf-8')
+            args.extend(['--reference', str(reference)])
+            references.append(reference)
         status, result = self.command(args, epoch=self.state()['application_epoch'])
         self.assertEqual(0, status, result)
         self.assertEqual('applied', result['status'])
+        for reference in references:
+            self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(reference)}, tool_response=reference.read_text(encoding='utf-8'))
         return result
 
     def write(self, path):
         return self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(path)})
+
+    def assert_unchecked(self, response):
+        self.assertNotIn('permissionDecision', response.get('hookSpecificOutput', {}))
+        self.assertTrue(not response or 'outside registered KH coverage' in response['hookSpecificOutput']['additionalContext'])
 
     def load_required(self, result, *, omit=()):
         for relative in sorted({p for item in result['files'] for p in item['required']}):
@@ -79,7 +91,7 @@ class ApplicationTests(unittest.TestCase):
         with patch('src.runtime.hooks.snapshot') as snapshot, patch('src.runtime.hooks.inspect') as inspect:
             for suffix in ('.sql', '.cs', '.srw'):
                 path = self.project / ('Unrelated' + suffix)
-                self.assertEqual({}, self.write(path))
+                self.assert_unchecked(self.write(path))
                 path.write_text('unrelated text', encoding='utf-8')
                 self.assertEqual({}, self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(path)}))
             self.assertEqual({}, self.event('Stop'))
@@ -108,7 +120,7 @@ class ApplicationTests(unittest.TestCase):
             self.assertIn(str(ROOT / 'skills' / relative), denied['permissionDecisionReason'])
             self.read(relative)
         self.assertEqual({}, self.write(target))
-        self.assertEqual({}, self.write(self.project / 'Unregistered.Designer.cs'))
+        self.assert_unchecked(self.write(self.project / 'Unregistered.Designer.cs'))
 
     def test_select_contracts_are_required_without_unrelated_save_examples(self):
         self.read('sql-formatting/SKILL.md')
@@ -201,7 +213,7 @@ class ApplicationTests(unittest.TestCase):
         self.event('PostToolUse', tool_name='Skill', tool_input={'skill': 'kh-skills:sql-formatting'}, tool_response={})
         self.assertEqual([], self.state()['kh_used_skills'])
         target = self.project / 'Save.sql'
-        self.assertEqual({}, self.write(target))
+        self.assert_unchecked(self.write(target))
         result = self.apply(['sql-save'], [target])
         self.assertNotIn('sql-formatting/SKILL.md', result['files'][0]['missing'])
         self.assertIn(str(ROOT / 'skills/sql-formatting/references/save-patterns.md'),
@@ -377,3 +389,113 @@ class ApplicationTests(unittest.TestCase):
         self.assertIn('sql-select/sql-save', denied['hookSpecificOutput']['permissionDecisionReason'])
         self.load_required(self.apply(['sql-select'], [target]))
         self.assertEqual({}, self.event('PreToolUse', tool_name='apply_patch', tool_input={'command': patch}))
+
+    def test_declared_method_scope_expands_for_actual_control_change(self):
+        self.read('csharp-designer-style-harness/SKILL.md')
+        target = self.project / 'Screen.cs'
+        target.write_text('class Screen { void Run() { } }', encoding='utf-8')
+        self.load_required(self.apply(['csharp-code'], [target]))
+        content = 'class Screen { void Run() { var edit = new DevExpress.XtraEditors.TextEdit(); edit.Enabled = false; } }'
+        decision = self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(target), 'content': content})
+        self.assertEqual('deny', decision['hookSpecificOutput']['permissionDecision'])
+        self.assertIn('user-controls.md', decision['hookSpecificOutput']['permissionDecisionReason'])
+        self.assertIn('csharp-control', next(iter(self.state()['applications'].values()))['work'])
+        self.load_required(self.apply(['csharp-control'], [target]))
+        self.assertEqual({}, self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(target), 'content': content}))
+
+    def test_no_comparison_cannot_become_a_completed_audit(self):
+        self.read('csharp-designer-style-harness/SKILL.md')
+        target = self.project / 'Calculation.cs'
+        target.write_text('class Calculation { int Read() { return 1; } }', encoding='utf-8')
+        code, result = self.command(['apply', '--work', 'csharp-code', '--target', str(target)], epoch=self.state()['application_epoch'])
+        self.assertEqual(0, code)
+        self.load_required(result)
+        self.assertIn('Comparison-source', self.write(target)['hookSpecificOutput']['permissionDecisionReason'])
+        content = 'class Calculation { int Read() { return 2; } }'
+        target.write_text(content, encoding='utf-8')
+        self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(target)}, tool_response=content)
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertEqual('requires_repair_or_evidence', self.state()['completion_status'])
+        self.assertFalse(self.state()['semantic_audit_verified'])
+        self.load_required(self.apply(['csharp-code'], [target]))
+        self.assertEqual({}, self.event('Stop'))
+        self.assertEqual('checks_complete', self.state()['last_file_checks_outcome'])
+        self.assertFalse(self.state()['semantic_audit_verified'])
+
+    def test_unregistered_coverage_notice_does_not_inspect_or_activate(self):
+        self.read('sql-formatting/SKILL.md')
+        target = self.project / 'Other.sql'
+        first = self.write(target)
+        self.assertIn('outside registered KH coverage', first['hookSpecificOutput']['additionalContext'])
+        self.assertEqual({}, self.write(target))
+        state = self.state()
+        self.assertFalse(state.get('applications'))
+        self.assertFalse(state.get('files'))
+        self.assertFalse(state.get('before'))
+        self.assertFalse(state.get('check_baselines'))
+
+    def test_new_edit_reopens_completion_status_after_clean_stop(self):
+        self.read('csharp-designer-style-harness/SKILL.md')
+        target = self.project / 'Calculation.cs'
+        target.write_text('class Calculation { int Read() { return 1; } }', encoding='utf-8')
+        self.load_required(self.apply(['csharp-code'], [target]))
+        first = 'class Calculation { int Read() { return 2; } }'
+        self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(target), 'content': first})
+        target.write_text(first, encoding='utf-8')
+        self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(target)}, tool_response=first)
+        self.assertEqual({}, self.event('Stop'))
+        self.assertEqual('checks_complete_audit_unverified', self.state()['completion_status'])
+        second = 'class Calculation { int Read() { if (flag) return 3; return 2; } }'
+        self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(target), 'content': second})
+        self.assertEqual('in_progress_audit_unverified', self.state()['completion_status'])
+        self.assertFalse(self.state().get('kh_scope_closed'))
+        target.write_text(second, encoding='utf-8')
+        self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(target)}, tool_response=second)
+        self.assertEqual('in_progress_audit_unverified', self.state()['completion_status'])
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertEqual('requires_repair_or_evidence', self.state()['completion_status'])
+
+    def test_reapply_preserves_observed_comparison_and_new_role_needs_explicit_selection(self):
+        self.read('csharp-designer-style-harness/SKILL.md')
+        target = self.project / 'Calculation.cs'
+        self.load_required(self.apply(['csharp-code'], [target]))
+        reference = next(iter(self.state()['applications'].values()))['references'][0]
+        read_sha = reference['read_sha256']
+        args = ['apply', '--work', 'csharp-code', '--target', str(target)]
+        code, result = self.command(args, epoch=self.state()['application_epoch'])
+        self.assertEqual(0, code, result)
+        self.assertEqual(read_sha, result['files'][0]['comparison_sources'][0]['read_sha256'])
+        self.assertFalse(result['files'][0]['comparison_evidence_missing'])
+        code, result = self.command(['apply', '--work', 'csharp-control', '--target', str(target)], epoch=self.state()['application_epoch'])
+        self.assertEqual(0, code, result)
+        self.assertIn('csharp-control', result['files'][0]['comparison_evidence_missing'])
+        code, result = self.command(args + ['--reference', reference['path']], epoch=self.state()['application_epoch'])
+        self.assertEqual(0, code, result)
+        self.assertEqual(read_sha, result['files'][0]['comparison_sources'][0]['read_sha256'])
+        self.assertFalse(result['files'][0]['comparison_evidence_missing'])
+
+    def test_retracted_unsaved_control_proposal_does_not_force_unrelated_references(self):
+        self.read('csharp-designer-style-harness/SKILL.md')
+        target = self.project / 'Calculation.cs'
+        initial = 'class Calculation { int Read() { return 1; } }'
+        target.write_text(initial, encoding='utf-8')
+        self.load_required(self.apply(['csharp-code'], [target]))
+        proposed = 'class Calculation { void Run() { var edit = new DevExpress.XtraEditors.TextEdit(); } }'
+        denied = self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(target), 'content': proposed})
+        self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
+        self.assertEqual(initial, target.read_text(encoding='utf-8'))
+        actual = initial.replace('return 1', 'return 2')
+        self.assertEqual({}, self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(target), 'content': actual}))
+        item = next(iter(self.state()['applications'].values()))
+        self.assertEqual(['csharp-code'], item['work'])
+        self.assertEqual([], item['inferred_work'])
+
+    def test_control_file_deletion_uses_existing_body_for_responsibilities(self):
+        self.read('csharp-designer-style-harness/SKILL.md')
+        target = self.project / 'Screen.cs'
+        target.write_text('class Screen { void Run() { var edit = new DevExpress.XtraEditors.TextEdit(); } }', encoding='utf-8')
+        self.load_required(self.apply(['csharp-code'], [target]))
+        patch = '*** Begin Patch\n*** Delete File: ' + str(target) + '\n*** End Patch'
+        result = self.event('PreToolUse', tool_name='apply_patch', tool_input={'command': patch})
+        self.assertEqual('deny', result['hookSpecificOutput']['permissionDecision'])
+        self.assertIn('user-controls.md', result['hookSpecificOutput']['permissionDecisionReason'])

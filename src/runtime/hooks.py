@@ -21,6 +21,7 @@ from src.runtime.workflows import (CYCLE, SCOPE_VERSION, application_hint, appli
                                    binding, guidance_paths, new_epoch, required_paths)
 from src.runtime.workflows import routing_problem
 from src.runtime.guidance import document, location
+from src.runtime.source_evidence import control_work, observe_references, reference_problem
 
 ROOT = Path(__file__).resolve().parents[2]
 FILE_LIMIT = 1024 * 1024
@@ -44,6 +45,8 @@ def retire_checks(state: dict, baselines: SourceBaselines, outcome: str) -> None
         path: {field: item[field] for field in ('sha256', 'readback', 'error', 'check', 'check_context', 'checker_generation') if field in item}
         for path, item in state.get('files', {}).items()}
     state['last_file_checks_outcome'] = outcome
+    state['semantic_audit_verified'] = False
+    state['completion_status'] = 'checks_complete_audit_unverified' if outcome == 'checks_complete' else outcome
     state['last_file_warning'] = state.pop('file_warning', None)
     state['files'] = {}
     state['before'] = {}
@@ -167,13 +170,16 @@ def file_paths(event: dict) -> list[Path]:
     return write_paths(event)[0]
 
 
-def proposed_source(event: dict, path: Path) -> str:
+def proposed_source(event: dict, path: Path, previous: bool = False) -> str:
     """Return typed candidate content only for this destination, never metadata."""
     tool = event.get('tool_name', '')
     data = event.get('tool_input', {})
     if tool in {'Write', 'Edit', 'MultiEdit'} and isinstance(data, dict):
+        if previous and tool == 'Write':
+            return snapshot(path)[1] if isinstance(data.get('content'), str) else ''
         edits = [data, *[item for item in data.get('edits', []) if isinstance(item, dict)]] if isinstance(data.get('edits', []), list) else [data]
-        return '\n'.join(item[field] for item in edits for field in ('content', 'new_string', 'new_text') if isinstance(item.get(field), str))
+        fields = ('old_string', 'old_text') if previous else ('content', 'new_string', 'new_text')
+        return '\n'.join(item[field] for item in edits for field in fields if isinstance(item.get(field), str))
     if 'apply_patch' not in tool:
         return ''
     patch = data if isinstance(data, str) else data.get('patch', data.get('command', data.get('input', ''))) if isinstance(data, dict) else ''
@@ -184,10 +190,25 @@ def proposed_source(event: dict, path: Path) -> str:
         names = re.findall(r'^\*\*\* (?:Add File: |Update File: |Delete File: |Move to: )(.+)$', block, re.M)
         destinations = [(Path(event['cwd']) / name.strip()).resolve() for name in names]
         if path in destinations:
-            if len(destinations) > 1 and path != destinations[0]:
+            if previous and block.startswith('*** Delete File: '):
+                selected.append(snapshot(destinations[0])[1])
+            if not previous and len(destinations) > 1 and path != destinations[0]:
                 selected.append(snapshot(destinations[0])[1])  # A move carries unchanged source lines too.
-            selected.extend(line[1:] for line in block.splitlines() if line.startswith('+') and not line.startswith('+++'))
+            prefix = '-' if previous else '+'
+            selected.extend(line[1:] for line in block.splitlines() if line.startswith(prefix) and not line.startswith(prefix * 3))
     return '\n'.join(selected)
+
+
+def infer_responsibilities(state: dict, path: Path, before: str, after: str, peer: str = '',
+                           saved_before: str | None = None, saved_after: str | None = None) -> None:
+    item = binding(state, path)
+    if item is not None and path.suffix.casefold() == '.cs':
+        inferred = control_work(before, after, peer)
+        if saved_before is not None and saved_after is not None:
+            inferred.update(control_work(saved_before, saved_after, peer))
+        declared = item.setdefault('declared_work', sorted(set(item['work']) - set(item.get('inferred_work', []))))
+        item['inferred_work'] = sorted(inferred)
+        item['work'] = sorted(set(declared) | inferred)
 
 
 def write_paths(event: dict) -> tuple[list[Path], list[str]]:
@@ -311,6 +332,8 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
             dependencies_changed = any(
                 snapshot(Path(dep['path']))[0] != dep['sha256'] for dep in item.get('check_dependencies', []))
             application = binding(state, path)
+            original = baselines.original(path) if baselines is not None else None
+            infer_responsibilities(state, path, original or '', text, peer_text)
             works = application.get('work', []) if application else []
             requirements = {relative: hashlib.sha256(document(ROOT, relative)[1].encode('utf-8')).hexdigest()
                             for relative in prerequisites_for(state, path)}
@@ -335,7 +358,8 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
                 item.update(sha256=sha, readback=None)
                 item['line_hashes'] = current_lines
             if needs_check:
-                original = baselines.original(path) if baselines is not None else None
+                state['completion_status'] = 'in_progress_audit_unverified'
+                state['semantic_audit_verified'] = False
                 original_peer = baselines.original(peer_path) if baselines is not None and peer_path is not None else None
                 controls, project = literal_project_sources(path, [text, peer_text]) if path.suffix.casefold() == '.cs' else ([], {})
                 item['check'] = inspect(path, text, original=original, peer=peer_text if peer_sha not in {'', 'deleted'} else None,
@@ -507,6 +531,8 @@ def clear_usage(state: dict) -> None:
     state.pop('legacy_pending_targets', None)
     state.pop('application_epoch', None)
     state.pop('application_hint', None)
+    state.pop('coverage_notices', None)
+    state.pop('completion_status', None)
     state.pop('kh_scope_closed', None)
 
 
@@ -611,7 +637,7 @@ def handle(event: dict, host: str) -> dict:
             state['skill_scope_version'] = SKILL_SCOPE_VERSION
             # Old write intent retains its immutable originals; old read-only
             # activation has no authority over new source files.
-        if state.get('scope_reset_pending'):
+        if state.get('scope_reset_pending') and not state.get('paused'):
             try:
                 retire_checks(state, baselines, 'pre_scope_unverified')
                 state.pop('scope_reset_pending', None)
@@ -620,8 +646,15 @@ def handle(event: dict, host: str) -> dict:
         if name in {'PostToolUse', 'UserPromptExpansion'}:
             observe_usage(returned, state, native=native, event=str(name), prompt_id=event.get('prompt_id'), prompt=event.get('prompt'))
         domains = used_domains(state)
+        unapplied = [path for path in paths if not applied_path(state, path)]
         paths = [path for path in paths if applied_path(state, path)]
         unresolved = unresolved if paths else []
+        if name == 'PreToolUse' and state.get('paused') and paths:
+            reason = 'KH task remains paused. Resume only after explicit user authorization; no source inspection was started.'
+            output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
+                      if mode == 'enforce' else context(name, reason))
+            store.save(connection, key, state)
+            return output
         if state.get('scope_reset_pending') and (paths or unresolved or (name == 'Stop' and domains)):
             reason = 'KH could not retire pre-scope source snapshots safely. Inspect ' + str(baselines.directory) + '; current KH source checks remain unverified.'
             output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
@@ -631,6 +664,17 @@ def handle(event: dict, host: str) -> dict:
             store.save(connection, key, state)
             return output
         if name == 'PreToolUse' and (paths or unresolved):
+            for path in paths:
+                if path.suffix.casefold() == '.cs':
+                    try:
+                        existing = snapshot(path)[1]
+                        peer = companion(path)
+                        peer_text = snapshot(peer)[1] if peer is not None else ''
+                        infer_responsibilities(state, path, proposed_source(event, path, previous=True),
+                                               proposed_source(event, path), existing + '\n' + peer_text,
+                                               baselines.original(path) or '', existing)
+                    except (OSError, ValueError, UnicodeError, RuntimeError):
+                        state['file_warning'] = 'C# responsibility evidence is unavailable; inspect actual source before completion.'
             state['skills_seen'] = sorted(current_prerequisites('\n', state))
             required = set().union(*(prerequisites_for(state, path) for path in paths))
             missing = sorted(required - set(state.get('skills_seen', [])))
@@ -649,6 +693,12 @@ def handle(event: dict, host: str) -> dict:
                 (binding(state, path) or {}).get('target', str(path)), '') for path in paths]
             if any(application_errors):
                 reason = 'KH application originals are unverified: ' + '; '.join(error for error in application_errors if error)
+                output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
+                          if mode == 'enforce' else context(name, reason))
+            reference_errors = [problem for path in paths if (problem := reference_problem(state, path))]
+            if reference_errors:
+                prior_reason = output.get('hookSpecificOutput', {}).get('permissionDecisionReason', '')
+                reason = ' '.join([prior_reason, *reference_errors]).strip()
                 output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
                           if mode == 'enforce' else context(name, reason))
             for path in paths:
@@ -672,6 +722,9 @@ def handle(event: dict, host: str) -> dict:
                 output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny',
                            'permissionDecisionReason': reason}} if mode == 'enforce' else context(name, reason))
             if not state.get('paused') and (not output or output.get('hookSpecificOutput', {}).get('permissionDecision') != 'deny'):
+                state['completion_status'] = 'in_progress_audit_unverified'
+                state['semantic_audit_verified'] = False
+                state.pop('kh_scope_closed', None)
                 settle_native_usage(state, {DOMAINS[path.suffix.casefold()] for path in paths})
                 if state.pop('check_epoch_closed', False):
                     state['files'] = {}
@@ -692,7 +745,11 @@ def handle(event: dict, host: str) -> dict:
                         state.get('before_sha256', {}).pop(str(path), None)
                         state['file_warning'] = 'Some original source snapshots could not be captured; comparison remains unverified.'
         elif name in {'PostToolUse', 'PostToolUseFailure'} and not state.get('paused'):
+            observe_references(state, returned, event)
             if (paths or unresolved) and state.pop('check_epoch_closed', False):
+                state['completion_status'] = 'in_progress_audit_unverified'
+                state['semantic_audit_verified'] = False
+                state.pop('kh_scope_closed', None)
                 state['files'] = {}
                 state.pop('file_warning', None)
                 state.pop('stop_notice', None)
@@ -748,7 +805,7 @@ def handle(event: dict, host: str) -> dict:
             if (isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and
                     (state.get('files') or state.get('before') or state.get('check_baselines')) and previous_scope_closed):
                 try:
-                    retire_checks(state, baselines, 'previous_turn_unverified' if not state.get('check_epoch_closed') else 'completed')
+                    retire_checks(state, baselines, 'previous_turn_unverified' if not state.get('check_epoch_closed') else 'checks_complete')
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not retire earlier source snapshots safely. Existing records were preserved; inspect ' + str(baselines.directory)}
                     state['scope_reset_pending'] = True
@@ -804,8 +861,11 @@ def handle(event: dict, host: str) -> dict:
             if missing_references or legacy:
                 pending = sorted(set(pending) | set(state['files']))
             application_errors = state.get('application_errors', {})
-            fingerprint = hashlib.sha256(json.dumps([state['files'], missing_references, legacy, application_errors], sort_keys=True).encode()).hexdigest()
-            if pending or state.get('file_warning') or application_errors:
+            reference_errors = [problem for path in state['files'] if (problem := reference_problem(state, Path(path)))]
+            fingerprint = hashlib.sha256(json.dumps([state['files'], missing_references, legacy, application_errors, reference_errors], sort_keys=True).encode()).hexdigest()
+            if pending or state.get('file_warning') or application_errors or reference_errors:
+                state['completion_status'] = 'requires_repair_or_evidence'
+                state['semantic_audit_verified'] = False
                 reason = ('KH cannot verify completion for these saved files: ' + ', '.join(pending) + '. '
                           'Read back current bodies, inspect actual project/reference contracts, resolve new review findings and repair confirmed violations only, re-audit and check introduced regressions. '
                           'Report unsupported/unresolved evidence accurately; do not claim a checker proves full compliance. ' +
@@ -815,6 +875,8 @@ def handle(event: dict, host: str) -> dict:
                 problems = sorted({item['routing_problem'] for item in state['files'].values() if item.get('routing_problem')})
                 if problems:
                     reason += ' ' + ' '.join(problems)
+                if reference_errors:
+                    reason += ' ' + ' '.join(reference_errors)
                 if mode == 'enforce' and not event.get('stop_hook_active') and state.get('stop_notice') != fingerprint:
                     state['stop_notice'] = fingerprint
                     output = {'decision': 'block', 'reason': reason}
@@ -822,12 +884,20 @@ def handle(event: dict, host: str) -> dict:
                     output = {'systemMessage': reason}
             else:
                 try:
-                    retire_checks(state, baselines, 'completed')
+                    retire_checks(state, baselines, 'checks_complete')
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
         if name in {'Stop', 'SessionEnd'}:
             state['kh_scope_closed'] = True
             settle_native_usage(state)
+        if name == 'PreToolUse' and unapplied and not paths and not state.get('paused'):
+            available_domains = {domain for domain in set(DOMAINS.values()) if domain + '/SKILL.md' in state.get('skills_seen', [])}
+            notices = state.setdefault('coverage_notices', [])
+            outside = [str(path) for path in unapplied if DOMAINS[path.suffix.casefold()] in available_domains and str(path) not in notices]
+            if outside and not output and len(notices) < MAX_FILES:
+                notices.extend(outside[:max(0, MAX_FILES - len(notices))])
+                output = context(name, 'These writes are outside registered KH coverage: ' + ', '.join(outside[:MAX_FILES]) +
+                    '. If they belong to this KH development task, use scoped apply before writing. Other work remains allowed and is not inspected. No KH compliance result is established for these files.')
         available = any(domain + '/SKILL.md' in state.get('skills_seen', []) for domain in set(DOMAINS.values()))
         if ((name == 'PostToolUse' and (available or native)) or
                 (name in {'UserPromptSubmit', 'SessionStart'} and

@@ -11,6 +11,7 @@ Read the sections matching the changed responsibilities, not every example. Each
 | Exclude rows already processed | [SELECT: exclusion JOIN](select-patterns.md#exclusion-join) |
 | Multiple ordered results for one mode | [SELECT: one branch with multiple results](select-patterns.md#one-branch-with-multiple-results) |
 | XML parsing and NEW INSERT SELECT | [SAVE: parsed rows and NEW](save-patterns.md#parsed-rows-and-new) |
+| Keep mode-owned preparation and writes together while preserving real shared phases | [SAVE: operation ownership](save-patterns.md#operation-ownership) |
 | Modify/delete selected input rows | [SAVE: MOD and DEL](save-patterns.md#mod-and-del) |
 | Delete several complete master documents | [SAVE: multiple-master-delete](save-patterns.md#multiple-master-delete) |
 | Validate related-row existence | [Validation: missing related row](validation-patterns.md#missing-related-row) |
