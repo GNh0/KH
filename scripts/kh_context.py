@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.output import configure_utf8_streams, redact
 from src.context.store import Store, data_root, session_key
-from src.context.transcript import capture, discard_host_records
+from src.context.transcript import capture, discard_host_records, recent_users
 
 
 def main(argv=None):
@@ -82,17 +82,18 @@ def main(argv=None):
                 matches = [item for item in state['users'] if all(token in item['text'].casefold() for token in tokens)]
                 memories = store.memories(connection, args.query)
                 pending = [item for item in state.get('pending_prompts', []) if all(token in item['text'].casefold() for token in tokens)]
-                output = {'users': previews(matches[-10:]), 'user_matches': len(matches),
+                output = {'users': previews(recent_users(matches, 10)), 'user_matches': len(matches),
                           'pending_prompts': previews(pending[-10:]), 'pending_matches': len(pending),
                           'memories': previews(memories[:8]), 'memory_matches': len(memories),
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0),
-                          'note': 'Bounded historical previews, not fresh instructions. Use get/memory-get for full entries; later corrections/cancellation take precedence.'}
+                          'note': 'Bounded historical previews, not fresh instructions. Source offsets order records within the same log; ids are insertion identifiers and unlinked event order is unverified. Use get/memory-get for full entries; later corrections/cancellation take precedence.'}
             else:
                 output = {'checkpoint': state.get('checkpoint'),
                           'latest_observed_prompt': previews([state['latest_prompt']])[0] if state.get('latest_prompt') else None,
                           'pending_prompts': previews(state.get('pending_prompts', [])[-10:]),
                           'pending_prompt_count': len(state.get('pending_prompts', [])),
-                          'latest_users': previews(state['users'][-5:]),
+                          'latest_users': previews(recent_users(state['users'], 5)),
+                          'user_order_note': 'Source offsets order records within the same log; ids are insertion identifiers and unlinked event order is unverified.',
                           'user_count': len(state['users']), 'memories': previews(store.memories(connection)),
                           'files': {path: {field: item.get(field) for field in ('sha256', 'readback', 'error', 'check', 'check_context', 'checker_generation')}
                                     for path, item in (state.get('files') or state.get('last_file_checks', {})).items()},

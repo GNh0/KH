@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -102,6 +104,40 @@ class NativeHookTests(unittest.TestCase):
         self.assertEqual({}, self.event('PreToolUse', **edit))
         return sql, before, edit
 
+    def test_no_id_expansion_matches_exact_prompt_once_without_retaining_arguments(self):
+        self.event('PostToolUse', tool_name='Skill', tool_input={'skill': 'kh-skills:sql-formatting'})
+        self.event('Stop')
+        prompt = '/kh-skills:sql-formatting private-argument-sentinel'
+        self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting',
+                   command_source='plugin', expansion_type='slash_command', prompt=prompt)
+        self.assertNotIn('private-argument-sentinel', json.dumps(self.state()))
+        self.event('UserPromptSubmit', prompt=prompt)
+        self.assertEqual(['sql-formatting'], self.state()['kh_used_skills'])
+        self.event('Stop')
+        self.event('UserPromptSubmit', prompt=prompt)
+        self.assertEqual([], self.state()['kh_used_skills'])
+
+    def test_no_id_expansion_never_carries_to_a_different_prompt_or_mismatched_id(self):
+        prompt = '/kh-skills:sql-formatting'
+        self.event('PostToolUse', tool_name='Skill', tool_input={'skill': 'kh-skills:sql-formatting'})
+        for expansion_id, submit_id, submitted in [(None, None, 'unrelated'), ('a', 'b', prompt),
+                                                   ('a', None, prompt), (None, 'b', prompt)]:
+            self.event('Stop')
+            self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting',
+                       command_source='plugin', expansion_type='slash_command', prompt=prompt,
+                       prompt_id=expansion_id)
+            self.event('UserPromptSubmit', prompt=submitted, prompt_id=submit_id)
+            self.assertEqual([], self.state()['kh_used_skills'])
+
+    def test_expansion_after_submit_cannot_activate_the_next_identical_task(self):
+        prompt = '/kh-skills:sql-formatting'
+        self.event('UserPromptSubmit', prompt=prompt)
+        self.event('UserPromptExpansion', command_name='kh-skills:sql-formatting',
+                   command_source='plugin', expansion_type='slash_command', prompt=prompt)
+        self.event('Stop')
+        self.event('UserPromptSubmit', prompt=prompt)
+        self.assertEqual([], self.state()['kh_used_skills'])
+
     def test_failed_powershell_partial_write_is_still_reviewed(self):
         sql, before, edit = self.prepare_write('PowerShell')
         sql.write_text(before.replace('A.QTY', 'ISNULL(A.QTY, 0)'), encoding='utf-8')
@@ -128,3 +164,132 @@ class NativeHookTests(unittest.TestCase):
         state = self.state()
         self.assertTrue(state['paused'])
         self.assertEqual(before, SourceBaselines(self.store.path.parent / 'checks' / self.key, state).original(sql))
+
+    def resume(self):
+        result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/kh_context.py'),
+                                 '--cwd', str(self.project), '--session', self.scope['session_id'],
+                                 '--transcript', str(self.log), '--host', 'claude', 'resume'],
+                                capture_output=True, check=True, timeout=10)
+        self.assertEqual('resumed', json.loads(result.stdout)['status'])
+
+    def test_cancel_resume_recovers_partial_write_and_keeps_original_through_repair(self):
+        sql, before, edit = self.prepare_write()
+        candidate = before.replace('A.QTY', 'ISNULL(A.QTY, 0)')
+        sql.write_text(candidate, encoding='utf-8')
+        self.event('PostToolUseFailure', **edit, is_interrupt=True)
+        with patch('src.runtime.hooks.snapshot') as read:
+            self.event('PostToolUse', tool_name='Read', tool_response=candidate)
+            self.event('PreCompact')
+            self.event('Stop')
+            read.assert_not_called()
+        self.resume()
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertIn('value_fallback_review', self.state()['files'][str(sql)]['check']['warnings'])
+        original = SourceBaselines(self.store.path.parent / 'checks' / self.key, self.state()).original(sql)
+        self.assertEqual(before, original)
+        self.event('PostToolUse', tool_name='Read', tool_response=candidate)
+        self.assertIn('cannot verify', self.event('Stop', stop_hook_active=True)['systemMessage'])
+        self.event('PreToolUse', **edit)
+        sql.write_text(before, encoding='utf-8')
+        self.event('PostToolUse', **edit)
+        self.event('PostToolUse', tool_name='Read', tool_response=before)
+        self.assertEqual({}, self.event('Stop'))
+        self.assertEqual('completed', self.state()['last_file_checks_outcome'])
+        self.assertFalse((self.store.path.parent / 'checks' / self.key).exists())
+
+    def test_unchanged_cancel_resume_creates_no_saved_file_audit(self):
+        _sql, _before, edit = self.prepare_write()
+        self.event('PostToolUseFailure', **edit, is_interrupt=True)
+        self.resume()
+        self.assertEqual({}, self.event('Stop'))
+        self.assertEqual({}, self.state()['last_file_checks'])
+        self.assertFalse((self.store.path.parent / 'checks' / self.key).exists())
+
+    def test_compaction_restores_pause_without_any_archived_user_or_checkpoint(self):
+        _sql, _before, edit = self.prepare_write()
+        self.event('PostToolUseFailure', **edit, is_interrupt=True)
+        self.event('PreCompact')
+        restored = self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext']
+        self.assertIn('Task remains paused', restored)
+        self.assertIn('recall/search/get/get-prompt', restored)
+        self.assertEqual([], self.state()['users'])
+        self.assertEqual({}, self.event('Stop'))
+
+    def test_completion_of_one_write_preserves_another_outstanding_write(self):
+        first, _before, edit = self.prepare_write()
+        second = self.project / 'Other.sql'
+        second.write_text('SELECT A.QTY FROM OTHER_ROWS A;', encoding='utf-8')
+        other_edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(second)}}
+        self.event('PreToolUse', **other_edit)
+        self.event('PostToolUse', **edit, tool_response=first.read_text(encoding='utf-8'))
+        self.assertIn(str(second), self.state()['before'])
+        second.write_text('SELECT ISNULL(A.QTY, 0) FROM OTHER_ROWS A;', encoding='utf-8')
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertIn('value_fallback_review', self.state()['files'][str(second)]['check']['warnings'])
+
+    def test_same_file_failure_cannot_retire_another_interrupted_write(self):
+        sql, before, edit = self.prepare_write()
+        self.event('PreToolUse', **edit, tool_use_id='write-B')
+        self.event('PostToolUseFailure', **edit, tool_use_id='write-A', error='unchanged')
+        self.assertIn(str(sql), self.state()['before'])
+        self.assertEqual({}, self.state()['files'])
+        sql.write_text(before.replace('A.QTY', 'ISNULL(A.QTY, 0)'), encoding='utf-8')
+        self.event('PostToolUseFailure', **edit, tool_use_id='write-B', is_interrupt=True)
+        self.resume()
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertIn('value_fallback_review', self.state()['files'][str(sql)]['check']['warnings'])
+        self.assertEqual(before, SourceBaselines(self.store.path.parent / 'checks' / self.key, self.state()).original(sql))
+
+    def test_retained_intent_does_not_reopen_previously_read_unaffected_lines(self):
+        sql, _before, edit = self.prepare_write()
+        original = '\n'.join('SELECT ' + str(i) + ';' for i in range(20))
+        # Use a new epoch with a complete original for the separated change ranges.
+        self.event('Stop')
+        sql.write_text(original, encoding='utf-8')
+        self.event('PreToolUse', **edit)
+        first = original.replace('SELECT 1;', 'SELECT 101;')
+        sql.write_text(first, encoding='utf-8')
+        self.event('PostToolUse', **edit, tool_response=first)
+        self.event('PreToolUse', **edit)
+        second = first.replace('SELECT 18;', 'SELECT 118;')
+        sql.write_text(second, encoding='utf-8')
+        self.event('PostToolUse', **edit)
+        spans = self.state()['files'][str(sql)]['pending_spans']
+        self.assertTrue(spans)
+        self.assertTrue(all(span['start'] >= 16 for span in spans), spans)
+
+    def test_missing_completion_with_empty_file_deletion_is_not_ignored(self):
+        sql, _before, edit = self.prepare_write()
+        self.event('PostToolUseFailure', **edit, error='unchanged')
+        sql.write_text('', encoding='utf-8')
+        self.event('PreToolUse', **edit)
+        sql.unlink()
+        self.assertEqual({}, self.event('Stop'))
+        self.assertEqual('deleted', self.state()['last_file_checks'][str(sql)]['sha256'])
+
+    def test_session_end_retires_pending_intent_before_an_unrelated_task(self):
+        self.prepare_write()
+        self.event('SessionEnd')
+        with patch('src.runtime.hooks.snapshot') as read:
+            self.event('UserPromptSubmit', prompt='unrelated', prompt_id='new')
+            self.event('Stop')
+            read.assert_not_called()
+        self.assertEqual('previous_turn_unverified', self.state()['last_file_checks_outcome'])
+        self.assertEqual({}, self.state()['before'])
+        self.assertEqual([], self.state()['kh_used_skills'])
+        self.assertFalse((self.store.path.parent / 'checks' / self.key).exists())
+
+    def test_legacy_line_only_intent_recognizes_empty_file_deletion(self):
+        sql, _before, edit = self.prepare_write()
+        self.event('PostToolUseFailure', **edit, error='unchanged')
+        sql.write_text('', encoding='utf-8')
+        # Begin a separate original epoch so the legacy snapshot really is an empty file.
+        self.event('Stop')
+        self.event('PreToolUse', **edit)
+        with self.store.connect() as connection:
+            state = self.store.load(connection, self.key)
+            state.pop('before_sha256')
+            self.store.save(connection, self.key, state)
+        sql.unlink()
+        self.assertEqual({}, self.event('Stop'))
+        self.assertEqual('deleted', self.state()['last_file_checks'][str(sql)]['sha256'])

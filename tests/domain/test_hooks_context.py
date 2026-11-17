@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from src.context.store import Store, session_key
-from src.context.transcript import capture, user_text
+from src.context.transcript import add_user, capture, recent_users, user_text
 from src.runtime.hooks import CYCLE, ROOT, handle, inspect
 from src.runtime.hooks import file_paths, write_paths, line_hashes, update_files, restore
 
@@ -429,7 +429,7 @@ class HooksContextTests(unittest.TestCase):
         self.assertEqual(quoted_request, user_text({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': quoted_request}}, 'codex'))
         store = Store(self.root / 'data/context-v1', str(self.project))
         state['checkpoint'] = {'text': 'first captured', 'user_seq': 1}
-        self.assertIn('newer user records=1', restore(state, [], store))
+        self.assertIn('additional archived records=1', restore(state, [], store))
         with store.connect(create=True) as connection:
             store.save(connection, session_key(self.base, 'codex'), state)
         checkpoint = self.root / 'gap-checkpoint.md'
@@ -546,7 +546,7 @@ class HooksContextTests(unittest.TestCase):
         self.append_user('수정 작업 취소. 지금은 검토 결과만 전달해')
         self.event('PreCompact')
         restored = self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext']
-        self.assertIn('newer user records=1', restored)
+        self.assertIn('additional archived records=1', restored)
         self.assertIn('preview_truncated=True', restored)
         self.assertIn('수정 작업 취소', restored)
         self.assertIn('라벨 기본 정렬', restored)
@@ -734,6 +734,91 @@ class HooksContextTests(unittest.TestCase):
         capture(state, self.base, 'codex')
         self.assertEqual([42], [item['seq'] for item in state['users']])
         self.assertEqual(1, len(state['users'][0]['source_aliases']))
+
+    def test_unlinked_prompt_does_not_reorder_latest_recovery_evidence(self):
+        state = {'users': []}
+        add_user(state, 'OLDER_UNLINKED_PROMPT', {'event': 'UserPromptSubmit', 'turn_id': 'old'})
+        self.append_user('CURRENT_REQUIREMENT')
+        capture(state, self.base, 'codex')
+        self.assertEqual([1, 2], [item['seq'] for item in state['users']])
+        self.assertEqual('OLDER_UNLINKED_PROMPT', state['users'][0]['text'])
+        restored = restore(state, [], Store(self.root / 'data', str(self.project)))
+        self.assertLess(restored.index('CURRENT_REQUIREMENT'), restored.index('OLDER_UNLINKED_PROMPT'))
+        capture(state, self.base, 'codex')
+        self.assertEqual([1, 2], [item['seq'] for item in state['users']])
+
+    def test_backfill_preserves_latest_source_correction_in_restore_recall_and_search(self):
+        records = [{'type': 'session_meta', 'payload': {'id': 's1'}}]
+        for number in range(12):
+            records.append({'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                            'content': [{'type': 'input_text', 'text': 'request OLD_PERMISSION_' + str(number)}]}})
+            records.append({'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant',
+                            'content': [{'type': 'output_text', 'text': 'acknowledged'}]}})
+        latest = 'request LATEST_CANCEL: cancel prior implementation and wait.'
+        records.append({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': latest}})
+        lines = [(json.dumps(record) + '\n').encode('utf-8') for record in records]
+        self.log.write_bytes(b''.join(lines))
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        key = session_key(self.base, 'codex')
+        legacy = {'users': [{'seq': 42, 'text': latest, 'sha256': hashlib.sha256(latest.encode()).hexdigest(),
+                            'truncated': False, 'source': {'path': str(self.log), 'byte_offset': sum(map(len, lines[:-1])),
+                                                          'sha256': hashlib.sha256(lines[-1]).hexdigest()}}],
+                  'cursor': sum(map(len, lines)), 'user_seq': 42, 'files': {}, 'skills_seen': [], 'skill_scope_version': 1,
+                  'checkpoint': {'text': 'Old task checkpoint', 'user_seq': 42}}
+        with store.connect(create=True) as connection:
+            store.save(connection, key, legacy)
+        with patch('src.context.transcript.SCAN_LIMIT', max(map(len, lines)) * 2):
+            for _ in range(30):
+                self.event('PreCompact')
+                state = self._state(store)
+                if not state.get('backlog_bytes'):
+                    break
+        self.assertFalse(state.get('backlog_bytes'))
+        self.assertFalse(state.get('capture_warning'))
+        restored = self.event('SessionStart', source='compact')['hookSpecificOutput']['additionalContext']
+        self.assertIn(latest, restored)
+        self.assertLess(restored.index(latest), restored.index('Old task checkpoint'))
+        self.assertIn('additional archived records=12', restored)
+        for command, args in [('recall', []), ('search', ['request']), ('get', ['42'])]:
+            result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/kh_context.py'), '--cwd', str(self.project),
+                                     '--session', 's1', '--transcript', str(self.log), command, *args],
+                                    capture_output=True, check=True, timeout=10)
+            data = json.loads(result.stdout)
+            if command == 'get':
+                self.assertEqual(latest, data['record']['text'])
+            else:
+                selected = data['latest_users' if command == 'recall' else 'users']
+                self.assertEqual(42, selected[-1]['seq'])
+                self.assertEqual(latest, selected[-1]['text'])
+        self.assertEqual(list(range(42, 55)), [item['seq'] for item in state['users']])
+
+    def test_legacy_unlinked_correction_is_not_displaced_by_source_backfill(self):
+        users = [{'seq': 42, 'text': 'UNLINKED_CANCEL', 'truncated': False, 'source': {'event': 'UserPromptSubmit'}}]
+        users += [{'seq': i, 'text': 'old permission', 'truncated': False,
+                   'source': {'path': 'selected.jsonl', 'byte_offset': i}} for i in range(43, 55)]
+        self.assertIn(42, [item['seq'] for item in recent_users(users, 4)])
+        restored = restore({'users': users}, [], Store(self.root / 'data', str(self.project)))
+        self.assertIn('UNLINKED_CANCEL', restored)
+        self.assertIn('unverified source order', restored)
+
+    def test_recall_and_search_normalize_legacy_order_without_renumbering(self):
+        self.prerequisites()
+        store = Store(self.root / 'data/context-v1', str(self.project))
+        key = session_key(self.base, 'codex')
+        with store.connect() as connection:
+            state = store.load(connection, key)
+            state['users'] = []
+            for number in range(1, 8):
+                add_user(state, 'requirement ' + str(number), {'event': 'UserPromptSubmit', 'turn_id': str(number)})
+            state['users'] = state['users'][2:] + state['users'][:2]
+            store.save(connection, key, state)
+        for command, field in [('recall', 'latest_users'), ('search', 'users')]:
+            args = [sys.executable, '-B', str(ROOT / 'scripts/kh_context.py'), '--cwd', str(self.project),
+                    '--session', 's1', '--transcript', str(self.log), command]
+            result = subprocess.run(args + (['requirement'] if command == 'search' else []),
+                                    capture_output=True, check=True, timeout=10)
+            records = json.loads(result.stdout)[field]
+            self.assertEqual(list(range(3 if command == 'recall' else 1, 8)), [item['seq'] for item in records])
 
     def test_valid_unknown_format_is_reported_instead_of_success_with_zero_users(self):
         self.log.write_text(json.dumps({'type': 'future-user-format', 'body': 'must not silently pass'}) + '\n')
