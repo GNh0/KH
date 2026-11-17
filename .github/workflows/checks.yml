@@ -41,3 +41,31 @@ jobs:
         run: |
           npx --yes @anthropic-ai/claude-code@2.1.293 plugin validate .claude-plugin/plugin.json --strict
           npx --yes @anthropic-ai/claude-code@2.1.293 plugin validate .claude-plugin/marketplace.json --strict
+
+  api-auth:
+    name: Standalone API skill (${{ matrix.python }})
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Independent API regression tests
+        working-directory: standalone/api-auth
+        run: python -B -m unittest discover -s tests/domain
+      - uses: actions/setup-node@v7
+        if: matrix.python == '3.11'
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Independent API static types
+        if: matrix.python == '3.11'
+        working-directory: standalone/api-auth
+        run: npx --yes pyright@1.1.413 --project pyrightconfig.json

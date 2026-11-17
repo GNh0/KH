@@ -2,7 +2,7 @@
 
 **SQL, C#/Designer and PowerBuilder skills for Claude and Codex.**
 
-KH packages thirteen focused skills, four role agents, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
+KH packages twelve focused skills, four role agents, optional local Python checks and a Windows owned-command runner in one repository. Both platforms load the same `skills/` and use the same `src/` and `scripts/`; their manifests and marketplace catalogs provide the installation adapters.
 
 [한국어](README.ko.md) · [Skills](#skills) · [Local checks](#optional-local-checks) · [Development](docs/development.md)
 
@@ -61,12 +61,11 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 | [work-planning](skills/work-planning/SKILL.md) | Substantial work with unresolved choices or dependencies |
 | [work-execution](skills/work-execution/SKILL.md) | Approved multi-step work, progress and stop/resume handling |
 | [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | Finished task-owned processes, REPL resources and command-tree lifetimes |
-| [api-auth](skills/api-auth/SKILL.md) | Shared API credentials, approved renewal/reconnection and authenticated HTTP streaming |
 | [code-review](skills/code-review/SKILL.md) | Actual changes, behavior regressions and verification |
 | [rule-audit](skills/rule-audit/SKILL.md) | Applicable-rule compliance, omitted prerequisites, focused repairs and rechecks |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | Reproducing a failure and tracing its actual cause |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | Deliverable content, file structure and rendered output |
-| [context-handoff](skills/context-handoff/SKILL.md) | A compact checkpoint for continuing an ongoing task |
+| [context-handoff](skills/context-handoff/SKILL.md) | Task recovery and explicit durable project memory |
 | [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH's package, checkers, profiles and requested source-log audits |
 
 ## How KH works
@@ -82,10 +81,6 @@ C# guidance preserves the actual screen's event flow, control defaults, names an
 SQL checks compare supported source tokens and layout; the agent determines business meaning from the query and user instructions. PB work maps the source's events, state, DataWindows and stored-procedure parameters before migration.
 
 Runtime cleanup preserves needed work and releases completed task-owned sessions, handles and helpers. The optional [Windows runner](skills/runtime-cleanup/references/windows-runner.md) contains a newly launched command tree and verifies its exit; it cannot dispose Codex-internal MCP caches or existing shared services.
-
-Shared [API authentication](skills/api-auth/SKILL.md) keeps external API credentials in Windows current-user encrypted storage outside projects/plugin caches. Service profiles support Bearer/header authentication, OAuth refresh and configurable JSON key issuance; OpenAI and Google Cloud have managed-key adapters. New compatible services join through configuration. Actual user approval is required for credential maintenance; the tool does not change native Codex/Claude login. See [usage and limits](skills/api-auth/references/usage.md).
-
-The shared `stream` command receives SSE, NDJSON and incremental UTF-8 responses using those registrations. Configurable mappings expose real text, public summaries, status, provider progress and intermediate artifacts within bounded lifetimes. This receives API data; it does not create a host-native image progress card. See the [streaming contract](skills/api-auth/references/streaming.md).
 
 LINQ, intermediate tables and builds are disfavored by the included project style. Use them when avoiding them makes implementation difficult or causes an extreme performance disadvantage, with a concrete reason. Current user instructions take precedence.
 
@@ -103,7 +98,7 @@ python -B <KH-root>/scripts/kh_check.py artifact <document.docx>
 python -B <KH-root>/scripts/kh_check.py package <KH-root>
 ```
 
-For ordinary checks, exit codes are **0** for the checks performed passing, **1** for errors found, and **2** for incomplete input or scope. Read both `checked` and `not_checked`. Static checks do not establish SQL execution, C# compilation, Designer behavior, complete migration or rendered quality. `sql --normalize-layout` writes supported layout changes to stdout.
+For ordinary checks, exit codes are **0** for the checks performed passing, **1** for errors found, and **2** for incomplete input or scope. A static pass with warnings reports `review_status=needs_review`; a pass without warnings defaults to `static_checks_only`. Neither is a completed semantic audit. Read `issues`, `checked` and `not_checked`. Static checks do not establish SQL execution, C# compilation, Designer behavior, complete migration or rendered quality. `sql --normalize-layout` writes supported layout changes to stdout.
 
 The PB skill includes PblScripter's export script and x86 helper. The [bundled launcher](skills/pb-to-csharp-migration-harness/references/orca.md) tries installed PB 7.0/10.5/12.5 runtimes and selects one after actual extraction. It requires Windows PowerShell and a compatible licensed PB/ORCA installation.
 
@@ -132,3 +127,6 @@ claude plugin validate /absolute/path/to/KH/.claude-plugin/marketplace.json --st
 [Development checks](docs/development.md) include pinned Pyright and CI. Passing tests and manifest validation establish the package checks performed; model behavior and target environments need their own evaluation. GitHub publication does not update an installed cache automatically.
 
 The old mandatory intake, Python host loop, simulated role DAG and duplicate Goal/memory/state stores were removed. Goal, collaboration, permissions and interruption follow the current host. [Historical documents](docs/README.md) describe earlier versions and are not current operating instructions.
+
+
+API credentials and streaming are a separate, self-contained [api-auth skill](standalone/api-auth/README.md); they are not part of KH skill discovery or its runtime.

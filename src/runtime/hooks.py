@@ -16,11 +16,9 @@ from src.context.store import Store, data_root, session_key
 from src.context.transcript import add_user, capture, discard_host_records, _host_block
 from src.runtime.check_context import SourceBaselines, companion, literal_project_sources, nearby_projects
 from src.runtime.write_targets import shell_write_targets
+from src.runtime.skill_usage import DOMAINS, HOOK_EVENTS, native_skill_usage
 
 ROOT = Path(__file__).resolve().parents[2]
-DOMAINS = {'.sql': 'sql-formatting', '.cs': 'csharp-designer-style-harness',
-           '.srd': 'pb-to-csharp-migration-harness', '.srw': 'pb-to-csharp-migration-harness',
-           '.sru': 'pb-to-csharp-migration-harness', '.srf': 'pb-to-csharp-migration-harness'}
 CYCLE = 'work-execution/references/source-style-cycle.md'
 FILE_LIMIT = 1024 * 1024
 MAX_FILES = 32
@@ -174,14 +172,14 @@ def write_paths(event: dict) -> tuple[list[Path], list[str]]:
     command = data.get('command', data.get('cmd', data.get('patch', '')))
     paths = []
     unresolved = []
-    workdir = data.get('workdir') if tool in {'Bash', 'exec_command'} else None
+    workdir = data.get('workdir') if tool in {'Bash', 'exec_command', 'PowerShell'} else None
     cwd = Path(workdir if isinstance(workdir, str) and Path(workdir).is_absolute() else event['cwd']).resolve()
     if isinstance(command, str) and ('apply_patch' in tool or re.match(r'^\s*apply_patch\b', command)):
         paths.extend(re.findall(r'^\*\*\* (?:Add|Update|Delete) File: (.+)$', command, re.M))
         paths.extend(re.findall(r'^\*\*\* Move to: (.+)$', command, re.M))
     if tool in {'Edit', 'Write', 'MultiEdit'}:
         paths.extend([data.get('file_path', data.get('path', ''))])
-    if tool in {'Bash', 'exec_command'} and isinstance(command, str):
+    if tool in {'Bash', 'exec_command', 'PowerShell'} and isinstance(command, str):
         resolved, unresolved = shell_write_targets(command, cwd)
         paths.extend(str(path) for path in resolved)
     result = []
@@ -355,8 +353,25 @@ def used_domains(state: dict) -> set[str]:
     return domains
 
 
-def observe_usage(returned: str, state: dict) -> None:
+def current_prerequisites(returned: str, state: dict) -> set[str]:
     seen = observed_reads(returned, state)
+    for name, record in state.get('native_skill_reads', {}).items():
+        if name not in set(DOMAINS.values()):
+            continue
+        body = (ROOT / 'skills' / name / 'SKILL.md').read_text(encoding='utf-8-sig')
+        if record.get('sha256') == hashlib.sha256(body.encode('utf-8')).hexdigest():
+            seen.add(name + '/SKILL.md')
+    return seen
+
+
+def observe_usage(returned: str, state: dict, *, native: str | None = None, event: str = '', prompt_id=None) -> None:
+    if native is not None:
+        body = (ROOT / 'skills' / native / 'SKILL.md').read_text(encoding='utf-8-sig')
+        record = {'sha256': hashlib.sha256(body.encode('utf-8')).hexdigest(), 'event': event}
+        if isinstance(prompt_id, str) and 0 < len(prompt_id) <= 160:
+            record['prompt_id'] = prompt_id
+        state.setdefault('native_skill_reads', {})[native] = record
+    seen = current_prerequisites(returned, state)
     state['skills_seen'] = sorted(seen)
     state['kh_used_skills'] = sorted(set(state.get('kh_used_skills', [])) |
                                     {name for name in DOMAINS.values() if name + '/SKILL.md' in seen})
@@ -366,6 +381,7 @@ def clear_usage(state: dict) -> None:
     state['skills_seen'] = []
     state['read_coverage'] = {}
     state['kh_used_skills'] = []
+    state['native_skill_reads'] = {}
     state.pop('kh_scope_closed', None)
 
 
@@ -420,21 +436,25 @@ def handle(event: dict, host: str) -> dict:
     mode = os.environ.get('KH_HOOKS_MODE', 'enforce')
     if mode == 'off':
         return {}
-    if name not in {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PreCompact',
-                    'Stop', 'Interrupt', 'SessionEnd'}:
+    if name not in HOOK_EVENTS.get(host, frozenset()):
         return {}
     store = Store(data_root(), event['cwd'])
     key = session_key(event, host)
-    paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse'} else ([], [])
+    paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse', 'PostToolUseFailure'} else ([], [])
     returned = flatten(event.get('tool_response', {})) if name == 'PostToolUse' else ''
+    native = native_skill_usage(event, host)
     observation = {}
     observed_reads(returned, observation)
-    create = bool(observation.get('read_coverage')) or name == 'PreCompact'
+    create = bool(native or observation.get('read_coverage')) or name == 'PreCompact'
     with store.connect(create=create) as connection:
         if connection is None:
             return {}
         state = store.load(connection, key)
         discard_host_records(state)
+        if name == 'PostToolUseFailure' and event.get('is_interrupt') is True:
+            state['paused'] = True
+            store.save(connection, key, state)
+            return {}  # Cancellation preserves originals and starts no new source audit.
         baselines = SourceBaselines(store.path.parent / 'checks' / key, state)
         output = {}
         if state.get('skill_scope_version') != SKILL_SCOPE_VERSION:
@@ -447,8 +467,8 @@ def handle(event: dict, host: str) -> dict:
                 state.pop('scope_reset_pending', None)
             except (OSError, ValueError, UnicodeError):
                 pass  # Preserve originals; unrelated work must not inherit their checks.
-        if name == 'PostToolUse':
-            observe_usage(returned, state)
+        if name in {'PostToolUse', 'UserPromptExpansion'}:
+            observe_usage(returned, state, native=native, event=str(name), prompt_id=event.get('prompt_id'))
         domains = used_domains(state)
         paths = [path for path in paths if DOMAINS[path.suffix.casefold()] in domains]
         unresolved = unresolved if domains else []
@@ -461,7 +481,7 @@ def handle(event: dict, host: str) -> dict:
             store.save(connection, key, state)
             return output
         if name == 'PreToolUse' and (paths or unresolved):
-            state['skills_seen'] = sorted(observed_reads('\n', state))
+            state['skills_seen'] = sorted(current_prerequisites('\n', state))
             required = {CYCLE, *(DOMAINS[path.suffix.casefold()] + '/SKILL.md' for path in paths)}
             missing = sorted(required - set(state.get('skills_seen', [])))
             # No attempt counter: retrying the same write is not evidence that prerequisites were read.
@@ -497,7 +517,7 @@ def handle(event: dict, host: str) -> dict:
                     except (OSError, ValueError, UnicodeError, RuntimeError):
                         baseline.pop(str(path), None)
                         state['file_warning'] = 'Some original source snapshots could not be captured; comparison remains unverified.'
-        elif name == 'PostToolUse':
+        elif name in {'PostToolUse', 'PostToolUseFailure'}:
             if (paths or unresolved) and state.pop('check_epoch_closed', False):
                 state['files'] = {}
                 state.pop('file_warning', None)
@@ -506,6 +526,15 @@ def handle(event: dict, host: str) -> dict:
                 state['file_warning'] = 'Some executed source-write destinations remain unverified: ' + '; '.join(unresolved[:3])
             baseline = {str(path): state.get('before', {}).pop(str(path)) for path in paths
                         if str(path) in state.get('before', {})}
+            if name == 'PostToolUseFailure':
+                changed = []
+                for path in paths:
+                    try:
+                        if str(path) not in baseline or line_hashes(snapshot(path)[1]) != baseline[str(path)]:
+                            changed.append(path)
+                    except (OSError, ValueError, UnicodeError, RuntimeError):
+                        changed.append(path)  # Let update_files retain the actual read failure.
+                paths = changed
             active = state['files'] if domains and not state.get('scope_reset_pending') and not state.get('check_epoch_closed') else {}
             messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in active), *paths])), returned, baseline,
                                     baselines=baselines)
@@ -514,6 +543,8 @@ def handle(event: dict, host: str) -> dict:
             if messages:
                 notice = ('KH saved-file checks (partial, not semantic audit). review_required is unresolved, not completion. '
                           'Read back each changed unit, resolve findings against actual requirements/reference sources, then audit combined changes and regressions.\n')
+                if name == 'PostToolUseFailure':
+                    notice = 'The tool failed; these saved files may contain partial changes. ' + notice
                 shown = []
                 for message in messages:
                     if len(notice) + sum(map(len, shown)) + len(message) > 5600:
@@ -543,7 +574,8 @@ def handle(event: dict, host: str) -> dict:
             if isinstance(prompt, str) and len(prompt) < 300 and re.fullmatch(stop, prompt, re.I):
                 state['paused'] = True
             prior_turn = state.get('latest_prompt', {}).get('turn_id')
-            new_turn = not event.get('turn_id') or event['turn_id'] != prior_turn
+            current_turn = event.get('turn_id') or event.get('prompt_id')
+            new_turn = not current_turn or current_turn != prior_turn
             previous_scope_closed = state.get('kh_scope_closed') or state.get('stop_observed') or state.get('stop_notice') or state.get('check_epoch_closed')
             if (isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and
                     state.get('files') and previous_scope_closed):
@@ -553,17 +585,22 @@ def handle(event: dict, host: str) -> dict:
                     output = {'systemMessage': 'KH could not retire earlier source snapshots safely. Existing records were preserved; inspect ' + str(baselines.directory)}
                     state['scope_reset_pending'] = True
             if isinstance(prompt, str) and prompt.strip() and new_turn and not state.get('paused') and previous_scope_closed:
+                native_for_prompt = {skill: record for skill, record in state.get('native_skill_reads', {}).items()
+                                     if event.get('prompt_id') and record.get('prompt_id') == event['prompt_id'] and
+                                     record.get('event') == 'UserPromptExpansion'}
                 clear_usage(state)
+                state['native_skill_reads'] = native_for_prompt
+                state['kh_used_skills'] = sorted(native_for_prompt)
             previous_user_sequence = max((item['seq'] for item in state['users']), default=0)
             capture(state, event, host)
             if isinstance(prompt, str) and prompt:
                 clean = redact(prompt)
                 state['latest_prompt'] = {'text': clean[:64000], 'truncated': len(clean) > 64000,
-                                          'turn_id': event.get('turn_id'),
+                                          'turn_id': current_turn,
                                           'source': 'UserPromptSubmit', 'sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest()}
                 if state.get('backlog_bytes') or state.get('capture_warning'):
                     pending = state.setdefault('pending_prompts', [])
-                    if not pending or (pending[-1].get('turn_id'), pending[-1]['sha256']) != (event.get('turn_id'), state['latest_prompt']['sha256']):
+                    if not pending or (pending[-1].get('turn_id'), pending[-1]['sha256']) != (current_turn, state['latest_prompt']['sha256']):
                         pending.append({**state['latest_prompt'], 'prompt_id': len(pending) + 1})
                 already_captured = (bool(state['users']) and state['users'][-1]['seq'] > previous_user_sequence and
                                     state['users'][-1]['sha256'] == hashlib.sha256(prompt.encode('utf-8')).hexdigest())

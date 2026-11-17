@@ -2,7 +2,7 @@
 
 **Claude와 Codex에서 사용하는 SQL·C#/Designer·PowerBuilder 개발 스킬.**
 
-KH는 스킬 13개, 역할별 에이전트 4개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 하나의 저장소로 제공합니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
+KH는 스킬 12개, 역할별 에이전트 4개, 선택형 로컬 검사기와 Windows 작업 프로세스 실행기를 제공합니다. SQL·PB·C# 개발, 개발 진행·디버깅, 감사·검증, 작업 복원과 영구 프로젝트 메모리를 다룹니다. 두 플랫폼은 같은 `skills/`, `src/`, `scripts/`를 공유하며, 각 플랫폼용 manifest와 marketplace가 설치를 담당합니다.
 
 [English](README.md) · [스킬](#스킬) · [로컬 검사](#선택형-로컬-검사) · [개발 검사](docs/development.md)
 
@@ -61,12 +61,11 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 | [work-planning](skills/work-planning/SKILL.md) | 규모가 크거나 중요한 선택이 남은 작업의 계획 |
 | [work-execution](skills/work-execution/SKILL.md) | 승인된 다단계 작업과 진행·중단·재개 |
 | [runtime-cleanup](skills/runtime-cleanup/SKILL.md) | 완료된 작업 소유 프로세스·REPL 자원 정리와 명령 트리 수명 관리 |
-| [api-auth](skills/api-auth/SKILL.md) | 공용 API 인증, 승인한 갱신·재연결과 인증된 HTTP 스트리밍 |
 | [code-review](skills/code-review/SKILL.md) | 실제 변경, 요구 동작과 회귀 검토 |
 | [rule-audit](skills/rule-audit/SKILL.md) | 적용 규칙 준수 감사, 위반 부분만 수정·재검사 |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | 오류 재현과 실제 실행 경로의 원인 분석 |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | 전달물 내용·파일 구조·렌더링 확인 |
-| [context-handoff](skills/context-handoff/SKILL.md) | 진행 중인 작업을 이어가기 위한 간결한 인계 |
+| [context-handoff](skills/context-handoff/SKILL.md) | 작업 복원과 명시적으로 저장한 영구 프로젝트 메모리 |
 | [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH 패키지·검사기·프로필·요청한 소스 로그 감사 |
 
 ## 작업 방식
@@ -83,9 +82,7 @@ SQL 검사기는 지원하는 토큰과 배치를 확인하고, 업무 의미는
 
 자원 정리는 필요한 작업을 유지하고, 필요 없어진 작업 소유 세션·핸들·보조 프로세스를 해제합니다. 선택형 [Windows 실행기](skills/runtime-cleanup/references/windows-runner.md)는 새로 실행한 명령 트리의 종료를 검증합니다. Codex 내부 MCP 캐시나 기존 공유 서비스의 종료를 제어하지는 않습니다.
 
-공용 [API 인증 관리](skills/api-auth/SKILL.md)는 외부 API 인증정보를 프로젝트·설치 캐시 밖의 Windows 사용자 암호화 저장소에 보관합니다. Bearer·헤더 인증, OAuth 갱신과 설정형 JSON 재발급을 공통으로 처리하며 OpenAI·Google Cloud 관리형 키 어댑터도 제공합니다. 호환되는 새 서비스는 설정만으로 추가합니다. 갱신 절차는 실제 사용자 승인을 받은 범위에서 수행하고, Codex·Claude 자체 로그인은 변경하지 않습니다. [사용법과 지원 범위](skills/api-auth/references/usage.md)를 참고하세요.
-
-공통 `stream` 명령은 같은 등록을 재사용해 SSE·NDJSON·UTF-8 응답을 실시간으로 받습니다. 설정한 매핑에 따라 실제 텍스트·공개 요약·상태·API 진행률·중간 결과물을 수신하고 연결 수명을 제한합니다. API 데이터 수신 기능이며 호스트의 내장 이미지 진행 카드를 만드는 기능은 아닙니다. [스트리밍 계약](skills/api-auth/references/streaming.md)을 참고하세요.
+정적 검사 통과와 감사 완료는 별개입니다. 경고가 있으면 `review_status=needs_review`, 경고가 없는 기본 결과는 `static_checks_only`이며, 실제 사용자 요구·원본·실행 결과를 대조해야 합니다.
 
 포함된 프로젝트 스타일에서 LINQ·중간 테이블·빌드는 비선호입니다. 피하면 구현이 어렵거나 대안의 성능이 극단적으로 불리할 때 구체적인 이유로 사용합니다. 현재 사용자의 명시적 지시가 우선합니다.
 
@@ -132,3 +129,6 @@ claude plugin validate /absolute/path/to/KH/.claude-plugin/marketplace.json --st
 [개발 검사](docs/development.md)는 고정 버전 Pyright와 CI도 실행합니다. 단위 검사·manifest 검증은 수행한 패키지 검사 범위를 확인하며, 모델의 실제 작업과 목표 환경은 별도로 검증해야 합니다. GitHub 공개와 이미 설치된 플러그인 캐시 갱신도 별도 단계입니다.
 
 과거의 필수 intake, Python 호스트 루프, 역할 DAG 모의 실행, 중복 Goal·메모리·상태 저장소는 제거되었습니다. Goal·협업·권한·중단은 현재 호스트 도구를 따릅니다. [역사 문서](docs/README.md)는 이전 버전의 자료이며 현재 실행 지침으로 쓰지 않습니다.
+
+
+API 인증·스트리밍은 KH 자동 발견 목록과 실행 코드에서 분리된 [독립 api-auth 스킬](standalone/api-auth/README.md)로 제공합니다.

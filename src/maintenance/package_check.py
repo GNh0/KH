@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 from src.common.results import CheckResult, Issue
+from src.runtime.skill_usage import HOOK_EVENTS
 
 
 def check_package(path: str | Path) -> CheckResult:
@@ -91,20 +92,26 @@ def check_package(path: str | Path) -> CheckResult:
     if len(agent_names) != len(set(agent_names)):
         error('agent_name_duplicate', 'Agent names must be unique.')
     result.not_checked.append('host agent discovery, invocation and review behavior')
-    hook_paths = {root / 'hooks/hooks.json'} if (root / 'hooks/hooks.json').exists() else set()
+    hook_paths: dict[Path, set[str]] = {}
+    if (root / 'hooks/hooks.json').exists():
+        hook_paths[(root / 'hooks/hooks.json').resolve()] = {'claude'}
     declared_hooks = manifest.get('hooks')
     if isinstance(declared_hooks, str):
         hook_path = (root / declared_hooks).resolve()
         if not declared_hooks.startswith('./') or not hook_path.is_relative_to(root) or not hook_path.is_file():
             error('hook_path_invalid', 'Declared hook configuration must exist inside the package.', manifest_path)
         else:
-            hook_paths.add(hook_path)
-    for hook_path in hook_paths:
+            hook_paths.setdefault(hook_path, set()).add('codex')
+    for hook_path, hosts in hook_paths.items():
         try:
             config = json.loads(hook_path.read_text(encoding='utf-8-sig'))
             events = config.get('hooks')
             if not isinstance(events, dict) or not events:
                 raise ValueError('Hook configuration needs a nonempty hooks object.')
+            for host in hosts:
+                unsupported = set(events) - HOOK_EVENTS[host]
+                if unsupported:
+                    error('hook_event_unsupported', host + ' adapter does not support: ' + ', '.join(sorted(unsupported)), hook_path)
             for groups in events.values():
                 if not isinstance(groups, list):
                     raise ValueError('Hook event groups must be arrays.')

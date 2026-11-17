@@ -49,7 +49,7 @@
             "timeout": 10
           }
         ],
-        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|Read|read_file"
+        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|Read|read_file|PowerShell"
       }
     ],
     "PostToolUse": [
@@ -67,7 +67,7 @@
             "timeout": 10
           }
         ],
-        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|Read|read_file"
+        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|Read|read_file|Skill|PowerShell"
       }
     ],
     "PreCompact": [
@@ -117,6 +117,42 @@
               "claude"
             ],
             "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/kh_hook.py",
+              "--host",
+              "claude"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "^(kh-skills|kh-uaf):",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/kh_hook.py",
+              "--host",
+              "claude"
+            ],
+            "timeout": 10
           }
         ]
       }

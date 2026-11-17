@@ -20,11 +20,24 @@ from urllib.parse import parse_qs, urlsplit
 from src.api_auth.manager import Manager
 from src.api_auth.profile import api_base, validate_bundle, validate_profile
 from src.api_auth.security import AuthError, UserCipher, safe_output
-from src.api_auth.store import Store
+from src.api_auth.store import Store, data_directory
 from src.api_auth.transport import Transport
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class StorageCompatibilityTests(unittest.TestCase):
+    def test_extraction_preserves_legacy_store_and_explicit_directory_precedence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            with patch.dict(os.environ, {'LOCALAPPDATA': str(root), 'API_AUTH_DATA': '', 'KH_API_DATA': ''}):
+                self.assertEqual(root / 'KH/api-auth-v1', data_directory())
+                os.environ['KH_API_DATA'] = str(root / 'legacy-test')
+                self.assertEqual(root / 'legacy-test', data_directory())
+                os.environ['API_AUTH_DATA'] = str(root / 'independent-test')
+                self.assertEqual(root / 'independent-test', data_directory())
+            self.assertEqual([], list(root.iterdir()))  # Selecting a path never reads or migrates credentials.
 
 
 class ProviderFixture(BaseHTTPRequestHandler):
@@ -268,8 +281,8 @@ class LifecycleTests(unittest.TestCase):
     def test_registration_cold_process_reuse_and_no_plaintext_at_rest_or_output(self):
         self.assertEqual('connected', self.register()['status'])
         self.assertTrue(self.manager.status('workload')['registered'])
-        result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/kh_api.py'), '--loopback-fixture', 'request', 'workload', '--path', '/models'],
-                                env={**os.environ, 'KH_API_DATA': str(self.folder / 'vault')}, capture_output=True, text=True, encoding='utf-8', check=True, timeout=10)
+        result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/api_auth.py'), '--loopback-fixture', 'request', 'workload', '--path', '/models'],
+                                env={**os.environ, 'API_AUTH_DATA': str(self.folder / 'vault')}, capture_output=True, text=True, encoding='utf-8', check=True, timeout=10)
         self.assertNotIn('fixture-old-secret', result.stdout + result.stderr)
         self.assertEqual('[REDACTED]', json.loads(result.stdout)['data']['echo'])
         for file in self.folder.rglob('*'):

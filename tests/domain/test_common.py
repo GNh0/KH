@@ -3,9 +3,20 @@ import unittest
 from pathlib import Path
 from src.common.files import read_file, verify_unchanged, write_output
 from src.common.output import compact_output, redact
+from src.common.results import CheckResult, Issue
 
 
 class CommonTests(unittest.TestCase):
+    def test_static_pass_does_not_hide_an_unresolved_review_finding(self):
+        result = CheckResult(issues=[Issue('value_source_review', 'warning', 'Needs the actual request.')],
+                             metadata={'review_status': 'verified'}, not_checked=['live behavior'])
+        self.assertTrue(result.success)  # Existing static-check/exit semantics remain compatible.
+        body = result.to_dict()
+        self.assertEqual('passed', body['status'])
+        self.assertEqual('needs_review', body['review_status'])
+        self.assertEqual(['live behavior'], body['not_checked'])
+        self.assertEqual('static_checks_only', CheckResult().to_dict()['review_status'])
+
     def test_changed_user_file_is_detected(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'source.txt'
