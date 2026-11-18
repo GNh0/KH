@@ -3,10 +3,15 @@ from pathlib import Path
 import re
 
 
-def document(root: Path, relative: str) -> tuple[Path, str, int, int]:
+def document(root: Path, relative: str, *, texts: dict[Path, str] | None = None) -> tuple[Path, str, int, int]:
     filename, _, anchor = relative.partition('#')
     path = root / 'skills' / filename
-    text = path.read_text(encoding='utf-8-sig')
+    if texts is None:
+        text = path.read_text(encoding='utf-8-sig')
+    else:
+        if path not in texts:
+            texts[path] = path.read_text(encoding='utf-8-sig')
+        text = texts[path]
     lines = text.splitlines(keepends=True)
     if not anchor:
         return path, text, 1, len(lines)

@@ -1,63 +1,56 @@
 # SELECT/SAVE procedure contracts
 
-Use this for generating, migrating or correcting SELECT/SAVE procedures, including SELECT-only reports. All procedure work needs the relevant mode/result and parameter/output sections; XML/save-only sections apply when that path uses them. Ordinary formatting preserves existing behavior and does not trigger a schema redesign.
-
-Read the current caller, target keys/types and complete approved procedures for the affected operations; inspect the XML generator only when the contract uses XML. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies, using actual responsibility rather than similar names. Apply the selected style while preserving target behavior. Retain requested commented integrations as their full original bodies rather than activating them or replacing them with placeholders.
-
-Establish the [user-selected author and reference author](procedure-authorship.md) before the first SP draft. Select actual procedures by that authorship and responsibility; preserve SQL-FORMATTING's explicit rules and verify the required header against the actual program and first creation date.
+Choose a working procedure written by the selected reference author for each responsibility. Read the complete SELECT or SAVE and its actual caller. Use the target's schema and behavior and the [authorship and header rules](procedure-authorship.md).
 
 ## Save boundary and reuse
 
-When several files define the same procedure, identify the source used by the apply path and any maintained snapshots. Compare their relevant bodies separately and reconcile managed copies within the task scope.
-
-Trace the requested operation through the actual caller and relevant complete procedure bodies. Compare what the existing path already handles with the concrete gap the change must resolve. Select the simplest sufficient implementation that follows the agreed style and preserves input cardinality, full keys, related writes, validation and transaction/error ownership. An available API or familiar technique alone does not establish a need for added code. Justify necessary differences from actual behavior, API constraints or measured performance; classify neither necessity nor correctness from a technique's name or shape. Resolve material omissions from truncated output.
+- Identify the definition used for deployment and any maintained copies. Resolve differences against the actual caller.
+- Trace what the existing operation already does. Add only the missing behavior. Preserve validation, row counts, full keys, transaction ownership and error cleanup.
+- Keep requested disabled integrations as their complete commented bodies. Retrieve any missing part of the reference before writing.
+- Before applying a draft and again after saving, compare its operations with the original. For each new mode, write, call or result type, identify the request or caller that needs it.
 
 ### XML preparation and writes
 
-When adding an XML action, compare its parsing, typed input rows and owning writes with the target's complete existing SAVE preparation boundary before drafting. Trace which input documents the new caller actually sends and which preprocessing/output phases apply. Preserve the established boundary unless the real operation requires a different one; do not improvise a separate transport merely because the new action is short, or parse unrelated documents simply because another mode does. Compare the complete saved procedure after the addition, including its shared phases and error cleanup.
-
-Keep XML/selected row values in their rowset and consume them through the approved INSERT SELECT, UPDATE FROM and DELETE JOIN flow. Do not first copy available row fields into a list of scalar variables or normalize a staging table merely to prepare the following write. Apply required value expressions at their owning write when that preserves the contract. Variables for real numbering, single-document outputs or required API calls, and staging updates that record generated keys, remain valid. Compare responsibilities with the [source-based patterns](procedure-patterns.md), not variable counts or a blanket ban on staging UPDATEs.
+- When adding an XML action, check which documents the caller sends, where the target prepares them and which operations share cleanup. Reuse that boundary.
+- Keep XML/selected row values in their rowset through INSERT SELECT, UPDATE FROM or DELETE JOIN. Apply required expressions at the owning write.
+- Use scalars for genuinely single-document outputs, number allocation or required API parameters. Update staging when generated keys must be recorded. See [procedure patterns](procedure-patterns.md).
 
 ## Modes and multiple rows
 
-Give each operation a coherent dispatch branch, following the target's IF/ELSE IF structure. Keep that operation's ordered result sets together; three returned tables do not require three independent conditions repeating the same mode. Conversely, when modes use different source keys, JOIN paths or exclusions, write their queries in their own branches instead of combining them through mode-dependent OR conditions and conditional JOINs merely to share text. Shared validation or preprocessing remains valid when it has a real responsibility; do not mechanically merge it into dispatch or change independent phases into ELSE IF. Trace every mode's path and result-table order against its caller.
+- Give each operation a coherent dispatch branch. Match the target's IF/ELSE IF flow and return all of that mode's tables in caller order.
+- Use separate branches for different keys, joins or exclusions. Keep shared validation and preprocessing at their existing scope. Verify each caller's path.
 
 ### Save row operations
 
-For save/XML flows, match actual edit-mode strings and Added/Modified/Deleted states to SP branches. A target that sends EDIT must not be implemented only as MOD. Preserve `sp_XML_LOG_SAVE` where the target contract requires it.
+- Match the caller's actual mode strings and Added/Modified/Deleted selection to the SAVE branches. Preserve the required XML log call at its original scope.
 
 ### Composite keys
 
-For composite keys, inspect the target's existing parser/function and its complete same-project usage. Follow that form to split the key and JOIN on the typed components and full business key. Do not reconstruct table keys by concatenating columns in a JOIN, hand-parse an already supported key, or introduce a separate mode-driven scalar-variable preprocessing layer just to simplify writing the query. Preserve actual component types, NULL behavior and cardinality; function names and component counts are not universal.
+- For composite keys, read the target's parser and a complete same-project usage. Join on the typed components of the full key. Preserve NULL behavior and row count.
+- Keep parsing in the established place. Avoid concatenating table columns or introducing scalars to reconstruct available keys.
 
 ### Save batches and transitions
 
-Separate removal of detail rows from deletion of persisted master documents. Multiple selected master keys must remain a set through XML parsing and UPDATE/DELETE JOINs. Do not replace those keys with one scalar `@PURNUM`-like assignment. A scalar header value can still be appropriate in an actual single-document NEW/EDIT branch.
-
-For other selected-row actions, including saving print status, trace the comparable caller's XML/state selection and save boundary before designing the signature. Preserve its set-based keys and applicable MOD branch; per-record printed pages alone do not establish per-record SP calls.
-
-A SAVE XML requirement does not itself change SELECT transport. Keep the existing scalar/key lookup when that is the actual query contract; introduce SELECT XML only for a query-specific requirement or verified dependency.
-
-Assign persisted sequence numbers within the real target key scope. XML row order/SEQ is not automatically the persisted detail key. When appending to an existing parent, verify its current maximum plus deterministic ROW_NUMBER/order and the actual transaction/concurrency path; test multiple new rows and another append to that same parent. Do not add UPDLOCK/HOLDLOCK routinely to compensate for an untraced numbering path. A general concurrency concern does not override an explicit instruction against added hints; resolve the actual requirement within the agreed transaction pattern.
-
-For upstream quantity checks, use the full linked key and the correct unit. On EDIT, exclude the current document's old contribution from already-processed totals before comparing proposed values. Inspect Added/Modified/Deleted together and aggregate duplicate linked keys in the proposed batch. Preserve restrictions already required by the source; do not invent new zero/count/required-value rules or duplicate SP-owned validation in C#.
-
-For eligibility and state transitions, separate the current row's inclusion rule, prerequisites on linked rows, and any status updates. Derive expected included and excluded cases for each applicable rule from the request. Use actual keys to test those cases, and keep sample identifiers out of the business predicate. If several prerequisite rows can match, verify that the result preserves the caller's expected row count per key.
+- Preserve the set of selected master keys through XML and UPDATE/DELETE. Removing detail rows and deleting persisted documents have different owners.
+- Trace print/save selection, state and batch width. Keep SELECT's scalar/key transport when the XML change concerns only SAVE.
+- Allocate sequence numbers within the actual parent key and transaction. Verify deterministic ordering, multiple inserts and a second append. Use locking hints only with an established requirement and user authorization where applicable.
+- Compare proposed quantities in the correct units by full linked key. On edits, exclude the document's old contribution. Combine duplicate keys and include additions, changes and deletions. Preserve existing validation.
+- For eligibility, identify the current row, linked prerequisites and status update separately. Test included and excluded cases and one-to-many joins. Keep sample IDs out of business filters.
 
 ## Parameters, outputs and dates
 
-Use the approved parameter template: in this user's current screen procedures WORKTYPE and ORGDIV are required, while ordinary optional parameters generally default to NULL. Apply actual target types/lengths instead of copied literal defaults. Match CUSTCD/CUSTNM to the real master schema. Preserve Unicode when meaningful, including XML and actual password/encrypted-value contracts; do not batch-convert every NVARCHAR to VARCHAR.
+- Follow the target's parameter template. Current screen procedures require WORKTYPE and ORGDIV. Ordinary optional parameters generally default to NULL.
+- Trace schema → parameter/XML/staging → result → caller. Preserve actual lengths, Unicode, precision, scale and NULL handling. Check master code/name fields against the real master.
+- Return the original calculation type unless the consuming contract needs a conversion. A display format belongs to the display layer. SQL aggregates can widen a numeric result.
+- Keep binding names, result fields and SP parameter names distinct. Remove excluded outputs and corresponding Designer bindings together.
+- Return persisted and submitted values directly. A **new or changed NULL/blank substitution requires the user's explicit request for that operation**. An editor default applies at initialization. Preserve existing handling outside the edit.
+- Use typed empty placeholders only when a real UNION or result schema needs that field. Verify the type against the consuming branch.
+- Preserve application, inspection and audit dates separately. Trace the actual writer, date filters, remarks, and INSERT column/value pairs. For a server-owned save time, retain GETDATE() and the caller's established requery.
+- Check the saved procedure against its caller, selected reference, signature, XML shape, keys, writes, result order and error path. Verify affected schema, concurrency and deployment separately. See [SQL checks](checks.md).
 
-Trace field dimensions through the actual authoritative/master column, SP parameters, XML extraction, table variables, conversions and caller parameters. Do not guess a smaller string length or numeric precision/scale at an intermediate step; it can truncate the value before the final write. Identify the master by the target schema and role, not a fixed table name. Preserve the requested character type and date/time precision; a length correction alone does not authorize changing VARCHAR/NVARCHAR or date semantics. Change table definitions only when that schema change is in scope.
+For example, if the caller already consumes the aggregate below, changing the display to four decimal places gives no reason to narrow the SQL result.
 
-Trace actual column/result types and caller bindings before adding conversions. A display-format change alone does not require a different SQL numeric type; preserve actual precision, scale and NULL behavior unless a verified data/API requirement needs the conversion. For required empty-schema or UNION placeholders, derive the type from that real result contract.
-
-Keep FieldName/output-column names distinct from SP parameter names. A request to bind PURNUM does not necessarily rename KEYCODE parameters. Change SELECT output, C# binding and relevant XML/SAVE fields together where required by the request.
-
-Remove excluded source-only output columns and their Designer references. Do not keep them alive as `CAST('' AS VARCHAR(...))` or typed NULL fields merely to make a copied screen compile. A typed placeholder can be valid for a required UNION/result schema; verify that specific need. Return persisted values and submitted XML fields directly. A new or changed NULL/blank fallback requires the user's explicit request for that substitution in that operation; do not infer permission from nullable columns, old data, another program or a plausible default. Initializing an editor from a master value does not authorize reapplying that value over the submitted input during SAVE or a stored value during SELECT. Preserve unchanged existing handling outside the correction; do not synthesize a code from quantities or substitute a value just to produce a plausible result.
-
-Distinguish application/request dates from result/inspection dates. Trace which screen writes each field before reusing REGDT or a mutable result date. Copy date filtering/conversion only when it matches the target field type and approved procedure pattern. Preserve requested remarks, modification audit fields and INSERT column/value correspondence.
-
-If the request assigns a save timestamp to GETDATE(), generate it in the SP. Do not add a timestamp input/OUTPUT solely to patch the grid when the caller's established success path requeries. Keep outputs that the actual caller needs.
-
-At completion compare the actual caller, XML shape, SP signature/branches, target keys, related writes, error/transaction path and returned fields with the requested operation and approved structure. Use the [SQL checker](checks.md) for supported source patterns. Verify schema compatibility, numbering, concurrency, business rules and deployment through the relevant execution path.
+```sql
+SELECT SUM(A.AMOUNT) AS AMOUNT
+FROM ExampleLine A
+```

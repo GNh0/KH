@@ -24,6 +24,15 @@ def findings(source, original=None):
 
 
 class SqlDispatchTests(unittest.TestCase):
+    def test_transaction_ownership_is_checked_at_entry_and_exit(self):
+        source = "IF @owner = 0 BEGIN BEGIN TRANSACTION; END SELECT 1; IF @owner = 0 BEGIN COMMIT TRANSACTION END"
+        def duplicates(text):
+            return [i for i in check_sql(text, check_style=False, check_preferences=False).issues
+                    if i.code == 'repeated_sibling_mode_guard']
+        self.assertFalse(duplicates(source))
+        self.assertTrue(duplicates(source.replace('COMMIT TRANSACTION', 'BEGIN TRANSACTION')))
+        self.assertTrue(duplicates(source.replace('COMMIT TRANSACTION', 'SELECT 2; COMMIT TRANSACTION')))
+
     def test_sibling_observation_is_review_not_ownership_or_automatic_merge(self):
         source = "IF @Mode = 'CREATE' BEGIN SELECT 1; END IF @Mode = 'CREATE' BEGIN SELECT 2; END"
         result = check_sql(source, check_style=False, check_preferences=False)

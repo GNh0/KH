@@ -17,6 +17,7 @@ _NON_BLOCK_BEGIN = {'TRAN', 'TRANSACTION', 'DISTRIBUTED', 'DIALOG', 'CONVERSATIO
 class _Guard:
     signature: _Signature
     offset: int
+    transaction_phase: str = ''
 
 
 @dataclass
@@ -27,7 +28,7 @@ class _Frame:
     siblings: dict[_Signature, _Guard] = field(default_factory=dict)
 
 
-def _guard(tokens: list[_SqlToken], index: int) -> tuple[int, _Guard] | None:
+def _guard(tokens: list[_SqlToken], index: int, *, allow_statement: bool = False) -> tuple[int, _Guard] | None:
     cursor = index + 1
     wrappers = 0
     while cursor < len(tokens) and tokens[cursor].text == '(':
@@ -70,11 +71,25 @@ def _guard(tokens: list[_SqlToken], index: int) -> tuple[int, _Guard] | None:
         if cursor >= len(tokens) or tokens[cursor].text != ')':
             return None
         cursor += 1
-    if cursor >= len(tokens) or tokens[cursor].normalized != 'BEGIN':
+    if cursor >= len(tokens):
         return None
-    if cursor + 1 < len(tokens) and tokens[cursor + 1].normalized in _NON_BLOCK_BEGIN:
+    next_word = tokens[cursor].normalized
+    if next_word != 'BEGIN' and not (allow_statement and next_word in {
+            'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'EXEC', 'EXECUTE',
+            'SET', 'RETURN', 'THROW', 'PRINT', 'WITH', 'IF'}):
         return None
-    return cursor, _Guard((parameter.text, operator, tuple(values)), tokens[index].start)
+    if next_word == 'BEGIN' and cursor + 1 < len(tokens) and tokens[cursor + 1].normalized in _NON_BLOCK_BEGIN:
+        return None
+    phase = ''
+    if next_word == 'BEGIN' and cursor + 3 < len(tokens):
+        action, unit = (part.normalized for part in tokens[cursor + 1:cursor + 3])
+        if action in {'BEGIN', 'COMMIT', 'ROLLBACK'} and unit in {'TRAN', 'TRANSACTION'}:
+            after = cursor + 3
+            if tokens[after].text == ';':
+                after += 1
+            if after < len(tokens) and tokens[after].normalized == 'END':
+                phase = action
+    return cursor, _Guard((parameter.text, operator, tuple(values)), tokens[index].start, phase)
 
 
 def _assignment(tokens: list[_SqlToken], index: int) -> bool:
@@ -130,7 +145,8 @@ def _repetitions(source: str) -> list[tuple[_Signature, int, int, str]]:
                 if parent:
                     found.append((current.signature, current.offset, parent.offset, 'enclosing'))
                 sibling = frames[-1].siblings.get(current.signature)
-                if sibling:
+                if sibling and not (sibling.transaction_phase == 'BEGIN' and
+                                    current.transaction_phase in {'COMMIT', 'ROLLBACK'}):
                     found.append((current.signature, current.offset, sibling.offset, 'sibling'))
             frames.append(_Frame('block', current))
             projection.clear()

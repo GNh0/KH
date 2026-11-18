@@ -4,6 +4,8 @@ The main agent implements by default. Use a specialist or an independent reviewe
 
 ## Assignment
 
+When a screen and its procedures are split between workers, the main agent owns their joint result. Hand over the actual C# call, SP definition, mode, parameters, XML rowset, and ordered result bindings for the changed path. Compare them after merging the workers' changes. Use `kh_check.py sp-call` on an isolated call for literal parameter names. Trace runtime-built modes, XML names and grid fields to their actual consumers.
+
 Pass the current request and latest corrections, absolute KH root and target workspace, and whether the assignment is investigation, implementation or review. Identify owned files/operations, actual reference sources for each responsibility, available verification and existing limits. Forward user-supplied SP author/reference-author choices with their source; a child must not infer a name or ask the same answered question again. Missing information is not an approval.
 
 Investigation/review does not apply development checks or authorize edits. For implementation, use the child's actual host scope for its owned outputs. A parent application is not evidence that the child read or applied guidance. PB migration needs both the real PB source behavior and the output project's C#/SQL style references. Keep query, save, printing and control responsibilities separate even when they belong to one file. The source-style cycle owns their before/after review; this contract does not start a second audit.
