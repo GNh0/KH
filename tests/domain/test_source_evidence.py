@@ -3,11 +3,42 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from src.runtime.source_evidence import control_work, observe_references, reference_problem, select_references
+from src.runtime.source_evidence import control_work, observe_references, reference_problem, select_references, read_paths, observed_comparisons
 from src.runtime.workflows import register
 
 
 class SourceEvidenceTests(unittest.TestCase):
+    def test_indexed_and_method_control_operations_are_observed_without_dto_name_guessing(self):
+        peer = 'private DevExpress.XtraEditors.ButtonEdit button; private DevExpress.XtraGrid.Views.Grid.GridView view; private System.Windows.Forms.Panel panel;'
+        for statement, kind in [('this.button.Properties.Buttons[0].Enabled = false;', 'csharp-control'),
+                                ('this.view.TileTemplate[0].Appearance.Normal.Font = fontUser;', 'csharp-grid'),
+                                ('this.panel.Controls.Add(this.button);', 'csharp-control'),
+                                ('this.view.BestFitColumns();', 'csharp-grid')]:
+            self.assertIn(kind, control_work('', statement, peer), statement)
+        self.assertEqual(set(), control_work('', 'dto.Buttons[0].Enabled = false; helper.ApplyGridControlFont(dto, font);'))
+        for statement in ('return this.view.GetFocusedDataRow();', 'return this.view.ToString();', 'return GetDataTable(this.view);'):
+            self.assertEqual(set(), control_work('', statement, peer), statement)
+
+    def test_blank_boundaries_and_standard_powershell_reads_preserve_provenance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'Reference.cs'
+            target = Path(folder) / 'Screen.cs'
+            body = '\nclass Reference\n\n{\n int Read() { return 1; }\n\n}\n\n'
+            source.write_text(body, encoding='utf-8')
+            for command in (f"Get-Content -Encoding UTF8 -LiteralPath '{source}'", f"Get-Content -Raw '{source}'", f"(Get-Content '{source}')[0..50]", f"Get-Content -TotalCount 50 -Path '{source}'"):
+                state = {'application_epoch': 'current'}
+                applied = register(state, epoch='current', work=['csharp-code'], targets=[str(target)], cwd=folder)
+                select_references(state, applied, [str(source)], folder)
+                event = {'cwd': folder, 'tool_name': 'exec_command', 'tool_input': {'cmd': command}}
+                self.assertEqual([source.resolve()], read_paths(event))
+                observe_references(state, '\n'.join(body.splitlines()[:4]).strip(), event)
+                self.assertTrue(reference_problem(state, target))
+                observe_references(state, '\n'.join(body.splitlines()[4:]).strip(), event)
+                self.assertEqual('', reference_problem(state, target))
+                bodies, _dependencies, problems = observed_comparisons(state, target)
+                self.assertIn('class Reference', bodies['csharp'])
+                self.assertEqual([], problems)
+
     def test_framework_creation_and_actual_receiver_changes_expand_control_work(self):
         before = 'class Screen { void Run() { } }'
         after = 'class Screen { void Run() { DevExpress.XtraEditors.TextEdit edit = new DevExpress.XtraEditors.TextEdit(); edit.Enabled = false; } }'

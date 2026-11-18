@@ -69,8 +69,8 @@ class DesignerEdgeTests(unittest.TestCase):
         self.assertFalse(result.metadata['project_style_verified'])
 
     def test_new_code_behind_font_assignment_is_reviewed(self):
-        before = 'class Form { void Load() {\n} }'
-        after = 'class Form { void Load() {\nthis.btn.Font = new System.Drawing.Font("Arial", 10F);\n} }'
+        before = 'class Form { private System.Windows.Forms.Button btn; void Load() {\n} }'
+        after = 'class Form { private System.Windows.Forms.Button btn; void Load() {\nthis.btn.Font = new System.Drawing.Font("Arial", 10F);\n} }'
         self.assertIn('static_ui_in_code_behind_review', [i.code for i in check_csharp(after, original=before).issues])
 
     def test_preservation_without_original_is_incomplete(self):

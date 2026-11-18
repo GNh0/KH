@@ -10,7 +10,7 @@ DOMAINS = {'.sql': 'sql-formatting', '.cs': 'csharp-designer-style-harness',
            '.srd': 'pb-to-csharp-migration-harness', '.srw': 'pb-to-csharp-migration-harness',
            '.sru': 'pb-to-csharp-migration-harness', '.srf': 'pb-to-csharp-migration-harness'}
 COMMON_EVENTS = frozenset({'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
-                           'PreCompact', 'Stop', 'SessionEnd'})
+                           'PreCompact', 'Stop', 'SubagentStop', 'SessionEnd'})
 HOOK_EVENTS = {'codex': COMMON_EVENTS | {'Interrupt'},
                'claude': COMMON_EVENTS | {'UserPromptExpansion', 'PostToolUseFailure'}}
 QUOTES = {'"': '"', "'": "'", '“': '”', '‘': '’'}
@@ -129,7 +129,7 @@ def _invocation_text(prompt: str) -> str:
 
 
 def explicit_skill_requests(event: dict, host: str, *, plugin_root: Path) -> set[str]:
-    """Recognize fresh user invocation intent; delivery still needs separate evidence."""
+    """Recognize invocation tokens; delivery/application need separate evidence."""
     if host != 'codex' or event.get('hook_event_name') != 'UserPromptSubmit':
         return set()
     prompt = event.get('prompt')

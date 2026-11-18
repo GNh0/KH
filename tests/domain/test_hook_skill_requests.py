@@ -9,7 +9,7 @@ from unittest.mock import patch
 from src.context.store import Store, session_key
 from src.runtime.hooks import CYCLE, ROOT, handle
 from src.runtime.skill_usage import explicit_skill_requests
-from hook_application_fixture import apply_files
+from tests.domain.hook_application_fixture import apply_files
 
 
 class ExplicitSkillTests(unittest.TestCase):
@@ -109,7 +109,7 @@ class ExplicitSkillTests(unittest.TestCase):
         self.assertEqual([], self.state()['kh_used_skills'])
         self.assertEqual({}, self.state().get('native_skill_reads', {}))
         self.assertEqual([], self.state()['skills_seen'])
-        self.assertEqual({}, self.write('.sql'))
+        self.assertNotIn('permissionDecision', self.write('.sql').get('hookSpecificOutput', {}))
         apply_files(self.scope, 'codex', ['sql-select'], [self.project / 'Target.sql'], deliver=False)
         denied = self.write('.sql')['hookSpecificOutput']
         self.assertEqual('deny', denied['permissionDecision'])
@@ -142,10 +142,11 @@ class ExplicitSkillTests(unittest.TestCase):
         self.assertTrue(self.state()['paused'])
         self.assertIn('paused', self.write('.sql')['hookSpecificOutput']['permissionDecisionReason'])
 
-    def test_pb_selection_does_not_apply_unregistered_output_files(self):
+    def test_pb_selection_requires_registration_only_for_native_pb_files(self):
         self.event('UserPromptSubmit', prompt='$pb-to-csharp-migration-harness migrate', turn_id='first')
-        for suffix in ('.sql', '.cs', '.srw'):
+        for suffix in ('.sql', '.cs'):
             self.assertEqual({}, self.write(suffix))
+        self.assertNotIn('permissionDecision', self.write('.srw').get('hookSpecificOutput', {}))
         apply_files(self.scope, 'codex', ['pb-edit'], [self.project / 'Target.srw'], deliver=False)
         self.assertEqual('deny', self.write('.srw')['hookSpecificOutput']['permissionDecision'])
         self.assertEqual({}, self.write('.sql'))

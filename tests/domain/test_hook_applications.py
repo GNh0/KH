@@ -48,20 +48,33 @@ class ApplicationTests(unittest.TestCase):
                 '--data-root', str(self.root / 'data/context-v1')]
         if epoch is not None:
             args.extend(['--epoch', epoch])
+        if data.get('agent_id'):
+            args.extend(['--agent-id', data['agent_id']])
         result = subprocess.run([*args, *command], capture_output=True, text=True, encoding='utf-8',
                                 timeout=20, cwd=self.project)
         return result.returncode, json.loads(result.stdout)
 
     def apply(self, work, targets):
         args = ['apply']
+        if set(work) & {'sql-select', 'sql-save'}:
+            args.extend(['--author', 'Fixture Writer', '--reference-author', 'Fixture Writer'])
         for kind in work:
             args.extend(['--work', kind])
         for path in targets:
             args.extend(['--target', str(path)])
         references = []
-        for suffix in {path.suffix for path in targets}:
-            reference = self.project / ('Reference' + suffix)
-            reference.write_text('class Reference { public int Read() { return 1; } }\n' if suffix == '.cs' else 'SELECT A.VALUE FROM REFERENCE_ROWS A;\n' if suffix == '.sql' else 'global type reference from window\nend type\n', encoding='utf-8')
+        suffixes = {path.suffix for path in targets} | ({'.sru'} if 'pb-migrate' in work else set())
+        for suffix in suffixes:
+            layout = suffix == '.cs' and any(path.name.casefold().endswith('.designer.cs') for path in targets)
+            reference = self.project / ('Reference.Designer.cs' if layout else 'Reference' + suffix)
+            body = 'class Reference { public int Read() { return 1; } }\n' if suffix == '.cs' else 'SELECT A.VALUE FROM REFERENCE_ROWS A;\n' if suffix == '.sql' else 'global type reference from window\nend type\n'
+            if layout:
+                body = 'partial class Reference { private DevExpress.XtraEditors.TextEdit txtItem; void InitializeComponent() { this.txtItem = new DevExpress.XtraEditors.TextEdit(); this.txtItem.Size = new System.Drawing.Size(150, 25); } }\n'
+            if suffix == '.sql':
+                body = '-- =============================================\n-- AUTHOR: Fixture Writer\n-- CREATE DATE: 2026-11-18\n-- DESCRIPTION: Fixture query 조회\n-- =============================================\nCREATE PROCEDURE dbo.Reference_SELECT AS\n' + body
+                if 'sql-save' in work:
+                    body += 'UPDATE REFERENCE_ROWS SET VALUE = 1;\n'
+            reference.write_text(body, encoding='utf-8')
             args.extend(['--reference', str(reference)])
             references.append(reference)
         status, result = self.command(args, epoch=self.state()['application_epoch'])
@@ -100,7 +113,25 @@ class ApplicationTests(unittest.TestCase):
         self.event('UserPromptSubmit', prompt='$sql-formatting inspect its instructions', turn_id='explicit-review')
         self.assertEqual(['sql-formatting'], self.state()['requested_skills'])
         self.assertEqual([], self.state()['kh_used_skills'])
-        self.assertEqual({}, self.write(self.project / 'Other.sql'))
+        self.assert_unchecked(self.write(self.project / 'Other.sql'))
+
+    def test_child_stop_uses_observed_child_scope_and_preserves_parent(self):
+        self.scope['agent_id'] = 'child-with-owned-sql'
+        self.read('sql-formatting/SKILL.md')
+        target = self.project / 'Child.sql'
+        target.write_text('SELECT 1;', encoding='utf-8')
+        self.load_required(self.apply(['sql-format'], [target]))
+        self.assertEqual({}, self.write(target))
+        target.write_text('SELECT 2;', encoding='utf-8')
+        self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(target)}, tool_response='saved')
+        parent_log = self.root / 'parent.jsonl'
+        parent_log.write_text('', encoding='utf-8')
+        stopped = self.event('SubagentStop', transcript_path=str(parent_log), agent_transcript_path=str(self.log))
+        self.assertEqual('block', stopped['decision'])
+        parent = {key: value for key, value in self.scope.items() if key != 'agent_id'}
+        parent['transcript_path'] = str(parent_log)
+        self.assertEqual({}, handle({**parent, 'hook_event_name': 'Stop'}, self.host))
+        self.assertEqual({}, handle({**parent, 'agent_id': 'another-child', 'hook_event_name': 'SubagentStop'}, self.host))
 
     def test_designer_minimum_references_cannot_be_omitted_by_code_kind(self):
         hint = self.read('csharp-designer-style-harness/SKILL.md')
@@ -208,7 +239,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertIn('paused', result['message'])
         self.assertTrue(self.state()['paused'])
 
-    def test_claude_native_delivery_is_availability_until_actual_application(self):
+    def test_claude_native_delivery_requires_registration_without_auto_applying(self):
         self.host = 'claude'
         self.event('PostToolUse', tool_name='Skill', tool_input={'skill': 'kh-skills:sql-formatting'}, tool_response={})
         self.assertEqual([], self.state()['kh_used_skills'])
@@ -231,6 +262,26 @@ class ApplicationTests(unittest.TestCase):
         self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(target)}, tool_response=target.read_text(encoding='utf-8'))
         self.assertIn('sql_meaning_tokens_changed', json.dumps(self.state()['files']))
         self.assertEqual('block', self.event('Stop')['decision'])
+
+    def test_selected_comparison_reaches_checker_and_new_ownership_invalidates_cache(self):
+        self.read('csharp-designer-style-harness/SKILL.md')
+        target = self.project / 'Screen.cs'
+        target.write_text('class Screen { int Read() { return 1; } }', encoding='utf-8')
+        result = self.apply(['csharp-code'], [target])
+        self.load_required(result)
+        edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(target),
+                'content': 'class Screen { int Read() { return 2; } }'}}
+        self.assertEqual({}, self.event('PreToolUse', **edit))
+        target.write_text(edit['tool_input']['content'], encoding='utf-8')
+        self.event('PostToolUse', **edit)
+        check = self.state()['files'][str(target)]['check']
+        self.assertTrue(check['comparison_baselines']['command_style_reference'])
+        reference = self.project / 'Reference.cs'
+        code, _result = self.command(['apply', '--work', 'csharp-code', '--target', str(reference)], epoch=self.state()['application_epoch'])
+        self.assertEqual(0, code)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(target)}, tool_response=target.read_text(encoding='utf-8'))
+        check = self.state()['files'][str(target)]['check']
+        self.assertFalse(check['comparison_baselines'].get('command_style_reference'))
 
     def test_plain_method_work_needs_only_its_relevant_coding_sections(self):
         self.read('csharp-designer-style-harness/SKILL.md')
@@ -323,7 +374,7 @@ class ApplicationTests(unittest.TestCase):
         proc_patch = '*** Add File: ' + str(procedure) + '\n+CREATE PROCEDURE dbo.P AS SELECT 1;\n'
         def proposed(body):
             return self.event('PreToolUse', tool_name='apply_patch', tool_input={'command': '*** Begin Patch\n' + body + '*** End Patch'})
-        self.assertEqual({}, proposed(query_patch + proc_patch))  # Unregistered procedure has no authority over this query.
+        self.assert_unchecked(proposed(query_patch + proc_patch))  # Coverage notice does not apply the other procedure.
         result = self.apply(['sql-select'], [procedure])
         self.load_required(result)
         self.assertEqual({}, proposed(proc_patch + query_patch))  # Registered procedure owns its separate requirements.
@@ -388,7 +439,7 @@ class ApplicationTests(unittest.TestCase):
         denied = self.event('PreToolUse', tool_name='apply_patch', tool_input={'command': patch})
         self.assertIn('sql-select/sql-save', denied['hookSpecificOutput']['permissionDecisionReason'])
         self.load_required(self.apply(['sql-select'], [target]))
-        self.assertEqual({}, self.event('PreToolUse', tool_name='apply_patch', tool_input={'command': patch}))
+        self.assert_unchecked(self.event('PreToolUse', tool_name='apply_patch', tool_input={'command': patch}))
 
     def test_declared_method_scope_expands_for_actual_control_change(self):
         self.read('csharp-designer-style-harness/SKILL.md')
@@ -418,6 +469,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual('requires_repair_or_evidence', self.state()['completion_status'])
         self.assertFalse(self.state()['semantic_audit_verified'])
         self.load_required(self.apply(['csharp-code'], [target]))
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(target)}, tool_response=content)
         self.assertEqual({}, self.event('Stop'))
         self.assertEqual('checks_complete', self.state()['last_file_checks_outcome'])
         self.assertFalse(self.state()['semantic_audit_verified'])
@@ -443,6 +495,7 @@ class ApplicationTests(unittest.TestCase):
         self.event('PreToolUse', tool_name='Write', tool_input={'file_path': str(target), 'content': first})
         target.write_text(first, encoding='utf-8')
         self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(target)}, tool_response=first)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(target)}, tool_response=first)
         self.assertEqual({}, self.event('Stop'))
         self.assertEqual('checks_complete_audit_unverified', self.state()['completion_status'])
         second = 'class Calculation { int Read() { if (flag) return 3; return 2; } }'
@@ -469,7 +522,8 @@ class ApplicationTests(unittest.TestCase):
         code, result = self.command(['apply', '--work', 'csharp-control', '--target', str(target)], epoch=self.state()['application_epoch'])
         self.assertEqual(0, code, result)
         self.assertIn('csharp-control', result['files'][0]['comparison_evidence_missing'])
-        code, result = self.command(args + ['--reference', reference['path']], epoch=self.state()['application_epoch'])
+        code, result = self.command(['apply', '--work', 'csharp-control', '--target', str(target),
+                                     '--reference', reference['path']], epoch=self.state()['application_epoch'])
         self.assertEqual(0, code, result)
         self.assertEqual(read_sha, result['files'][0]['comparison_sources'][0]['read_sha256'])
         self.assertFalse(result['files'][0]['comparison_evidence_missing'])

@@ -21,7 +21,7 @@ from src.runtime.workflows import (CYCLE, SCOPE_VERSION, application_hint, appli
                                    binding, guidance_paths, new_epoch, required_paths)
 from src.runtime.workflows import routing_problem
 from src.runtime.guidance import document, location
-from src.runtime.source_evidence import control_work, observe_references, reference_problem
+from src.runtime.source_evidence import control_work, observe_references, reference_problem, owned_source, successful_read_paths
 
 ROOT = Path(__file__).resolve().parents[2]
 FILE_LIMIT = 1024 * 1024
@@ -282,19 +282,28 @@ def pending_writes(state: dict, domains: set[str], baselines: SourceBaselines,
 
 def inspect(path: Path, text: str, *, original: str | None = None, peer: str | None = None,
             original_peer: str | None = None, control_sources: list[str] | None = None,
-            preserve_semantics: bool = False) -> dict:
+            preserve_semantics: bool = False, style_comparisons: dict[str, str] | None = None,
+            require_procedure_header: bool = False, procedure_author: str | None = None) -> dict:
+    comparisons = style_comparisons or {}
     suffix = path.suffix.casefold()
     if suffix == '.sql':
         from src.sql.checks import check_sql
-        result = check_sql(text, original=original, compare_original=preserve_semantics)
+        result = check_sql(text, original=original, compare_original=preserve_semantics,
+                           require_procedure_header=require_procedure_header, procedure_author=procedure_author,
+                           procedure_changes_only=True)
     elif suffix == '.cs':
         if path.name.casefold().endswith('.designer.cs'):
             from src.csharp.designer import check_designer
-            result = check_designer(text, original=original, code_behind=peer or '', control_sources=control_sources or [])
+            result = check_designer(text, original=original, code_behind=peer or '', control_sources=control_sources or [],
+                                    style_reference=comparisons.get('designer'))
         else:
             from src.csharp.checks import check_csharp
             result = check_csharp(text, original=original, designer=peer,
-                                  original_designer=original_peer, control_sources=control_sources or [])
+                                  original_designer=original_peer, control_sources=control_sources or [],
+                                  style_reference_csharp=comparisons.get('csharp'),
+                                  style_reference_designer=comparisons.get('designer') if peer is not None else None,
+                                  style_references={key.partition(':')[2]: value for key, value in comparisons.items()
+                                                    if key.startswith('csharp:')})
     else:
         from src.pb.checks import check_pb_export
         result = check_pb_export(text, path=str(path))
@@ -302,9 +311,12 @@ def inspect(path: Path, text: str, *, original: str | None = None, peer: str | N
     warnings = Counter(item.code for item in result.issues if item.severity == 'warning')
     ordered = sorted(result.issues, key=lambda issue: {'error': 0, 'warning': 1, 'info': 2}[issue.severity])
     return {'status': result.status if errors else 'review_required' if warnings else result.status,
+            **({'procedure_header_scope': result.metadata['procedure_header_scope']} if 'procedure_header_scope' in result.metadata else {}),
             'errors': list(errors), 'warnings': list(warnings),
             'warning_counts': dict(warnings),
-            'findings': [item.to_dict() for item in ordered[:8]],
+            'findings': [{**item.to_dict(), 'path': str(companion(path) if
+                item.details.get('source_artifact') == 'designer' and not path.name.casefold().endswith('.designer.cs') and companion(path) is not None else path)}
+                for item in ordered[:8]],
             'finding_count': len(result.issues),
             'incomplete': result.incomplete, 'not_checked': result.not_checked[:8],
             'not_checked_count': len(result.not_checked),
@@ -313,10 +325,11 @@ def inspect(path: Path, text: str, *, original: str | None = None, peer: str | N
 
 
 def update_files(state: dict, paths: list[Path], returned: str = '', before: dict | None = None,
-                 baselines: SourceBaselines | None = None) -> list[str]:
+                 baselines: SourceBaselines | None = None, event: dict | None = None) -> list[str]:
     messages = []
     files = state.setdefault('files', {})
     generation = checker_generation()
+    reads = successful_read_paths(event) if event is not None else None
     for path in paths:
         name = str(path)
         if name not in files and len(files) >= MAX_FILES:
@@ -337,7 +350,12 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
             works = application.get('work', []) if application else []
             requirements = {relative: hashlib.sha256(document(ROOT, relative)[1].encode('utf-8')).hexdigest()
                             for relative in prerequisites_for(state, path)}
-            application_generation = hashlib.sha256(json.dumps([works, requirements], sort_keys=True).encode()).hexdigest()
+            reference_generation = [{key: ref.get(key) for key in ('path', 'start', 'end', 'source_sha256', 'read_sha256', 'work', 'control_definition')}
+                                    for ref in application.get('references', [])] if application else []
+            for ref in reference_generation:
+                ref['owned'] = owned_source(state, Path(ref['path']))
+            application_generation = hashlib.sha256(json.dumps([works, requirements, reference_generation,
+                (application or {}).get('sql_authorship', state.get('sql_authorship')) if path.suffix.casefold() == '.sql' and set(works) & {'sql-select', 'sql-save'} else None], sort_keys=True).encode()).hexdigest()
             needs_check = (generation is None or item.get('checker_generation') != generation or
                            had_error or sha != item.get('sha256') or peer_sha != item.get('peer_sha256') or
                            dependencies_changed or project_candidates != item.get('project_candidates') or
@@ -362,8 +380,19 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
                 state['semantic_audit_verified'] = False
                 original_peer = baselines.original(peer_path) if baselines is not None and peer_path is not None else None
                 controls, project = literal_project_sources(path, [text, peer_text]) if path.suffix.casefold() == '.cs' else ([], {})
+                from src.runtime.source_evidence import observed_comparisons, observed_control_sources
+                comparisons, reference_dependencies, reference_warnings = observed_comparisons(state, path) if path.suffix.casefold() == '.cs' else ({}, [], [])
+                selected_controls, control_dependencies, control_warnings = observed_control_sources(state, path) if path.suffix.casefold() == '.cs' else ([], [], [])
+                inferred_paths = {Path(entry['path']).resolve() for entry in project.get('sources', [])}
+                controls.extend(body for body, dependency in zip(selected_controls, control_dependencies)
+                                if Path(dependency['path']).resolve() not in inferred_paths)
+                reference_dependencies.extend(control_dependencies)
+                reference_warnings.extend(control_warnings)
                 item['check'] = inspect(path, text, original=original, peer=peer_text if peer_sha not in {'', 'deleted'} else None,
                                         original_peer=original_peer, control_sources=controls,
+                                        style_comparisons=comparisons,
+                                        require_procedure_header=path.suffix.casefold() == '.sql' and bool(set(works) & {'sql-select', 'sql-save'}),
+                                        procedure_author=(application or {}).get('sql_authorship', state.get('sql_authorship', {})).get('author'),
                                         preserve_semantics=set(works) & {'sql-format', 'sql-query', 'sql-select', 'sql-save'} == {'sql-format'}) if sha != 'deleted' else {}
                 item['routing_problem'] = routing_problem(state, path, text)
                 item['checker_generation'] = generation
@@ -375,26 +404,33 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
                     item['check']['automatic_context'] = {
                         'original': original is not None,
                         'companion': str(peer_path) if peer_path is not None and peer_sha != 'deleted' else None,
-                        'control_sources': [entry['path'] for entry in project.get('sources', [])[:4]],
-                        'control_source_count': len(project.get('sources', [])),
+                        'control_sources': list(dict.fromkeys(entry['path'] for entry in [*project.get('sources', []), *control_dependencies]))[:4],
+                        'control_source_count': len({entry['path'] for entry in [*project.get('sources', []), *control_dependencies]}),
                     }
-                    missing = project.get('unverified', [])
+                    missing = [*reference_warnings, *project.get('unverified', [])]
+                    if reference_warnings:
+                        item['check']['incomplete'] = True
+                        if not item['check']['errors']:
+                            item['check']['status'] = 'incomplete'
+                    item['check']['automatic_context']['comparison_sources'] = reference_dependencies
                     item['check']['not_checked'] = (missing + item['check']['not_checked'])[:8]
                     item['check']['not_checked_count'] += len(missing)
                 item['check_dependencies'] = [
                     {'path': dependency, 'sha256': snapshot(Path(dependency))[0]}
                     for dependency in dict.fromkeys(entry['path'] for entry in project.get('dependencies', []))]
+                item['check_dependencies'].extend(reference_dependencies)
                 if sha != 'deleted':
                     messages.append(name + ': ' + json.dumps({**item['check'], 'read_scope': item['read_scope']}, ensure_ascii=False))
-            returned_body = undecorated(returned)
-            if sha == 'deleted' or (text.strip() and (normalized(text) in normalized(returned) or
+            file_returned = returned if reads is None or any(path.resolve() == read for read in reads) else ''
+            returned_body = undecorated(file_returned)
+            if sha == 'deleted' or (text.strip() and (normalized(text) in normalized(file_returned) or
                                                      undecorated(text) in returned_body)):
                 item['readback'] = sha
                 item['pending_spans'] = []
                 item['read_buffer'] = []
                 item['numbered_seen'] = []
-            elif item.get('pending_spans') and returned:
-                tokens, positions = returned_line_hashes(returned, item['line_hashes'])
+            elif item.get('pending_spans') and file_returned:
+                tokens, positions = returned_line_hashes(file_returned, item['line_hashes'])
                 stream = item.get('read_buffer', []) + tokens
                 numbered = set(item.get('numbered_seen', [])) | positions
                 item['numbered_seen'] = sorted(numbered)
@@ -525,6 +561,7 @@ def clear_usage(state: dict) -> None:
     state['kh_used_skills'] = []
     state['native_skill_reads'] = {}
     state['requested_skills'] = []
+    state.pop('write_registration_domains', None)
     state['applications'] = {}
     state.pop('application_errors', None)
     state.pop('application_failure_hashes', None)
@@ -612,7 +649,17 @@ def handle(event: dict, host: str) -> dict:
     with store.connect(create=create) as connection:
         if connection is None:
             return {}
+        if name == 'SubagentStop':
+            child_key = store.agent_scope(connection, event, host)
+            if child_key is None:
+                return {}  # No observed KH application for this exact child.
+            key = child_key
+            child_transcript = event.get('agent_transcript_path')
+            if isinstance(child_transcript, str) and child_transcript:
+                event = {**event, 'transcript_path': child_transcript}
         state = store.load(connection, key)
+        if name != 'SubagentStop' and state.get('applications'):
+            store.agent_scope(connection, event, host, key=key)
         discard_host_records(state)
         if name == 'PostToolUseFailure' and event.get('is_interrupt') is True:
             state['paused'] = True
@@ -649,6 +696,9 @@ def handle(event: dict, host: str) -> dict:
         unapplied = [path for path in paths if not applied_path(state, path)]
         paths = [path for path in paths if applied_path(state, path)]
         unresolved = unresolved if paths else []
+        # A skill token/read/native selection does not identify which files the
+        # user actually asked to develop. Enforce only explicit applications;
+        # the unregistered-path notice below leaves them unverified, not passed.
         if name == 'PreToolUse' and state.get('paused') and paths:
             reason = 'KH task remains paused. Resume only after explicit user authorization; no source inspection was started.'
             output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
@@ -761,7 +811,7 @@ def handle(event: dict, host: str) -> dict:
             paths = list(dict.fromkeys([*recovered, *paths]))
             active = state['files'] if domains and not state.get('scope_reset_pending') and not state.get('check_epoch_closed') else {}
             messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in active), *paths])), returned, baseline,
-                                    baselines=baselines)
+                                    baselines=baselines, event=event)
             if paths:
                 capture(state, event, host)
             if messages:
@@ -815,7 +865,7 @@ def handle(event: dict, host: str) -> dict:
             if isinstance(prompt, str) and prompt.strip() and new_turn:
                 new_epoch(state)
             observe_usage('\n', state)  # Re-evaluate accumulated body evidence after resolving pending delivery.
-            # This is selection intent, not evidence that the host delivered SKILL.md.
+            # Invocation tokens alone establish neither delivery nor development scope.
             state['requested_skills'] = sorted(set(state.get('requested_skills', [])) | explicit)
             previous_user_sequence = max((item['seq'] for item in state['users']), default=0)
             capture(state, event, host)
@@ -844,14 +894,17 @@ def handle(event: dict, host: str) -> dict:
                     output = context(name, text)
                 if compact:
                     state['restore_pending'] = False
-        elif name == 'Stop' and domains and not state.get('paused') and not state.get('check_epoch_closed'):
+        elif name in {'Stop', 'SubagentStop'} and domains and not state.get('paused') and not state.get('check_epoch_closed'):
             state['stop_observed'] = True
             recovered, baseline = pending_writes(state, domains, baselines)
             update_files(state, list(dict.fromkeys([*(Path(path) for path in state['files']), *recovered])),
                          before=baseline, baselines=baselines)
             pending = []
+            hard_pending = []
             for path, item in state['files'].items():
                 check = item.get('check', {})
+                if item.get('error') or item.get('routing_problem') or (item.get('pending_spans') and item.get('readback') != item.get('sha256')) or check.get('errors'):
+                    hard_pending.append(path)
                 if item.get('error') or item.get('routing_problem') or (item.get('pending_spans') and item.get('readback') != item.get('sha256')) or check.get('errors') or check.get('warnings') or check.get('incomplete'):
                     pending.append(path)
             seen = current_prerequisites('\n', state)
@@ -877,7 +930,8 @@ def handle(event: dict, host: str) -> dict:
                     reason += ' ' + ' '.join(problems)
                 if reference_errors:
                     reason += ' ' + ' '.join(reference_errors)
-                if mode == 'enforce' and not event.get('stop_hook_active') and state.get('stop_notice') != fingerprint:
+                hard_block = bool(hard_pending or missing_references or legacy or application_errors or reference_errors)
+                if mode == 'enforce' and not event.get('stop_hook_active') and (hard_block or state.get('stop_notice') != fingerprint):
                     state['stop_notice'] = fingerprint
                     output = {'decision': 'block', 'reason': reason}
                 else:
@@ -887,10 +941,12 @@ def handle(event: dict, host: str) -> dict:
                     retire_checks(state, baselines, 'checks_complete')
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
-        if name in {'Stop', 'SessionEnd'}:
+        if name in {'Stop', 'SubagentStop', 'SessionEnd'}:
             state['kh_scope_closed'] = True
             settle_native_usage(state)
-        if name == 'PreToolUse' and unapplied and not paths and not state.get('paused'):
+            if not state.get('files') and not state.get('before'):
+                state.pop('write_registration_domains', None)
+        if name == 'PreToolUse' and unapplied and not state.get('paused'):
             available_domains = {domain for domain in set(DOMAINS.values()) if domain + '/SKILL.md' in state.get('skills_seen', [])}
             notices = state.setdefault('coverage_notices', [])
             outside = [str(path) for path in unapplied if DOMAINS[path.suffix.casefold()] in available_domains and str(path) not in notices]

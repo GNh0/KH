@@ -16,6 +16,15 @@ class SqlPreservationTests(unittest.TestCase):
             ("CASE WHEN A.LIMIT_VALUE > 0 THEN A.LIMIT_VALUE WHEN A.LIMIT_VALUE IS NULL THEN 0 ELSE A.LIMIT_VALUE END", 'CASE'),
             ("CASE WHEN '' = A.LIMIT_TEXT THEN B.DEFAULT_TEXT ELSE A.LIMIT_TEXT END", 'CASE'),
             ("IIF(A.LIMIT_VALUE IS NULL, B.DEFAULT_LIMIT, A.LIMIT_VALUE)", 'IIF'),
+            ("CASE WHEN A.LIMIT_VALUE IS NOT NULL THEN (A.LIMIT_VALUE) ELSE 0 END", 'CASE'),
+            ("CASE WHEN NOT (A.LIMIT_VALUE IS NULL) THEN A.LIMIT_VALUE ELSE 0 END", 'CASE'),
+            ("CASE WHEN (A.LIMIT_TEXT) <> N'' THEN A.LIMIT_TEXT ELSE B.DEFAULT_TEXT END", 'CASE'),
+            ("IIF(A.LIMIT_VALUE IS NOT NULL, A.LIMIT_VALUE, B.DEFAULT_LIMIT)", 'IIF'),
+            ("IIF(N'' != A.LIMIT_TEXT, A.LIMIT_TEXT, B.DEFAULT_TEXT)", 'IIF'),
+            ("CASE WHEN A.LIMIT_VALUE IS NULL THEN 0 WHEN A.LIMIT_VALUE IS NOT NULL THEN A.LIMIT_VALUE END", 'CASE'),
+            ("CASE WHEN A.LIMIT_TEXT = '' THEN B.DEFAULT_TEXT WHEN A.LIMIT_TEXT <> '' THEN A.LIMIT_TEXT END", 'CASE'),
+            ("CASE WHEN A.LIMIT_VALUE IS NULL THEN 0 ELSE A.[LIMIT_VALUE] END", 'CASE'),
+            ('IIF(A.[LIMIT_VALUE] IS NOT NULL, A."LIMIT_VALUE", 0)', 'IIF'),
         ]:
             candidate = before.replace('SELECT A.LIMIT_VALUE', 'SELECT ' + expression)
             result = check_sql(candidate, original=before, compare_original=False)
@@ -39,6 +48,27 @@ class SqlPreservationTests(unittest.TestCase):
             "SELECT 'ISNULL(A.QTY, B.QTY)' -- COALESCE(A.QTY, 0)",
         ]:
             self.assertNotIn('value_fallback_review', {i.code for i in check_sql(source).issues}, source)
+
+    def test_null_status_classification_is_not_a_value_substitution(self):
+        for expression in [
+            'MAX(CASE WHEN T.STRDT IS NOT NULL AND T.ENDDT IS NULL THEN 1 ELSE 0 END)',
+            'MAX(CASE WHEN T.ENDDT IS NOT NULL THEN 1 ELSE 0 END)',
+            "(CASE WHEN A.STRDT IS NULL THEN '대기' WHEN A.ENDDT IS NULL THEN '작업중' ELSE '종료' END)",
+            "IIF(A.STRDT IS NULL, '대기', '시작')",
+            'CASE WHEN A.QTY IS NULL THEN A.QTY ELSE 0 END',
+            'CASE WHEN A.QTY IS NULL THEN A.QTY ELSE A.QTY END',
+            'CASE WHEN A.QTY IS NOT NULL THEN A.QTY END',
+            'CASE WHEN A.QTY IS NULL THEN A.QTY WHEN A.QTY IS NOT NULL THEN A.QTY END',
+            "CASE WHEN A.QTY IS NULL THEN 0 ELSE 'A.QTY' END",
+            'CASE WHEN A.STRDT IS NULL THEN 0 ELSE CASE WHEN A.ENDDT IS NULL THEN 1 ELSE 2 END END',
+        ]:
+            with self.subTest(expression=expression):
+                result = check_sql('SELECT ' + expression + ' AS STATE FROM WORK_ROWS A', compare_original=False)
+                self.assertNotIn('value_fallback_review', {i.code for i in result.issues})
+        # A legitimate classifier does not hide a nested actual fallback.
+        sql = 'SELECT CASE WHEN A.STRDT IS NULL THEN ISNULL(A.QTY, 0) ELSE 1 END FROM WORK_ROWS A'
+        findings = [i for i in check_sql(sql).issues if i.code == 'value_fallback_review']
+        self.assertEqual(['ISNULL'], [i.details['form'] for i in findings])
 
     def test_new_xml_action_is_compared_with_established_preparation_boundary(self):
         staged = """DECLARE @ROWS TABLE (ID INT);

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.output import configure_utf8_streams, redact
 from src.context.store import Store, data_root, session_key
 from src.context.transcript import capture, discard_host_records, recent_users
-from src.runtime.workflows import WORK, register
+from src.runtime.workflows import WORK, register, binding
 
 
 def main(argv=None):
@@ -30,6 +30,8 @@ def main(argv=None):
     apply.add_argument('--work', choices=sorted(WORK), action='append', required=True)
     apply.add_argument('--target', action='append', required=True)
     apply.add_argument('--reference', action='append', default=[], help='actual comparison source, optionally #Lstart-Lend; selection does not establish a read or approval')
+    apply.add_argument('--author', help='SP author explicitly supplied by the user; paired with --reference-author on first selection')
+    apply.add_argument('--reference-author', help='user-selected author of actual comparison SPs, possibly the same person')
     get = sub.add_parser('get', help='retrieve one archived user record without preview shortening')
     get.add_argument('seq', type=int)
     memory_get = sub.add_parser('memory-get')
@@ -69,8 +71,20 @@ def main(argv=None):
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0)}
             elif args.command == 'apply':
                 applied = register(state, epoch=args.epoch, targets=args.target, work=args.work, cwd=args.cwd)
+                if args.author is not None or args.reference_author is not None:
+                    if not any(set(item['work']) & {'sql-select', 'sql-save'} for item in applied):
+                        raise ValueError('Author selection belongs to actual SP work, not formatting-only or non-SP work.')
+                    from src.sql.procedure_authorship import selected_authors
+                    state['sql_authorship'] = selected_authors(args.author, args.reference_author)
+                for item in applied:
+                    if set(item['work']) & {'sql-select', 'sql-save'}:
+                        application = binding(state, Path(item['target']))
+                        if application is not None and state.get('sql_authorship') and (
+                                args.author is not None or 'sql_authorship' not in application):
+                            application['sql_authorship'] = dict(state['sql_authorship'])
+                        item['sql_authorship'] = (application or {}).get('sql_authorship')
                 from src.runtime.source_evidence import select_references, reference_problem
-                select_references(state, applied, args.reference, args.cwd)
+                select_references(state, applied, args.reference, args.cwd, work=args.work)
                 from src.runtime.check_context import SourceBaselines, companion
                 from src.runtime.hooks import line_hashes, snapshot, current_prerequisites
                 from src.runtime.guidance import document
@@ -119,8 +133,10 @@ def main(argv=None):
                 store.save(connection, key, state)
                 output = {'status': 'error' if state.get('application_errors') else 'applied',
                           'session_key': key, 'storage': str(store.path), 'files': applied,
+                          'sql_authorship': state.get('sql_authorship'),
                           'original_errors': state.get('application_errors', {}),
                           'note': 'Intent only. Read the required current references; this is not a source/semantic audit pass.'}
+                store.agent_scope(connection, event, args.host, key=key)
             elif args.command == 'resume':
                 state['paused'] = False
                 state.pop('stop_notice', None)
@@ -161,6 +177,7 @@ def main(argv=None):
                           'completion_status': state.get('completion_status', 'no_current_completion_claim'),
                           'semantic_audit_verified': False,
                           'audit_note': 'Static checks and observed reference/readback evidence do not establish semantic necessity, source approval, full comparison or regression audit.',
+                          'sql_authorship': state.get('sql_authorship'),
                           'requested_skills': state.get('requested_skills', []),
                           'available_prerequisites': sorted(available),
                           'application_original_errors': state.get('application_errors', {}),
@@ -169,6 +186,7 @@ def main(argv=None):
                               'inferred_work': item.get('inferred_work', []),
                               'missing_references': sorted(required_paths(item, Path(item.get('target', path))) - available),
                               'comparison_evidence_missing': reference_problem(state, Path(item.get('target', path))),
+                              'sql_authorship': item.get('sql_authorship', state.get('sql_authorship')),
                               'comparison_sources': [{key: ref.get(key) for key in ('path', 'start', 'end', 'work', 'source_sha256', 'read_sha256')}
                                   for ref in item.get('references', [])]}
                               for path, item in state.get('applications', {}).items()},

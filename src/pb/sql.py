@@ -13,7 +13,11 @@ def procedure_parameters(sql: str) -> dict[str, bool]:
     start = next((i for i, t in enumerate(tokens) if t.normalized in {'PROC', 'PROCEDURE'}), None)
     if start is None:
         raise ValueError('A procedure definition is required')
-    finish = next((i for i in range(start + 1, len(tokens)) if tokens[i].normalized == 'AS' and tokens[i].depth == 0), None)
+    tokens = [token for token in tokens if token.kind not in {'line_comment', 'block_comment'}]
+    start = next(i for i, token in enumerate(tokens) if token.normalized in {'PROC', 'PROCEDURE'})
+    finish = next((i for i in range(start + 1, len(tokens))
+                   if tokens[i].kind == 'word' and tokens[i].normalized == 'AS' and tokens[i].depth == 0
+                   and not tokens[i - 1].text.startswith('@') and tokens[i - 1].normalized != 'EXECUTE'), None)
     if finish is None:
         raise ValueError('Procedure AS body boundary was not found')
     result = {}

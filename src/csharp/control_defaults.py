@@ -10,7 +10,7 @@ import re
 from src.common.results import Issue
 from .control_style import direct_statement_spans
 from .control_names import SINGLE_LINE_INPUT_KINDS, control_name_issue, known_control_kind
-from .designer_model import DesignerModel, _normalized_csharp_value, _parse_size
+from .designer_model import DesignerModel, _normalized_csharp_value, _parse_size, statically_hidden
 from .lexer import _scan_csharp, balanced_close, string_literal_value
 from .control_values import LABEL_PROPERTIES, label_value_key
 
@@ -107,6 +107,29 @@ def _inherited_defaults(control: ControlDefaults, defaults: Sequence[ControlDefa
     return props
 
 
+def _effective_size(model: DesignerModel, name: str,
+                    initial: tuple[int | None, int | None] = (None, None)) -> tuple[int | None, int | None]:
+    """Follow observed literal setters in source order; do not evaluate helpers."""
+    width, height = initial
+    for assignment in model.assignments:
+        if assignment['name'] != name:
+            continue
+        prop, value = assignment['property'], assignment['value']
+        if prop == 'Size':
+            dimensions = _parse_size(value)
+            width, height = dimensions if dimensions is not None else (None, None)
+        elif prop == 'Bounds':
+            rectangle = re.fullmatch(r'(?:new\s+)?(?:System\.Drawing\.)?Rectangle\s*\(\s*-?\d+\s*,\s*-?\d+\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', value.strip())
+            width, height = (int(rectangle[1]), int(rectangle[2])) if rectangle else (None, None)
+        elif prop in {'Width', 'Height'}:
+            number = int(value.strip()) if re.fullmatch(r'\d+', value.strip()) else None
+            if prop == 'Width':
+                width = number
+            else:
+                height = number
+    return width, height
+
+
 def check_control_defaults(model: DesignerModel, *, original: DesignerModel | None = None,
                           defaults: Sequence[ControlDefaults] = (),
                           allowed_property_changes: Iterable[str] = (),
@@ -118,7 +141,6 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
         before = original.controls.get(name) if original else None
         old = before.properties if before else {}
         new_type = before is None or not _same_type(before.type_name, control.type_name)
-        old_size = _parse_size(old.get('Size', '')) if not new_type else None
         matching = [item for item in defaults if _same_type(control.type_name, item.type_name)]
 
         def changed(prop: str) -> bool:
@@ -162,18 +184,36 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
         if len(matching) != 1:
             continue
         for prop, expected in _inherited_defaults(matching[0], defaults).items():
+            if statically_hidden(model, name) and (prop in {'Size', 'Height', 'Bounds', 'MinimumSize', 'MaximumSize', 'Font', 'Margin', 'Padding'} or prop.endswith('.Font')):
+                continue  # Binding/behavior/name checks above remain active.
+            if prop == 'Size' and check_style:
+                default_size = _parse_size(expected)
+                if default_size is not None and any(changed(key) for key in ('Size', 'Bounds', 'Width', 'Height')):
+                    effective = _effective_size(model, name, default_size)
+                    previous = _effective_size(original, name, default_size) if original and not new_type else (None, None)
+                    for index, dimension in enumerate(('Width', 'Height')):
+                        if index == 1 and (is_label or screen_height):
+                            continue  # Height uses the actual peer-screen contract.
+                        if any(f'{name}.{key}' in allowed for key in ('Size', 'Bounds', dimension)):
+                            continue
+                        prior = previous[index]
+                        floor = min(default_size[index], prior) if prior is not None else default_size[index]
+                        actual_dimension = effective[index]
+                        if actual_dimension is None:
+                            issues.append(Issue('user_control_size_unresolved', 'warning',
+                                'The final control dimension needs expression or helper evaluation before its default-size contract can be verified.',
+                                details={'property': f'{name}.{dimension}'}))
+                        elif actual_dimension < floor:
+                            issues.append(Issue('user_control_size_shrink', 'error',
+                                'The final observed control dimension is smaller than its supplied default; preserve the default unless compact sizing was explicitly requested.',
+                                details={'property': f'{name}.{dimension}', 'constructor_size': default_size,
+                                         'screen_size': effective}))
+                continue
             if prop in {'Name', 'Location', 'TabIndex', 'BindingField', 'DataPropertyName', 'EditValue'} or not changed(prop):
                 continue
             actual = control.properties[prop]
             equal = _normalized_csharp_value(actual) == _normalized_csharp_value(expected)
             if is_label and check_style and prop in LABEL_PROPERTIES:
-                if prop == 'Size':
-                    default_size, screen_size = _parse_size(expected), _parse_size(actual)
-                    width_floor = min(default_size[0], old_size[0]) if default_size and old_size else default_size[0] if default_size else None
-                    if width_floor is not None and screen_size is not None and screen_size[0] < width_floor:
-                        issues.append(Issue('user_control_size_shrink', 'error',
-                                            'The label width is smaller than its supplied constructor width; an explicit compact-size request can establish an exception.',
-                                            details={'property': f'{name}.Size', 'constructor_size': default_size, 'screen_size': screen_size}))
                 # Label height/font/alignment use the scoped constructor + approved screen comparison.
                 continue
             if is_label or prop == 'Font' or prop.endswith('.Font'):
@@ -182,18 +222,6 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
             if check_style and screen_height and prop in {'Height', 'Bounds', 'MinimumSize', 'MaximumSize'}:
                 # These height contracts are checked with actual screen evidence below.
                 continue
-            if check_style and prop == 'Size' and not equal:
-                default_size, screen_size = _parse_size(expected), _parse_size(actual)
-                if default_size is not None and screen_size is not None:
-                    floor = tuple(min(default, old) for default, old in zip(default_size, old_size)) if old_size else default_size
-                    dimensions = zip(screen_size[:1], floor[:1]) if screen_height else zip(screen_size, floor)
-                    if any(screen < default for screen, default in dimensions):
-                        issues.append(Issue('user_control_size_shrink', 'error',
-                                            'The control width (or a non-single-line control dimension) is smaller than its supplied default. Do not shrink for short text; single-line height is reviewed against the actual screen separately.',
-                                            details={'property': f'{name}.Size', 'constructor_size': default_size,
-                                                     'screen_size': screen_size}))
-                    # Single-line height belongs to the actual screen comparison.
-                    continue
             issues.append(Issue('user_control_default_restatement' if equal else 'user_control_default_override',
                                 'info' if equal else 'warning',
                                 'This assignment repeats a supplied constructor default; prefer inheriting it unless Designer serialization requires it.' if equal else

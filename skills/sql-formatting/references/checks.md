@@ -2,6 +2,10 @@
 
 Run `python <plugin-root>/scripts/kh_check.py sql <absolute-original.sql> <absolute-candidate.sql>` to check preservation of literals, comments, tokens, and alias references, plus style diagnostics. Use `--preserve-aliases` for explicit alias preservation. Results do not prove SQL Server execution.
 
+For SP development, add `--procedure-header` (and `--author <user-selected name>` for a new procedure) to review the mandatory AUTHOR / CREATE DATE / DESCRIPTION block. Applied `sql-select`/`sql-save` hook checks enable this automatically. Ordinary formatting/query checks keep their existing preservation behavior. Header shape and a matching name are not evidence of the actual user answer, first date, program title or source-style compliance; follow [SP authorship](procedure-authorship.md).
+
+An explicit `--procedure-header` invocation audits all supplied procedure definitions, even if a separate baseline is identical. Saved-file hook checks report a changed-definition scope and preserve unchanged adjacent procedures outside that edit; changed/new adjacent definitions are still inspected. Neither mode proves complete SQL grammar or actual authorship.
+
 For a standalone check of new SQL, use `sql <absolute-candidate.sql>`. Passing the same file as both original and candidate is an input error. Without a pre-change original, do not manufacture a baseline from a post-change copy. `comparison_baselines.sql=false` means no preservation comparison against the original was performed.
 
 `--normalize-layout` normalizes supported derived FROM/JOIN queries, JOIN/EXISTS whitespace, clause line breaks and simple grouped INSERT/SELECT columns, returning the result on stdout without overwriting files. Input alignment tabs expand at four-column stops before anchor-based formatting; final alignment padding uses spaces. Tabs inside strings, comments and quoted identifiers remain intact. The agent determines alias business roles from the current query and user instructions. `src.sql.aliases` mechanically applies only explicitly specified scope/alias changes.

@@ -78,3 +78,45 @@ def _property_assignments(text: str) -> dict:
     for item in parse_designer_source(text).assignments:
         values.setdefault(item['name'], {})[item['property']] = (item['value'], item['line'])
     return values
+
+
+def static_ui_sites(text: str, known_members: set[str]) -> list[tuple[str, str, str, int, str, int]]:
+    """Direct fixed-value setup only; conditional/event semantics stay manual."""
+    from .source import _method_declaration_matches
+    from .control_style import direct_statement_spans
+    from .lexer import balanced_close
+    code, _ = _scan_csharp(text)
+    bodies = []
+    for method in _method_declaration_matches(code):
+        if method['body'] != '{':
+            continue
+        start = method.end() - 1
+        end = balanced_close(code, start, '{', '}')
+        if end >= 0:
+            bodies.append((start + 1, end, method['name']))
+    for name in re.findall(r'\bclass\s+(\w+)', code):
+        for constructor in re.finditer(r'\b' + re.escape(name) + r'\s*\([^()]*\)\s*\{', code):
+            end = balanced_close(code, constructor.end() - 1, '{', '}')
+            if end >= 0:
+                bodies.append((constructor.end(), end, name))
+    if not bodies and not re.search(r'\b(?:class|struct|record)\b', code):
+        bodies = [(0, len(text), '<snippet>')]
+    sites = []
+    for start, end, owner in bodies:
+        for left, right in direct_statement_spans(text[start:end]):
+            statement = text[start + left:start + right]
+            match = re.fullmatch(r'\s*(?P<this>this\.)?(?P<member>\w+)\.(?P<property>[\w.]+)\s*=\s*(?P<value>.+?)\s*;\s*', statement, re.S)
+            if not match or match['member'] not in known_members:
+                continue
+            value = match['value']
+            literal = string_literal_value(value) is not None or value.strip() in {'true', 'false'}
+            construction = re.fullmatch(r'new\s+(?:System\.Drawing\.)?(?:Font|Point|Size|Rectangle)\s*\((.*)\)', value, re.S)
+            if construction:
+                _, tokens = _scan_csharp(construction[1])
+                literal = all(kind in {'number', 'string', 'symbol'} or
+                              kind == 'identifier' and token in {'System', 'Drawing', 'FontStyle', 'GraphicsUnit', 'Regular', 'Bold', 'Italic', 'Underline', 'Point', 'Pixel', 'F', 'f', 'D', 'd', 'M', 'm', 'U', 'u', 'L', 'l'}
+                              for kind, token, _, _ in tokens)
+            if literal:
+                sites.append((match['member'], match['property'], value,
+                              text.count('\n', 0, start + left) + 1, owner, start + left))
+    return sites

@@ -4,6 +4,8 @@ Use this for generating, migrating or correcting SELECT/SAVE procedures, includi
 
 Read the current caller, target keys/types and complete approved procedures for the affected operations; inspect the XML generator only when the contract uses XML. Compare SELECT with relevant SELECT bodies and SAVE with relevant SAVE bodies, using actual responsibility rather than similar names. Apply the selected style while preserving target behavior. Retain requested commented integrations as their full original bodies rather than activating them or replacing them with placeholders.
 
+Establish the [user-selected author and reference author](procedure-authorship.md) before the first SP draft. Select actual procedures by that authorship and responsibility; preserve SQL-FORMATTING's explicit rules and verify the required header against the actual program and first creation date.
+
 ## Save boundary and reuse
 
 When several files define the same procedure, identify the source used by the apply path and any maintained snapshots. Compare their relevant bodies separately and reconcile managed copies within the task scope.

@@ -1,12 +1,13 @@
 """Retained csharp syntax and domain mechanics from KH; no host orchestration."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Tuple
 import re
 import json
 
 from .lexer import _scan_csharp, _mask_range, string_literal_value
+from src.common.results import Issue
 
 
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -75,7 +76,43 @@ class DesignerModel:
     controls_add: Tuple[Dict[str, Any], ...]
     set_child_index: Tuple[Dict[str, Any], ...]
     assignments: Tuple[Dict[str, Any], ...]
+    static_visibility: Dict[str, str] = field(default_factory=dict)
     source: str = field(repr=False, default="")
+
+
+def statically_hidden(model: DesignerModel, name: str) -> bool:
+    """Only explicit false on a control/known ancestor proves static hiding."""
+    seen = set()
+    while name in model.controls and name not in seen:
+        seen.add(name)
+        control = model.controls[name]
+        if control.properties.get('Visible', '').strip() == 'false' and model.static_visibility.get(name) == 'false':
+            return True
+        name = control.parent
+    return False
+
+
+def locate_issues(model: DesignerModel, issues: list[Issue], artifact: str) -> list[Issue]:
+    located = []
+    for issue in issues:
+        if issue.details.get('source_artifact', artifact) != artifact:
+            located.append(issue)
+            continue
+        line = issue.line
+        prop = issue.details.get('property', '')
+        name = prop.partition('.')[0] if prop else next((issue.details.get(key) for key in ('control', 'column', 'member') if isinstance(issue.details.get(key), str)), '')
+        if line is None and name:
+            assignment = next((a for a in reversed(model.assignments) if a['name'] == name and
+                               (not prop or a['property'] == prop.partition('.')[2] or
+                                prop.endswith('.Height') and a['property'] in {'Size', 'Bounds'})), None)
+            if assignment:
+                line = assignment['line']
+            else:
+                match = re.search(r'\b' + re.escape(name) + r'\b', _strip_csharp_comments(model.source))
+                if match:
+                    line = model.source.count('\n', 0, match.start()) + 1
+        located.append(replace(issue, line=line, details={**issue.details, 'source_artifact': artifact}))
+    return located
 
 
 def _strip_csharp_comments(source: str) -> str:
@@ -159,6 +196,7 @@ def parse_designer_source(designer_source: str) -> DesignerModel:
         properties.pop(property_path, None)
         properties[property_path] = value
         assignments.append({"name": name, "property": property_path, "value": value,
+                            "offset": match.start(),
                             "line": source.count('\n', 0, match.start()) + 1})
 
     add_calls: List[Dict[str, Any]] = []
@@ -213,11 +251,17 @@ def parse_designer_source(designer_source: str) -> DesignerModel:
             child_index=child_indexes.get(name),
             properties=properties,
         )
+    from .syntax import static_ui_sites
+    owners = {'<snippet>', 'InitializeComponent', *re.findall(r'\bclass\s+(\w+)', code)}
+    last_visibility = {a['name']: a['offset'] for a in assignments if a['property'] == 'Visible'}
+    visibility = {name: value.strip() for name, prop, value, _line, owner, offset in static_ui_sites(designer_source, set(controls))
+                  if prop == 'Visible' and owner in owners and offset == last_visibility.get(name)}
     return DesignerModel(
         controls=controls,
         form_properties=form_properties,
         controls_add=tuple(add_calls),
         set_child_index=tuple(child_index_calls),
         assignments=tuple(assignments),
+        static_visibility=visibility,
         source=source,
     )

@@ -16,19 +16,101 @@ def _review_line_number(source: str, offset: int) -> int:
     return len(re.findall(r'\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]', source[:offset])) + 1
 
 
-def _absence_guard(tokens: list[_SqlToken]) -> bool:
+def _unwrapped(tokens: list[_SqlToken]) -> list[_SqlToken]:
+    while tokens and tokens[0].text == '(' and _matching_parenthesis_token(tokens, 0, len(tokens)) == len(tokens) - 1:
+        tokens = tokens[1:-1]
+    return tokens
+
+
+def _expression_key(tokens: list[_SqlToken]) -> tuple[str, ...]:
+    return tuple(_identifier_value(t).upper() if _is_identifier_token(t) else t.normalized
+                 for t in _unwrapped(tokens))
+
+
+def _absence_tests(tokens: list[_SqlToken]) -> list[tuple[tuple[str, ...], bool]]:
+    """Return bounded NULL/blank tests and whether true means absence.
+
+    A predicate alone is not a substitution. The normal result must also
+    return this exact expression; status/aggregate classifications stay separate.
+    """
+    tokens = _unwrapped(tokens)
+    if not tokens:
+        return []
+    depth = 0
     for index, token in enumerate(tokens):
-        if token.kind == 'word' and token.normalized == 'IS':
-            end = index + 1
-            if end < len(tokens) and tokens[end].normalized == 'NOT':
-                end += 1
-            if end < len(tokens) and tokens[end].normalized == 'NULL':
-                return True
-        if token.text in {'=', '<>', '!='} and any(
-                tokens[neighbor].normalized in {"''", "N''"}
-                for neighbor in (index - 1, index + 1) if 0 <= neighbor < len(tokens)):
-            return True
-    return False
+        if token.text == '(':
+            depth += 1
+        elif token.text == ')':
+            depth -= 1
+        elif not depth and token.normalized in {'AND', 'OR'}:
+            return _absence_tests(tokens[:index]) + _absence_tests(tokens[index + 1:])
+    if tokens[0].normalized == 'NOT':
+        return [(expression, not absent) for expression, absent in _absence_tests(tokens[1:])]
+    for suffix, absent in ((['IS', 'NULL'], True), (['IS', 'NOT', 'NULL'], False)):
+        if len(tokens) > len(suffix) and [t.normalized for t in tokens[-len(suffix):]] == suffix:
+            return [(_expression_key(tokens[:-len(suffix)]), absent)]
+    depth = 0
+    for index, token in enumerate(tokens):
+        if token.text == '(':
+            depth += 1
+        elif token.text == ')':
+            depth -= 1
+        elif not depth and token.text in {'=', '<>', '!='}:
+            left, right = _unwrapped(tokens[:index]), _unwrapped(tokens[index + 1:])
+            if len(left) == 1 and left[0].normalized in {"''", "N''"}:
+                left, right = right, left
+            if left and len(right) == 1 and right[0].normalized in {"''", "N''"}:
+                return [(_expression_key(left), token.text == '=')]
+    return []
+
+
+def _substitutes(guard: list[_SqlToken], yes: list[_SqlToken], no: list[_SqlToken]) -> bool:
+    yes_key = _expression_key(yes)
+    no_key = _expression_key(no)
+    if not yes_key or not no_key:
+        return False
+    return any((no_key == expression and yes_key != expression) if absent else
+               (yes_key == expression and no_key != expression)
+               for expression, absent in _absence_tests(guard))
+
+
+def _case_substitutes(tokens: list[_SqlToken], start: int) -> tuple[int | None, bool]:
+    depth = 1
+    markers = []
+    for cursor in range(start + 1, len(tokens)):
+        word = tokens[cursor].normalized if tokens[cursor].kind == 'word' else ''
+        if word == 'CASE':
+            depth += 1
+        elif word == 'END':
+            depth -= 1
+            if not depth:
+                # Only searched CASE is supported. Simple CASE and expressions
+                # without a preserved value branch remain unverified.
+                if not markers or markers[0] != (start + 1, 'WHEN'):
+                    return cursor, False
+                boundaries = [*markers, (cursor, 'END')]
+                otherwise = []
+                for position, kind in markers:
+                    if kind == 'ELSE':
+                        otherwise = tokens[position + 1:cursor]
+                preserved, replaced = set(), set()
+                for index, (position, kind) in enumerate(markers):
+                    if kind == 'WHEN' and index + 2 < len(boundaries) and boundaries[index + 1][1] == 'THEN':
+                        then, end = boundaries[index + 1][0], boundaries[index + 2][0]
+                        guard, value = tokens[position + 1:then], tokens[then + 1:end]
+                        if _substitutes(guard, value, otherwise):
+                            return cursor, True
+                        for expression, absent in _absence_tests(guard):
+                            if not absent and _expression_key(value) == expression:
+                                preserved.add(expression)
+                            elif absent and value and _expression_key(value) != expression:
+                                replaced.add(expression)
+                if preserved & replaced:
+                    return cursor, True
+                return cursor, False
+        elif depth == 1 and word in {'WHEN', 'THEN', 'ELSE'}:
+            markers.append((cursor, word))
+    return None, False
 
 
 def _value_contexts(tokens: list[_SqlToken]) -> list[bool]:
@@ -84,7 +166,7 @@ def _value_fallbacks(source: str) -> list[tuple[tuple[str, ...], str, int]]:
             close = _matching_parenthesis_token(tokens, index + 1, len(tokens))
             if close is not None and form == 'IIF':
                 depth = 0
-                comma = close
+                commas = []
                 for cursor in range(index + 2, close):
                     text = tokens[cursor].text
                     if text == '(':
@@ -92,28 +174,12 @@ def _value_fallbacks(source: str) -> list[tuple[tuple[str, ...], str, int]]:
                     elif text == ')':
                         depth -= 1
                     elif text == ',' and not depth:
-                        comma = cursor
-                        break
-                if not _absence_guard(tokens[index + 2:comma]):
+                        commas.append(cursor)
+                if len(commas) != 2 or not _substitutes(tokens[index + 2:commas[0]],
+                        tokens[commas[0] + 1:commas[1]], tokens[commas[1] + 1:close]):
                     close = None
         elif form == 'CASE':
-            depth = 1
-            guard = None
-            absent = False
-            for cursor in range(index + 1, len(tokens)):
-                word = tokens[cursor].normalized if tokens[cursor].kind == 'word' else ''
-                if word == 'CASE':
-                    depth += 1
-                elif word == 'END':
-                    depth -= 1
-                    if not depth:
-                        close = cursor
-                        break
-                elif word == 'WHEN' and depth == 1:
-                    guard = cursor + 1
-                elif word == 'THEN' and depth == 1 and guard is not None:
-                    absent = absent or _absence_guard(tokens[guard:cursor])
-                    guard = None
+            close, absent = _case_substitutes(tokens, index)
             if not absent:
                 close = None
         if close is not None:
@@ -353,12 +419,19 @@ def _review_generation_choices(candidate: str, original: str | None) -> list[Iss
 
 def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: bool = False,
               check_style: bool = True, check_delta: bool = False, check_preferences: bool = True,
-              compare_original: bool = True) -> CheckResult:
+              compare_original: bool = True, require_procedure_header: bool = False,
+              procedure_author: str | None = None, procedure_changes_only: bool = False) -> CheckResult:
     comparing = original is not None and compare_original
     result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None and compare_original else CheckResult(
         checked=["SQL lexical integrity"], not_checked=["SQL Server execution", "complete T-SQL grammar and type semantics", "business equivalence to an unsupplied source"])
     result.metadata['comparison_baselines'] = {'sql': original is not None}
     result.metadata['original_comparison'] = 'formatting_preservation' if comparing else 'changed_preferences_only'
+    if require_procedure_header:
+        from .procedure_authorship import review_procedure_headers
+        result.issues.extend(review_procedure_headers(candidate, original, author=procedure_author, changed_only=procedure_changes_only))
+        result.metadata['procedure_header_scope'] = 'changed definitions' if procedure_changes_only else 'all supplied definitions'
+        result.checked.append('SP AUTHOR / CREATE DATE / DESCRIPTION header structure and new-SP author selection')
+        result.not_checked.append('user question/answer provenance, actual first-creation date, program title and authored-source style compliance')
     if original is not None and not compare_original:
         result.not_checked.append('Original SQL is used for changed review findings, not to forbid requested behavior changes.')
     tokens, errors = _analyze_sql_integrity(candidate, check_kind="candidate")
@@ -427,9 +500,9 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
     result.not_checked.append('user authorization for value substitution and equivalent fallbacks outside supported syntax')
     result.checked.append('recognizable new direct XML writes beside an established parsed-staging boundary')
     result.checked.append('explicit added locking hints and aliased typed-empty output fields')
-    result.checked.append('supported repeated enclosing scalar-mode guards with no observed mode assignment')
+    result.checked.append('supported repeated enclosing/sibling scalar-mode guards with no observed mode assignment')
     result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')
-    result.not_checked.append('sibling dispatch-phase ownership, jumps/loop re-entry, complex or unbraced predicates, case-sensitive parameter binding and complete mode-to-result-set behavior')
+    result.not_checked.append('necessity/ownership of repeated sibling phases, jumps/loop re-entry, complex or unbraced predicates, case-sensitive parameter binding and complete mode-to-result-set behavior')
     result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
     return result
 

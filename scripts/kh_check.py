@@ -17,6 +17,8 @@ def main(argv=None):
     sql.add_argument("--preserve-aliases", action="store_true")
     sql.add_argument("--normalize-layout", action="store_true")
     sql.add_argument("--check-delta", action="store_true")
+    sql.add_argument('--procedure-header', action='store_true', help='check mandatory SP header structure separately from formatting-only preservation')
+    sql.add_argument('--author', help='expected new-SP author when using --procedure-header')
     cs = commands.add_parser("csharp", help="inspect current C# and optional Designer/baseline")
     cs.add_argument("input")
     cs.add_argument("--original")
@@ -116,8 +118,11 @@ def main(argv=None):
                 print(normalize_sql_join_layout(original), end="")
                 return 0
             candidate = read_file(args.candidate).text() if args.candidate else original
+            if args.author and not args.procedure_header:
+                raise ValueError('--author requires --procedure-header')
             result = check_sql(candidate, original=original if args.candidate else None,
                                preserve_aliases=args.preserve_aliases, check_delta=args.check_delta,
+                               require_procedure_header=args.procedure_header, procedure_author=args.author,
                                check_style=args.style_policy == 'kh', check_preferences=args.style_policy == 'kh')
         elif args.command == "csharp":
             from src.csharp.checks import check_csharp
