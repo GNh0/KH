@@ -18,6 +18,7 @@ def main(argv=None):
     sql.add_argument("--normalize-layout", action="store_true")
     sql.add_argument("--check-delta", action="store_true")
     sql.add_argument('--procedure-header', action='store_true', help='check mandatory SP header structure separately from formatting-only preservation')
+    sql.add_argument('--review-changes', action='store_true', help='review an existing SP against its baseline and report changes that need source justification')
     sql.add_argument('--author', help='expected new-SP author when using --procedure-header')
     cs = commands.add_parser("csharp", help="inspect current C# and optional Designer/baseline")
     cs.add_argument("input")
@@ -111,6 +112,8 @@ def main(argv=None):
             from src.sql.layout import normalize_sql_join_layout
             original = read_file(args.input).text()
             if args.normalize_layout:
+                if args.review_changes:
+                    raise ValueError('--review-changes requires a comparison separate from --normalize-layout')
                 if args.style_policy != 'kh':
                     raise ValueError('--normalize-layout implements KH layout; it is unavailable with project style policy')
                 if args.candidate:
@@ -120,9 +123,12 @@ def main(argv=None):
             candidate = read_file(args.candidate).text() if args.candidate else original
             if args.author and not args.procedure_header:
                 raise ValueError('--author requires --procedure-header')
+            if args.review_changes and not args.candidate:
+                raise ValueError('--review-changes requires the original and candidate definitions')
             result = check_sql(candidate, original=original if args.candidate else None,
                                preserve_aliases=args.preserve_aliases, check_delta=args.check_delta,
                                require_procedure_header=args.procedure_header, procedure_author=args.author,
+                               review_sp_changes=args.review_changes, compare_original=not args.review_changes,
                                check_style=args.style_policy == 'kh', check_preferences=args.style_policy == 'kh')
         elif args.command == "csharp":
             from src.csharp.checks import check_csharp

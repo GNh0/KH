@@ -1,4 +1,5 @@
 """Procedure header structure and explicitly selected authors, not style approval."""
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 import re
@@ -183,7 +184,7 @@ def _returns_rows(tokens: list[_SqlToken]) -> bool:
     return False
 
 
-def _writes_table(tokens: list[_SqlToken]) -> bool:
+def table_writes(tokens: list[_SqlToken]) -> Iterator[tuple[_SqlToken, str]]:
     for token in tokens:
         kind = token.normalized
         if token.depth or kind not in {'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE'}:
@@ -199,8 +200,7 @@ def _writes_table(tokens: list[_SqlToken]) -> bool:
             sources = _parse_scope_declarations(tokens, 'sp_write', token.index, end, token.depth)
             name = next((s.source for s in sources if s.effective_alias == name), name)
         if name and not _base_source(name).strip('[]"').startswith(('@', '#')):
-            return True
-    return False
+            yield token, name
 
 
 def procedure_responsibilities(source: str, *, start: int, end: int) -> set[str]:
@@ -219,7 +219,7 @@ def procedure_responsibilities(source: str, *, start: int, end: int) -> set[str]
             continue
         if _returns_rows(tokens):
             responsibilities.add('sql-select')
-        if _writes_table(tokens):
+        if next(table_writes(tokens), None) is not None:
             responsibilities.add('sql-save')
     return responsibilities
 
@@ -274,11 +274,14 @@ def review_procedure_headers(candidate: str, original: str | None = None, *, aut
             issues.append(Issue('procedure_creation_date_' + date_status, 'error' if date_status == 'invalid' else 'warning',
                 'Use a real first-creation date in the project date style, not the current modification date or a placeholder.',
                 line=header.line, details={'procedure': header.name}))
-        if 'DESCRIPTION' in fields and (not re.fullmatch(r'.+\s*(?:처리|조회)', fields['DESCRIPTION']) or
-                re.search(r'처리\s*OR\s*조회$', fields['DESCRIPTION'], re.I)):
+        if 'DESCRIPTION' in fields and (not re.fullmatch(r'.+\s+(?:처리|조회)', fields['DESCRIPTION']) or
+                re.search(r'(?:처리|조회)\s*(?:OR|/)\s*(?:처리|조회)$', fields['DESCRIPTION'], re.I)):
+            lines = candidate.splitlines()
+            description_line = next((n for n in range(header.unit_start, header.line)
+                                     if re.match(r'\s*--\s*DESCRIPTION\s*:', lines[n - 1], re.I)), header.line)
             issues.append(Issue('procedure_description_required', 'error',
-                'Describe the actual program followed by 처리 or 조회; the checker cannot determine the program title or business purpose.',
-                line=header.line, details={'procedure': header.name}))
+                f'DESCRIPTION은 실제 프로그램명 뒤에 처리 또는 조회로 끝나야 합니다. 현재 값: {fields["DESCRIPTION"]}',
+                line=description_line, details={'procedure': header.name, 'description': fields['DESCRIPTION']}))
         possible_old = [record for parts, record in prior.items()
                         if parts[-1] == header.parts[-1] and (len(parts) == 1 or len(header.parts) == 1)] if old is None else []
         if old:

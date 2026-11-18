@@ -1,5 +1,9 @@
 # SQL checks
 
+For an existing procedure edit, use `python <plugin-root>/scripts/kh_check.py sql <original.sql> <draft.sql> --review-changes --procedure-header` before applying the draft and again against the saved definition. Use a verified pre-change definition. This path permits intentional SQL edits while surfacing changed branches, writes, calls and numeric conversions on an existing aliased expression. A reported change requires comparison with the request, actual caller and selected reference procedures. An incomplete result does not itself establish a violation or authorize removing a needed change. Without a baseline this comparison is unavailable; a one-file header or syntax check cannot establish preservation of the operation.
+
+The comparison recognizes simple literal mode predicates on declared parameters, including common single-statement branches. Verify the full statement scopes of unbraced branches, complex predicates, dynamic calls and output shapes directly in the source.
+
 Run `python <plugin-root>/scripts/kh_check.py sql <absolute-original.sql> <absolute-candidate.sql>` to check preservation of literals, comments, tokens, and alias references, plus style diagnostics. Use `--preserve-aliases` for explicit alias preservation. Results do not prove SQL Server execution.
 
 For SP development, add `--procedure-header` (and `--author <user-selected name>` for a new procedure) to review the mandatory AUTHOR / CREATE DATE / DESCRIPTION block. Applied `sql-select`/`sql-save` hook checks enable this automatically. Ordinary formatting/query checks keep their existing preservation behavior. Header shape and a matching name are not evidence of the actual user answer, first date, program title or source-style compliance; follow [SP authorship](procedure-authorship.md).

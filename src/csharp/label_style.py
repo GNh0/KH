@@ -130,8 +130,18 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
                        and c.properties.get('Multiline', '').strip() != 'true']
             if comparisons or similar:
                 screen_members[name] = [c.name for c in comparisons or similar]
-        if not constructor and not comparisons and not similar:
+        original_font = before is not None and not new and before.parent == control.parent and any(
+            p in old for p in changed if p == 'Font' or p.endswith('.Font'))
+        if not constructor and not comparisons and not similar and not original_font:
             result.not_checked.append('presentation defaults for ' + name + '; supply the actual control source and approved screen controls')
+            if is_label:
+                for prop in sorted(changed):
+                    if ((prop == 'Font' or prop.endswith('.Font')) and prop in control.properties
+                            and f'{name}.{prop}' not in allowed):
+                        result.incomplete = True
+                        result.issues.append(Issue('label_font_reference_required', 'warning',
+                            'An explicit label font needs the actual control source or an approved screen comparison.',
+                            details={'property': f'{name}.{prop}'}))
             continue
         inspected.append(name)
         for prop in sorted(changed):
@@ -150,6 +160,16 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
                     for p in ('Appearance.TextOptions.HAlignment', 'Appearance.TextOptions.VAlignment')):
                 continue
             refs = (comparisons or similar) if prop in HEIGHT_PROPERTIES else comparisons
+            font = prop == 'Font' or prop.endswith('.Font')
+            retained_font = (font and before is not None and not new and before.parent == control.parent
+                             and _property_value(before.properties, prop) is not None)
+            if font and reference:
+                matched = [c for c in refs if c.name == name and c.parent == control.parent
+                           and not statically_hidden(reference, c.name)]
+                if matched:
+                    refs = matched
+            elif retained_font and before is not None and not any(_property_value(c.properties, prop) for c in refs):
+                refs = [before]
             values = [_property_value(c.properties, prop) for c in refs
                       if prop not in {'MinimumSize', 'MaximumSize'} or comparisons]
             present = [v for v in values if v is not None]
@@ -171,6 +191,8 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
             use_reference = bool(present) and (prop in HEIGHT_PROPERTIES or prop == 'Font' or prop.endswith('.Font') or inherited is None)
             expected = present[0] if use_reference else inherited
             source = ('unchanged same-screen controls' if automatic else 'comparison controls') if use_reference else 'control constructor'
+            if retained_font and before is not None and refs == [before]:
+                source = 'original control on the same screen'
             if use_reference and len({_key(prop, v) or ('expression', _normalized_csharp_value(v)) for v in present}) > 1:
                 if actual is not None:
                     result.incomplete = True
@@ -196,6 +218,12 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
                 continue
             actual_key, expected_key = _key(prop, effective), _key(prop, expected)
             if actual_key is not None and actual_key == expected_key:
+                continue
+            if (prop == 'Font' or prop.endswith('.Font')) and original is None and reference is None:
+                result.incomplete = True
+                result.issues.append(Issue('label_font_reference_required', 'warning',
+                    'The screen font differs from the constructor. Compare an approved screen or unchanged pre-edit peer to establish the intended font for this role.',
+                    details={'property': f'{name}.{prop}', 'constructor': inherited, 'actual': actual}))
                 continue
             if actual_key is None or expected_key is None or (prop in HEIGHT_PROPERTIES and not use_reference):
                 result.incomplete = True

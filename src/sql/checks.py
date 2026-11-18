@@ -420,12 +420,21 @@ def _review_generation_choices(candidate: str, original: str | None) -> list[Iss
 def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: bool = False,
               check_style: bool = True, check_delta: bool = False, check_preferences: bool = True,
               compare_original: bool = True, require_procedure_header: bool = False,
-              procedure_author: str | None = None, procedure_changes_only: bool = False) -> CheckResult:
+              procedure_author: str | None = None, procedure_changes_only: bool = False,
+              review_sp_changes: bool = False) -> CheckResult:
     comparing = original is not None and compare_original
     result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None and compare_original else CheckResult(
         checked=["SQL lexical integrity"], not_checked=["SQL Server execution", "complete T-SQL grammar and type semantics", "business equivalence to an unsupplied source"])
     result.metadata['comparison_baselines'] = {'sql': original is not None}
     result.metadata['original_comparison'] = 'formatting_preservation' if comparing else 'changed_preferences_only'
+    if review_sp_changes and original is not None:
+        from .change_review import review_changes
+        changes = review_changes(original, candidate, explicit_pair=not procedure_changes_only)
+        result.issues.extend(changes)
+        result.incomplete = bool(changes) or result.incomplete
+        result.metadata['sp_change_review'] = {'findings': len(changes), 'semantic_approval_verified': False}
+        result.checked.append('baseline comparison of literal block guards, table writes, named calls and explicit numeric output wrappers')
+        result.not_checked.append('user intent, dynamic SQL, complete control flow, SQL Server type inference and caller compatibility')
     if require_procedure_header:
         from .procedure_authorship import review_procedure_headers
         result.issues.extend(review_procedure_headers(candidate, original, author=procedure_author, changed_only=procedure_changes_only))

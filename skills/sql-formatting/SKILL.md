@@ -19,7 +19,7 @@ Before creating or changing procedure logic, including SELECT-only/report proced
 
 Keep one operation's ordered result sets in its owning dispatch block. Do not put additional SELECTs behind a second check of the mode predicate already established by that branch, or append a duplicate mode branch just to return another table. Preserve genuinely different business conditions and required shared phases.
 
-Before changing the target file or executing changed procedure SQL, including rollback tests, compare the exact draft with the selected procedures and each requested rule, including existing code the user explicitly asked to correct. Run the [standalone SQL check](references/checks.md) when available and resolve relevant findings against that draft; preservation success or no errors does not clear `needs_review`. For filters and state changes, establish both qualifying and excluded cases. After the final edit, verify the caller's mode/result-table order and exercise both cases where execution is authorized. Recheck the applied body when deploying.
+Before writing or executing an SP edit, compare the **original and draft** with the requested operation and the named author's same-role SPs. Use the [SP change review](references/checks.md). For each new dispatch path, persisted write, moved call or changed result type, identify what request or existing caller requires it. A proposed caller change, a passing test or an assumed compatibility need cannot supply that requirement. Remove unsupported changes before execution, including rollback tests. Recheck the saved body, caller, affected and excluded cases.
 
 ## Layout and preservation
 

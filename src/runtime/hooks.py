@@ -290,7 +290,7 @@ def inspect(path: Path, text: str, *, original: str | None = None, peer: str | N
         from src.sql.checks import check_sql
         result = check_sql(text, original=original, compare_original=preserve_semantics,
                            require_procedure_header=require_procedure_header, procedure_author=procedure_author,
-                           procedure_changes_only=True)
+                           procedure_changes_only=True, review_sp_changes=require_procedure_header and bool(original))
     elif suffix == '.cs':
         if path.name.casefold().endswith('.designer.cs'):
             from src.csharp.designer import check_designer
@@ -309,10 +309,16 @@ def inspect(path: Path, text: str, *, original: str | None = None, peer: str | N
         result = check_pb_export(text, path=str(path))
     errors = Counter(item.code for item in result.issues if item.severity == 'error')
     warnings = Counter(item.code for item in result.issues if item.severity == 'warning')
+    change_examples = {}
+    for finding in result.issues:
+        if finding.code in {'sp_operation_change_review', 'sp_output_type_change_review', 'sp_definition_scope_review'}:
+            category = finding.details.get('operation', finding.code)
+            change_examples.setdefault(category, f'L{finding.line or "?"} {finding.message}')
     ordered = sorted(result.issues, key=lambda issue: {'error': 0, 'warning': 1, 'info': 2}[issue.severity])
     return {'status': result.status if errors else 'review_required' if warnings else result.status,
             **({'procedure_header_scope': result.metadata['procedure_header_scope']} if 'procedure_header_scope' in result.metadata else {}),
             'errors': list(errors), 'warnings': list(warnings),
+            **({'sp_changes': list(change_examples.values())} if change_examples else {}),
             'warning_counts': dict(warnings),
             'findings': [{**item.to_dict(), 'path': str(companion(path) if
                 item.details.get('source_artifact') == 'designer' and not path.name.casefold().endswith('.designer.cs') and companion(path) is not None else path)}
@@ -420,6 +426,8 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
                     for dependency in dict.fromkeys(entry['path'] for entry in project.get('dependencies', []))]
                 item['check_dependencies'].extend(reference_dependencies)
                 if sha != 'deleted':
+                    if item['check'].get('sp_changes'):
+                        messages.append(name + ': ' + ' '.join(item['check']['sp_changes']))
                     messages.append(name + ': ' + json.dumps({**item['check'], 'read_scope': item['read_scope']}, ensure_ascii=False))
             file_returned = returned if reads is None or any(path.resolve() == read for read in reads) else ''
             returned_body = undecorated(file_returned)
@@ -449,15 +457,19 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
     return messages
 
 
-def observed_reads(returned: str, state: dict) -> set[str]:
+def observed_reads(returned: str, state: dict, bodies: dict[str, str] | None = None) -> set[str]:
     if not returned:
         return set()
     seen = set()
     coverage = state.setdefault('read_coverage', {})
     lines = {re.sub(r'^\s*(?:L?\d+[:\t→]\s*)', '', line).strip()
              for line in returned.splitlines() if line.strip()}
-    paths = guidance_paths()
-    bodies = {relative: document(ROOT, relative)[1] for relative in paths}
+    if bodies is None:
+        bodies = {}
+    if not bodies:
+        texts = {}
+        bodies.update((relative, document(ROOT, relative, texts=texts)[1]) for relative in guidance_paths())
+    response_text = normalized(returned)
     origins: dict[str, set[str]] = {}
     for relative, body in bodies.items():
         for line in body.splitlines():
@@ -473,7 +485,7 @@ def observed_reads(returned: str, state: dict) -> set[str]:
         # Common Markdown/boilerplate lines alone cannot seed a document read.
         if combined and (prior_lines or any(len(origins[line]) == 1 for line in matches) or expected <= combined):
             coverage[relative] = {'sha256': fingerprint, 'lines': sorted(combined)}
-        if expected <= combined or normalized(body) in normalized(returned):
+        if expected <= combined or normalized(body) in response_text:
             seen.add(relative)
     return seen
 
@@ -492,8 +504,8 @@ def prerequisites_for(state: dict, path: Path) -> set[str]:
     return required_paths(item, path) if item is not None else set()
 
 
-def current_prerequisites(returned: str, state: dict) -> set[str]:
-    seen = observed_reads(returned, state)
+def current_prerequisites(returned: str, state: dict, bodies: dict[str, str] | None = None) -> set[str]:
+    seen = observed_reads(returned, state, bodies)
     for name, record in state.get('native_skill_reads', {}).items():
         if name not in set(DOMAINS.values()):
             continue
@@ -503,7 +515,7 @@ def current_prerequisites(returned: str, state: dict) -> set[str]:
     return seen
 
 
-def observe_usage(returned: str, state: dict, *, native: str | None = None, event: str = '', prompt_id=None, prompt=None) -> None:
+def observe_usage(returned: str, state: dict, *, native: str | None = None, event: str = '', prompt_id=None, prompt=None, bodies: dict[str, str] | None = None) -> None:
     if native is not None:
         body = (ROOT / 'skills' / native / 'SKILL.md').read_text(encoding='utf-8-sig')
         record: dict[str, object] = {'sha256': hashlib.sha256(body.encode('utf-8')).hexdigest(), 'event': event}
@@ -518,7 +530,7 @@ def observe_usage(returned: str, state: dict, *, native: str | None = None, even
                 record['previous_native'] = settled_native(prior)
             record['pending_submission'] = True
         state.setdefault('native_skill_reads', {})[native] = record
-    seen = current_prerequisites(returned, state)
+    seen = current_prerequisites(returned, state, bodies)
     state['skills_seen'] = sorted(seen)
     state['kh_used_skills'] = sorted(used_domains(state))
 
@@ -644,7 +656,8 @@ def handle(event: dict, host: str) -> dict:
     native = native_skill_usage(event, host)
     explicit = explicit_skill_requests(event, host, plugin_root=ROOT)
     observation = {}
-    observed_reads(returned, observation)
+    guidance: dict[str, str] = {}
+    observed_reads(returned, observation, guidance)
     create = bool(native or explicit or observation.get('read_coverage')) or name == 'PreCompact'
     with store.connect(create=create) as connection:
         if connection is None:
@@ -691,7 +704,7 @@ def handle(event: dict, host: str) -> dict:
             except (OSError, ValueError, UnicodeError):
                 pass  # Preserve originals; unrelated work must not inherit their checks.
         if name in {'PostToolUse', 'UserPromptExpansion'}:
-            observe_usage(returned, state, native=native, event=str(name), prompt_id=event.get('prompt_id'), prompt=event.get('prompt'))
+            observe_usage(returned, state, native=native, event=str(name), prompt_id=event.get('prompt_id'), prompt=event.get('prompt'), bodies=guidance)
         domains = used_domains(state)
         unapplied = [path for path in paths if not applied_path(state, path)]
         paths = [path for path in paths if applied_path(state, path)]
@@ -725,7 +738,7 @@ def handle(event: dict, host: str) -> dict:
                                                baselines.original(path) or '', existing)
                     except (OSError, ValueError, UnicodeError, RuntimeError):
                         state['file_warning'] = 'C# responsibility evidence is unavailable; inspect actual source before completion.'
-            state['skills_seen'] = sorted(current_prerequisites('\n', state))
+            state['skills_seen'] = sorted(current_prerequisites('\n', state, guidance))
             required = set().union(*(prerequisites_for(state, path) for path in paths))
             missing = sorted(required - set(state.get('skills_seen', [])))
             # No attempt counter: retrying the same write is not evidence that prerequisites were read.
@@ -864,7 +877,7 @@ def handle(event: dict, host: str) -> dict:
                 state['native_skill_reads'] = matched
             if isinstance(prompt, str) and prompt.strip() and new_turn:
                 new_epoch(state)
-            observe_usage('\n', state)  # Re-evaluate accumulated body evidence after resolving pending delivery.
+            observe_usage('\n', state, bodies=guidance)  # Re-evaluate accumulated body evidence after resolving pending delivery.
             # Invocation tokens alone establish neither delivery nor development scope.
             state['requested_skills'] = sorted(set(state.get('requested_skills', [])) | explicit)
             previous_user_sequence = max((item['seq'] for item in state['users']), default=0)
@@ -907,7 +920,7 @@ def handle(event: dict, host: str) -> dict:
                     hard_pending.append(path)
                 if item.get('error') or item.get('routing_problem') or (item.get('pending_spans') and item.get('readback') != item.get('sha256')) or check.get('errors') or check.get('warnings') or check.get('incomplete'):
                     pending.append(path)
-            seen = current_prerequisites('\n', state)
+            seen = current_prerequisites('\n', state, guidance)
             missing_references = sorted(set().union(*(prerequisites_for(state, Path(path))
                 for path in state['files'])) - seen)
             legacy = [path for path in state['files'] if binding(state, Path(path)) is None]
@@ -930,6 +943,10 @@ def handle(event: dict, host: str) -> dict:
                     reason += ' ' + ' '.join(problems)
                 if reference_errors:
                     reason += ' ' + ' '.join(reference_errors)
+                sp_changes = [Path(path).name + ' ' + ' '.join(state['files'][path].get('check', {}).get('sp_changes', []))
+                              for path in pending if state['files'][path].get('check', {}).get('sp_changes')]
+                if sp_changes:
+                    reason += ' Compare these changes to the actual request and named reference SPs before reporting completion: ' + ' '.join(sp_changes)[:3000]
                 hard_block = bool(hard_pending or missing_references or legacy or application_errors or reference_errors)
                 if mode == 'enforce' and not event.get('stop_hook_active') and (hard_block or state.get('stop_notice') != fingerprint):
                     state['stop_notice'] = fingerprint

@@ -28,6 +28,15 @@ def codes(result):
 
 
 class FollowupFindingsTests(unittest.TestCase):
+    def test_constructor_font_alone_cannot_set_a_screen_role(self):
+        changed = screen('first', font=12) + screen('second', font=12)
+        result = check_designer(changed, control_sources=[LABEL])
+        self.assertEqual(2, codes(result).count('label_font_reference_required'))
+        self.assertTrue(result.incomplete)
+        self.assertNotIn('label_font_mismatch', codes(result))
+        independent = check_designer(changed, style_reference=screen('approved', font=10), control_sources=[LABEL])
+        self.assertEqual(2, codes(independent).count('label_font_mismatch'))
+
     def test_hidden_presentation_is_excluded_but_negative_coordinates_are_not_authorization(self):
         hidden = screen(width=10, visible='false')
         self.assertNotIn('user_control_size_shrink', codes(check_designer(hidden, control_sources=[LABEL])))
