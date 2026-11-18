@@ -22,7 +22,7 @@ Separate control-definition files do not compete as alternative screen programs.
 
 Choose responsibilities from the actual change:
 
-For `sql-select`/`sql-save`, follow [SP authorship](../../sql-formatting/references/procedure-authorship.md): first obtain the user-selected author and reference author, then add `--author <name> --reference-author <name>` to apply once. Later apply calls in the same project/chat/agent context reuse that selection. Use actual SP units with that reference author's AUTHOR header and read their current bodies. Missing selection/authored-source evidence blocks SP writing; formatting-only/query explanation does not require it. These selections supplement SQL-FORMATTING and do not attest that the user was asked or that style compliance was audited.
+For `sql-select`/`sql-save`, follow [SP authorship](../../sql-formatting/references/procedure-authorship.md). Pass the target header name with `--author` and each existing-SP search name with its own `--reference-author`. When selecting SQL files, pass the full set for the selected SP responsibility and read each definition. A later selection replaces that responsibility's SQL sources. Omitting references retains the selection.
 
 | Work | Applies to |
 | --- | --- |
