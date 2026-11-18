@@ -13,7 +13,7 @@ Do not add or change a value fallback unless the user explicitly requested that 
 
 ## Procedure work: SELECT and SAVE
 
-At the first actual SP task, ask for the author name and whether to reference that author's SP style or another author's. Follow [SP authorship and reference selection](references/procedure-authorship.md); reuse explicit current-project answers, verify the selected author's actual SPs before drafting, and include the mandatory AUTHOR / CREATE DATE / DESCRIPTION header. This supplements SQL-FORMATTING; it does not replace its rules or authorize copied exceptions.
+At the first actual SP task, ask whose name belongs in the target AUTHOR header and whose existing SPs to find for style. Reuse explicit answers. Search existing AUTHOR headers for each requested name, read relevant SELECT/SAVE bodies before drafting, and identify the procedures used. Only the target author belongs in the new header. Apply [SP authorship and reference selection](references/procedure-authorship.md) alongside SQL-FORMATTING.
 
 Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Select the changed responsibilities in the [illustrative-pattern index](references/procedure-patterns.md) and read those examples; do not load the whole example collection. Verify the selected structure against the complete procedures. Derive schema, types, keys and behavior from the actual target. When the request adds a caller or operation, cover the added responsibility before drafting it.
 

@@ -12,7 +12,7 @@ from src.context.store import Store, session_key
 from src.runtime.guidance import document
 from src.runtime.hooks import ROOT, handle
 from src.sql.checks import check_sql
-from src.sql.procedure_authorship import procedure_headers, review_procedure_headers
+from src.sql.procedure_authorship import procedure_headers, procedure_responsibilities, review_procedure_headers
 
 
 def procedure(author='테스트 작성자', name='dbo.Sample_SELECT', action='CREATE PROCEDURE', date='26.11.18'):
@@ -31,6 +31,30 @@ END
 
 
 class HeaderTests(unittest.TestCase):
+    def test_search_metadata_and_internal_selects_are_not_output(self):
+        baseline = procedure()
+        for label in ('REFERENCE AUTHOR', 'REFERENCE AUTHORS', '참고 작성자', '참조 작성자'):
+            candidate = baseline.replace('-- CREATE DATE:', f'-- {label}: Example\n-- CREATE DATE:')
+            self.assertIn('procedure_reference_author_in_header', [i.code for i in review_procedure_headers(candidate)])
+            self.assertNotIn('procedure_reference_author_in_header', [i.code for i in review_procedure_headers(candidate, candidate)])
+            revised = candidate.replace(f'{label}: Example', f'{label}: Someone else')
+            self.assertIn('procedure_reference_author_in_header', [i.code for i in review_procedure_headers(revised, candidate)])
+        for statement, returns in (
+                ('INSERT @stage (id) SELECT id FROM INPUT; UPDATE A SET X=1;', False),
+                ('SELECT @id = id FROM INPUT;', False),
+                ('SELECT @qty += qty FROM INPUT;', False),
+                ('DECLARE c CURSOR LOCAL FAST_FORWARD FOR SELECT id FROM INPUT;', False),
+                ('SELECT id INTO #staged FROM INPUT;', False),
+                ('SELECT CASE WHEN @id = 1 THEN 1 END AS x INTO #tmp FROM INPUT;', False),
+                ('SELECT CASE WHEN @id = 1 THEN 1 END AS x FROM INPUT;', True),
+                ('IF EXISTS (SELECT 1 FROM INPUT) RETURN;', False),
+                ('INSERT @stage SELECT id FROM INPUT; SELECT @id AS id;', True)):
+            sql = '-- AUTHOR: Example\nCREATE PROC dbo.P AS ' + statement
+            self.assertEqual(returns, 'sql-select' in procedure_responsibilities(sql, start=1, end=2), statement)
+        for name in ('@stage', '#stage', 'dbo.FinalRows'):
+            sql = '-- AUTHOR: Example\nCREATE PROC dbo.P AS INSERT INTO ' + name + ' SELECT id FROM INPUT;'
+            self.assertEqual(name == 'dbo.FinalRows', 'sql-save' in procedure_responsibilities(sql, start=1, end=2))
+
     def test_header_fields_and_all_supported_declarations(self):
         for action in ('CREATE PROCEDURE', 'ALTER PROC', 'CREATE OR ALTER PROCEDURE'):
             source = procedure(action=action)
@@ -149,6 +173,36 @@ class AuthorshipLifecycleTests(unittest.TestCase):
         self.assertEqual({}, self.write())
         result = self.apply()
         self.assertEqual({'author': '현재 작성자', 'reference_author': '참조 작성자'}, result['sql_authorship'])
+        self.assertEqual({}, self.write())
+
+    def test_multiple_search_names_match_existing_sps_independently_of_target_author(self):
+        args = ('--author', 'Target Writer', '--reference-author', 'First Writer', '--reference-author', 'Second Writer')
+        for name in ('First Writer', 'Second Writer', 'Target Writer', 'First Writer,Second Writer'):
+            with self.subTest(name=name):
+                self.reference.write_text(procedure(author=name), encoding='utf-8')
+                self.apply(args)
+                if name in ('First Writer', 'Second Writer'):
+                    self.assertEqual({}, self.write())
+                else:
+                    self.assertEqual('deny', self.write()['hookSpecificOutput']['permissionDecision'])
+        self.reference.write_text(procedure(author='Second Writer'), encoding='utf-8')
+        self.apply()
+        self.assertEqual({}, self.write())
+        self.target.write_text(procedure(author='Second Writer'), encoding='utf-8')
+        self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(self.target)})
+        self.assertIn('procedure_author_mismatch', self.state()['files'][str(self.target)]['check']['errors'])
+
+    def test_require_every_selected_sp_read_and_release_superseded_selection(self):
+        second = self.project / 'OtherReference.sql'
+        second.write_text(procedure(author='Other'), encoding='utf-8')
+        names = ('--author', 'Target', '--reference-author', '참조 작성자', '--reference-author', 'Other')
+        self.apply((*names, '--reference', str(second)))
+        self.assertEqual('deny', self.write()['hookSpecificOutput']['permissionDecision'])
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(second)}, tool_response=second.read_text(encoding='utf-8'))
+        self.assertEqual({}, self.write())
+        second.unlink()
+        self.assertEqual('deny', self.write()['hookSpecificOutput']['permissionDecision'])
+        self.apply(('--author', 'Target', '--reference-author', '참조 작성자'))
         self.assertEqual({}, self.write())
 
     def test_correct_author_does_not_certify_a_missing_generated_header(self):

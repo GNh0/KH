@@ -13,6 +13,7 @@ from src.common.files import read_file
 from src.runtime.skill_usage import DOMAINS
 from src.runtime.workflows import binding
 from src.runtime.check_context import companion
+from src.sql.procedure_authorship import author_key
 
 CONTROL_WORK = frozenset({'csharp-control', 'csharp-designer', 'csharp-grid'})
 
@@ -161,6 +162,13 @@ def select_references(state: dict, applied: list[dict], names: list[str], cwd: s
             continue
         refs = [dict(ref) for ref in item.get('references', [])]
         chosen = set(work if work is not None else applied_item['work']) & set(item['work'])
+        sp_roles = chosen & {'sql-select', 'sql-save'}
+        if target.suffix.casefold() == '.sql' and sp_roles and any(Path(ref['path']).suffix.casefold() == '.sql' for ref in prepared):
+            units = {(ref['path'], ref['start'], ref['end']) for ref in prepared}
+            for ref in refs:
+                if Path(ref['path']).suffix.casefold() == '.sql' and (ref['path'], ref['start'], ref['end']) not in units:
+                    ref['work'] = sorted(set(ref.get('work', [])) - sp_roles)
+            refs = [ref for ref in refs if ref.get('work')]
         if target.name.casefold().endswith('.designer.cs'):
             chosen.add('csharp-designer')
         for index, ref in enumerate(prepared):
@@ -231,32 +239,43 @@ def reference_problem(state: dict, path: Path) -> str:
         return ''
     sp_work = path.suffix.casefold() == '.sql' and bool(set(item['work']) & {'sql-select', 'sql-save'})
     authors = item.get('sql_authorship', state.get('sql_authorship', {}))
+    search_authors: set[str] = set()
     if sp_work:
         from src.sql.procedure_authorship import selected_authors
         try:
             authors = selected_authors(authors.get('author'), authors.get('reference_author'))
         except (AttributeError, ValueError):
-            return ('Before this first SP draft, ask the user for the author name and whether to follow that author or a different reference author. '
-                    'Record both answers with scoped apply --author <name> --reference-author <name>; selection is not evidence of asking or a completed audit.')
+            return ('Before this first SP draft, ask the user which name belongs in the target AUTHOR header and whose existing SPs to find and read for style. '
+                    'Record the header name with --author; pass each search name separately with --reference-author.')
+        names = authors['reference_author']
+        search_authors = {author_key(name) for name in ([names] if isinstance(names, str) else names)}
     covered = set()
     for ref in item.get('references', []):
+        selected_sp = sp_work and Path(ref['path']).suffix.casefold() == '.sql' and bool(
+            set(ref.get('work', [])) & {'sql-select', 'sql-save'})
         try:
             if owned_source(state, Path(ref['path'])):
+                if selected_sp:
+                    return 'Select an independent comparison SP instead of an owned output: ' + ref['path']
                 continue
             sha, _lines = unit(ref)
+            if selected_sp and not (sha == ref.get('source_sha256') == ref.get('read_sha256')):
+                return 'Reselect and read the current complete comparison SP: ' + ref['path']
             if sha == ref.get('source_sha256') == ref.get('read_sha256'):
                 reference_domain = DOMAINS[Path(ref['path']).suffix.casefold()]
                 reference_body = ''
                 if sp_work and reference_domain == 'sql-formatting':
-                    from src.sql.procedure_authorship import author_key, procedure_headers
+                    from src.sql.procedure_authorship import procedure_headers
                     raw = read_file(Path(ref['path']), max_bytes=1024 * 1024)
                     if raw.sha256 != sha:
-                        continue
+                        return 'The comparison SP changed during checking; reselect and read it: ' + ref['path']
                     reference_body = raw.text()
                     headers = [header for header in procedure_headers(reference_body)
                                if ref['start'] <= header.line <= ref['end']]
                     if not headers or any(not header.body_observed or ref['start'] > header.unit_start or ref['end'] < header.unit_end or
-                                          author_key(header.fields.get('AUTHOR', '')) != author_key(authors['reference_author']) for header in headers):
+                                          author_key(header.fields.get('AUTHOR', '')) not in search_authors for header in headers):
+                        if selected_sp:
+                            return 'Select and read a complete comparison SP with a requested AUTHOR: ' + ref['path']
                         continue
                 responsibilities = set(ref.get('work', []))
                 # Recheck roles for older stored applications as well. Output
@@ -271,12 +290,16 @@ def reference_problem(state: dict, path: Path) -> str:
                     from src.sql.procedure_authorship import procedure_responsibilities
                     observed = procedure_responsibilities(reference_body, start=ref['start'], end=ref['end'])
                     responsibilities -= {'sql-select', 'sql-save'} - observed
+                    if selected_sp and not responsibilities & {'sql-select', 'sql-save'}:
+                        return 'Choose a comparison SP that performs the selected responsibility: ' + ref['path']
                 if 'csharp-designer' in responsibilities:
                     body_sha, body = selected_source(ref)
                     if body_sha != sha or not designer_comparison(body):
                         responsibilities.discard('csharp-designer')
                 covered.update(responsibilities)
         except (OSError, ValueError, UnicodeError, RuntimeError):
+            if selected_sp:
+                return 'The selected comparison SP could not be read; reselect its current definition: ' + ref['path']
             continue
     if path.suffix.casefold() == '.cs':
         _controls, _dependencies, control_problems = observed_control_sources(state, path)
