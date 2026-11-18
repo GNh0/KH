@@ -53,8 +53,17 @@ def _check_reference_editor_defaults(model: DesignerModel, reference: DesignerMo
     return issues
 
 
+def layout_comparisons(common: str | None, selected: Mapping[str, str] | None) -> tuple[DesignerModel | None, DesignerModel | None]:
+    roles = selected or {}
+    layout = roles.get('csharp-designer', common)
+    control, grid = roles.get('csharp-control', layout), roles.get('csharp-grid', layout)
+    control_model = parse_designer_source(control) if control is not None else None
+    grid_model = control_model if grid == control else parse_designer_source(grid) if grid is not None else None
+    return control_model, grid_model
+
+
 def check_designer(designer: str, *, code_behind: str = "", original: str | None = None,
-                   style_reference: str | None = None,
+                   style_reference: str | None = None, layout_references: Mapping[str, str] | None = None,
                    preserved_properties: Iterable[str] = (), expected_tab_order: Iterable[str] = (),
                    inherited_handlers: Iterable[str] = (), column_edit_modes: Mapping[str, str] | None = None,
                    allowed_property_changes: Iterable[str] = (), control_sources: Sequence[str] = (),
@@ -63,7 +72,8 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
     result.metadata['comparison_baselines'] = {'designer': original is not None}
-    if style_reference is not None:
+    reference, grid_reference = layout_comparisons(style_reference, layout_references)
+    if reference is not None or grid_reference is not None:
         result.metadata['comparison_baselines']['style_reference'] = True
     renames = member_renames or {}
     if renames:
@@ -102,8 +112,7 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
                         'An existing editor button initialization path was removed. Verify the requested scope, actual constructor and shared initialization before removing it; a runtime-hidden button may still be required.',
                         details={'control': name, 'removed_button_paths': missing}))
         result.checked.append('removed button-initializer paths on retained editor members')
-    if style_reference is not None:
-        reference = parse_designer_source(style_reference)
+    if reference is not None:
         retained_controls = {name for name, control in model.controls.items()
                              if baseline is not None and name in baseline.controls and
                              baseline.controls[name].type_name == control.type_name}
@@ -122,11 +131,11 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     if numeric_columns:
         result.checked.append('Spin repository bindings for supplied numeric column members')
     result.not_checked.append('numeric column type inference and runtime ColumnEdit/column recreation')
-    result.issues.extend(check_control_defaults(model, original=baseline, defaults=defaults,
+    result.issues.extend(check_control_defaults(model, original=baseline, reference=reference, defaults=defaults,
                                                 allowed_property_changes=allowed_property_changes, check_style=check_style))
     if check_style:
         labels = check_label_style(model, original=baseline,
-                                   reference=parse_designer_source(style_reference) if style_reference is not None else None,
+                                   reference=reference,
                                    defaults=defaults, allowed_property_changes=allowed_property_changes)
         result.issues.extend(labels.issues)
         result.checked.extend(labels.checked)
@@ -142,7 +151,7 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         result.not_checked.append('available user-control selection and constructor-default overrides; no control sources supplied')
     result.issues.extend(check_grid_style(with_control_base_types(model, defaults),
                                          original=with_control_base_types(baseline, defaults) if baseline else None,
-                                         reference=with_control_base_types(parse_designer_source(style_reference), defaults) if style_reference is not None else None,
+                                         reference=with_control_base_types(grid_reference, defaults) if grid_reference is not None else None,
                                           column_edit_modes=column_edit_modes,
                                           allowed_property_changes=allowed_property_changes, check_style=check_style))
     if check_style:

@@ -61,6 +61,11 @@ def main(argv=None):
     sp = commands.add_parser('sp-call', help='compare one selected C# call with one actual procedure definition')
     sp.add_argument('input')
     sp.add_argument('procedure')
+    contract = commands.add_parser('screen-contract', help='compare actual form calls and grid result bindings with named SQL definitions')
+    contract.add_argument('input', help='actual form code-behind')
+    contract.add_argument('procedures', nargs='+', help='one actual SP definition per file')
+    contract.add_argument('--designer', help='matching Designer.cs containing grid and column ownership')
+    contract.add_argument('--serializer', help='actual DataTableToXml helper source for XML root and emitted row names')
     pb = commands.add_parser("pb", help="inspect a supplied PB export")
     pb.add_argument("input")
     pb.add_argument("--encoding", default="utf-8-sig")
@@ -156,6 +161,14 @@ def main(argv=None):
         elif args.command == 'sp-call':
             from src.pb.sql import check_sp_call
             result = check_sp_call(read_file(args.input).text(), read_file(args.procedure).text())
+        elif args.command == 'screen-contract':
+            from src.csharp.screen_contract import check_screen_contract
+            result = check_screen_contract(read_file(args.input).text(),
+                read_file(args.designer).text() if args.designer else None,
+                {path: read_file(path).text() for path in args.procedures},
+                caller_path=args.input, designer_path=args.designer or 'designer',
+                serializer=read_file(args.serializer).text() if args.serializer else None,
+                serializer_path=args.serializer or 'serializer')
         elif args.command == "pb":
             from src.pb.checks import check_pb_export
             result = check_pb_export(read_file(args.input).text(args.encoding), path=args.input)

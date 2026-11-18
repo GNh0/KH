@@ -192,6 +192,21 @@ class AuthorshipLifecycleTests(unittest.TestCase):
         self.event('PostToolUse', tool_name='Write', tool_input={'file_path': str(self.target)})
         self.assertIn('procedure_author_mismatch', self.state()['files'][str(self.target)]['check']['errors'])
 
+    def test_existing_author_and_explicit_project_choice_survive_a_new_session(self):
+        self.target.write_text(procedure(author='Original Writer'), encoding='utf-8')
+        unset = self.apply()
+        self.assertIn('ask only', unset['files'][0]['comparison_evidence_missing'])
+        first = self.apply(('--reference-author', '참조 작성자'))
+        self.assertEqual('Original Writer', first['files'][0]['sql_authorship']['author'])
+        with self.store.connect() as connection:
+            self.assertEqual([], self.store.memories(connection))
+        self.apply(('--author', 'Future Writer', '--reference-author', '참조 작성자', '--remember-authors'))
+        self.scope['session_id'] = 'new-sql-session'
+        self.key = session_key(self.scope, 'codex')
+        self.read_guidance('sql-formatting/SKILL.md')
+        later = self.apply(target=self.project / 'Next.sql')
+        self.assertEqual({'author': 'Future Writer', 'reference_author': '참조 작성자'}, later['sql_authorship'])
+
     def test_require_every_selected_sp_read_and_release_superseded_selection(self):
         second = self.project / 'OtherReference.sql'
         second.write_text(procedure(author='Other'), encoding='utf-8')

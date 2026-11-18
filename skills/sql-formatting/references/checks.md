@@ -1,31 +1,14 @@
-# SQL checks
+# SQL 검사 실행
 
-For an existing procedure edit, use `python <plugin-root>/scripts/kh_check.py sql <original.sql> <draft.sql> --review-changes --procedure-header` before applying the draft and again against the saved definition. Use a verified pre-change definition. This path permits intentional SQL edits while surfacing changed branches, writes, calls and numeric conversions on an existing aliased expression. A reported change requires comparison with the request, actual caller and selected reference procedures. An incomplete result does not itself establish a violation or authorize removing a needed change. Without a baseline this comparison is unavailable; a one-file header or syntax check cannot establish preservation of the operation.
+KH 루트의 `scripts/kh_check.py`에 원본과 초안/저장본을 전달한다.
 
-The comparison recognizes simple literal mode predicates on declared parameters, including common single-statement branches. Verify the full statement scopes of unbraced branches, complex predicates, dynamic calls and output shapes directly in the source.
+| 작업 | 명령 인자 |
+| --- | --- |
+| 기존 SP 로직 변경 전·후 | `sql <원본.sql> <후보.sql> --review-changes --procedure-header` |
+| 신규 SP | `sql <신규.sql> --procedure-header --author <확인한 이름>` |
+| 의미 보존 서식 정리 | `sql <원본.sql> <정리본.sql>`. 별칭 유지 요청은 `--preserve-aliases` 추가 |
+| SELECT·SAVE를 쓰는 화면 | `screen-contract <caller.cs> <SELECT.sql> <SAVE.sql> --designer <Designer.cs>` |
 
-Run `python <plugin-root>/scripts/kh_check.py sql <absolute-original.sql> <absolute-candidate.sql>` to check preservation of literals, comments, tokens, and alias references, plus style diagnostics. Use `--preserve-aliases` for explicit alias preservation. Results do not prove SQL Server execution.
+후보에서 추가·변경한 모드, 쓰기, 호출 위치와 반환 형식을 요청·실제 호출자·선택한 작성자의 같은 역할 SP와 대조한다. 초안은 실행·롤백 테스트 전에 확인하고 저장된 정의에서 다시 검사한다. 변경 전 원본이 없으면 보존 여부는 미확인이다. 같은 파일을 원본·후보로 중복 전달하지 않는다.
 
-For SP development, add `--procedure-header` (and `--author <user-selected name>` for a new procedure) to review the mandatory AUTHOR / CREATE DATE / DESCRIPTION block. Applied `sql-select`/`sql-save` hook checks enable this automatically. Ordinary formatting/query checks keep their existing preservation behavior. Header shape and a matching name are not evidence of the actual user answer, first date, program title or source-style compliance; follow [SP authorship](procedure-authorship.md).
-
-An explicit `--procedure-header` invocation audits all supplied procedure definitions, even if a separate baseline is identical. Saved-file hook checks report a changed-definition scope and preserve unchanged adjacent procedures outside that edit; changed/new adjacent definitions are still inspected. Neither mode proves complete SQL grammar or actual authorship.
-
-For a standalone check of new SQL, use `sql <absolute-candidate.sql>`. Passing the same file as both original and candidate is an input error. Without a pre-change original, do not manufacture a baseline from a post-change copy. `comparison_baselines.sql=false` means no preservation comparison against the original was performed.
-
-`--normalize-layout` normalizes supported derived FROM/JOIN queries, JOIN/EXISTS whitespace, clause line breaks and simple grouped INSERT/SELECT columns, returning the result on stdout without overwriting files. Input alignment tabs expand at four-column stops before anchor-based formatting; final alignment padding uses spaces. Tabs inside strings, comments and quoted identifiers remain intact. The agent determines alias business roles from the current query and user instructions. `src.sql.aliases` mechanically applies only explicitly specified scope/alias changes.
-
-`tab_indentation_not_allowed` reviews alignment tabs between SQL tokens as well as leading indentation; protected token content is excluded. `insert_select_column_alignment_invalid` compares actual text columns of wide grouped target and SELECT lists and their separators. Shared starts fit the longest item across both lists, while already aligned roomier columns remain valid. This is a source-text check for fixed-width layout, not an editor pixel measurement.
-
-`insert_select_alignment_unverified` identifies unsupported wide mappings such as multiline/commented expressions, SELECT modifiers or differing row groups. Normalization preserves these lists for direct review. VALUES lists and complete UNION mapping coverage are not implemented by this helper; inspect their final columns directly. No layout result verifies the semantic target/value mapping.
-
-Errors include token-preservation failures and violations of explicit alignment contracts under inspection. Warnings identify separate style/disfavored-pattern checks. Mark unsupported syntax or semantic changes as unverified, not successful. There is no separate retry procedure to obtain signatures, provider receipts, or hashes.
-
-Generated/differential SQL checks also review new UPDLOCK/HOLDLOCK hints and aliased `CAST('' AS ...)`/`CAST(NULL AS ...)` result placeholders. Existing identical occurrences are excluded with an original; strings/comments are not executable findings. These are warnings, not prohibitions on required locking or typed UNION/result fields. Read `review_status=needs_review` and resolve actual necessity. Persisted numbering scope, SAVE branches, XML keys, parameter defaults, date meaning and schema compatibility require the [target contract review](procedure-contracts.md); no lexical pass establishes them.
-
-`repeated_enclosing_mode_guard` reviews a supported scalar parameter `=`/`IN` literal predicate repeated inside its enclosing BEGIN/END branch, without an observed parameter assignment. It follows CASE/END and transaction context and ignores comments/literals. Parameter writes, external/cursor calls and loop entry invalidate an earlier guard; GOTO input stays outside this review. The rule is not tied to a parameter/mode name and does not ban distinct nested conditions. It is a warning, not an automatic rewrite. Complex/unbraced predicates, sibling-phase ownership and complete result-set behavior still need direct review. An original suppresses retained occurrences for local edits; inspect the standalone final procedure for a whole-procedure audit.
-
-With preferences enabled, `subquery_preference` reviews recognizable queries in SELECT lists and scalar WHERE expressions, including variable-assignment SELECT lists, plus increased counts of WHERE EXISTS/NOT EXISTS/IN queries. Expression findings include their clause and line; exact retained expressions are suppressed with an original. Logical parentheses retain the containing clause; inner SELECTs get their own context. Direct IF/WHILE EXISTS checks, FROM/JOIN/APPLY sources, JOIN predicates, literals, comments and ordinary IN value lists are excluded. This is not a full T-SQL parser or a proof that a JOIN rewrite is equivalent. Use the standalone final procedure check when the user asks to repair an existing pattern, so an unchanged occurrence is still reviewed. Resolve findings against the approved examples, actual keys, NULL behavior and row grain; do not replace them mechanically or dismiss them merely because they are warnings.
-
-`cte_preference` reviews supported statement-level `WITH name [(columns)] AS (query)` declarations, including comma-separated CTEs. With an original, matching declaration names are counted and retained occurrences are skipped. Table hints, comments and SQL text inside strings do not count. Compare the CTE with the approved procedure, including aggregation and row cardinality, and retain it when justified. Use the one-file check on logic changes so the formatting-only token comparison does not flag intentional changes as preservation errors.
-
-Check derived blocks even when they are the first FROM source. Inspect opening/closing parentheses, aliases, inner clauses, and derived JOIN conditions together. In nested FROM/JOIN/EXISTS blocks and UNION branches, align relative to each containing block; retain the I-column rule for ordinary JOINs. Do not apply these rules wholesale to function arguments or APPLY merely because they contain parentheses.
+헤더는 [작성자 규칙](procedure-authorship.md)을 따른다. 기존 로직 전체의 교정을 요청받으면 저장본 단독 검사도 함께 확인한다. 경고나 불완전 결과는 해당 원본·실행 흐름을 점검한다. 옵션·진단 범위는 [SQL 체커 상세](../../../docs/checkers/sql.md)를 참조한다.

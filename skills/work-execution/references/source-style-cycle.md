@@ -1,25 +1,20 @@
-# Required source-style cycle for code work
+# 원본과 작성 방식 대조
 
-Use this cycle once for SQL, PB and C#, including Designer and reports. A unit is one coherent method, query branch or related UI change. Keep observations in the current task.
+SQL·PB·C#(Designer·보고서 포함)의 작업 단위는 메서드 하나, 같은 모드의 쿼리, 또는 관련 UI 변경이다.
 
 ## Before the first code write
 
-1. Apply the domain skill to the files and responsibilities being changed. Read its required sections.
-2. For each responsibility, find a working program in the user's designated comparison project. Otherwise use an approved comparable project with the same framework. Read the relevant complete bodies, called initialization and consumer. Retrieve truncated portions.
-3. Identify the comparison in a brief progress update with the actual program, methods or branches. Keep using a previously identified reference while it still covers the work.
-4. Read the target's caller, schema, libraries and controls for the actual behavior, dimensions, permissions and validation. The reference establishes writing style. When an essential reference is missing, obtain it before deciding the implementation.
+1. 대상 파일과 역할을 등록하고 해당 필수 범위를 읽는다. 책임마다 사용자가 지정한 비교 프로젝트에서 실제 작동하는 동종 프로그램을 찾는다. 미지정 시 승인된 같은 프레임워크의 비교 프로젝트를 쓴다.
+2. 비교할 프로그램·메서드·분기를 짧게 알린다. 필요한 메서드 전체와 초기화·호출부까지 읽는다. 이미 식별한 근거가 그대로 유효하면 재사용한다.
+3. 대상의 호출부·스키마·라이브러리에서 치수·권한·검증·반환을 확인한다. 작성 방식은 비교 소스, 동작은 대상 소스 기준이다. 판단을 바꾸는 원본이 빠지거나 출력이 잘렸으면 해당 부분을 가져온다.
 
 ## Before and after each implementation unit
 
-- Before writing, identify the exact gap and what already handles it. Account for every added behavior, including copied setup or an imported draft. Remove unsupported additions.
-- After writing, read the saved body and the affected caller or initialization. Compare the actual side effects, outputs, exclusions and overrides with the request and reference. Correct deviations immediately.
-- Use host-observed editing tools when appropriate. For an external writer, compare the verified pre-change source and saved definition yourself.
+- 쓰기 전에는 기존 동작과 요청에 남은 차이를 확인한다. 가져온 초안·예시에서 추가한 설정·분기에도 같은 기준을 적용한다.
+- 저장 후에는 실제 저장된 본문과 영향을 받은 호출·초기화를 읽고 부작용·반환·제외 행·속성을 대조한다. 외부 작성 도구로 변경했으면 확인한 원본과 저장본을 직접 비교한다.
 
 ## After the final code write
 
-1. Compare the final changed methods, SQL branches and Designer blocks with the reference and latest user instructions. Inspect the real production entry point and combined caller, initialization, binding, data and reporting paths.
-2. Mark applicable rules verified, violated or unverified. Resolve checker findings using actual source and originals. A successful test alone cannot establish style compliance.
-3. Repair only violations. Re-read and re-audit each repair until resolved, then check affected neighbors for regressions. Reuse unaffected evidence. Report earlier process omissions accurately.
-4. Identify the compared programs and flows and any unverified result at handover. Respect the scope of reviews, stop requests, builds, database writes and deployment.
-
-Across compaction or restart, preserve corrections and unfinished checks with [context handoff](../../context-handoff/SKILL.md). Restore original evidence and check the current source and latest user instructions before resuming.
+1. 최종 변경과 최신 요구·비교 소스를 맞춘다. 실제 진입점에서 변경된 호출, 바인딩, 저장, 출력을 연결한다. 원본과 검사 결과로 적용 규칙을 확인·위반·미확인으로 구분한다.
+2. 확인된 위반만 고치고 수정을 재검토한다. 인접 경로의 회귀를 확인하고 바뀌지 않은 근거는 재사용한다. 생략한 절차나 실행하지 못한 검증은 결과에 밝힌다.
+3. 인계 때 비교 프로그램·확인 범위를 남긴다. 중단, 빌드, DB 쓰기, 배포는 사용자 범위를 따른다. 재개 시 [인계 기록](../../context-handoff/SKILL.md)의 최신 정정·미확인 부분과 현재 소스를 확인한다.

@@ -92,6 +92,20 @@ def statically_hidden(model: DesignerModel, name: str) -> bool:
     return False
 
 
+def visible_comparison(model: DesignerModel, name: str) -> bool:
+    """Exclude hidden or conditionally visible peers, including through a parent."""
+    visited = set()
+    while name in model.controls:
+        if name in visited:
+            return False
+        visited.add(name)
+        control = model.controls[name]
+        if 'Visible' in control.properties and model.static_visibility.get(name) != 'true':
+            return False
+        name = control.parent
+    return True
+
+
 def locate_issues(model: DesignerModel, issues: list[Issue], artifact: str) -> list[Issue]:
     located = []
     for issue in issues:

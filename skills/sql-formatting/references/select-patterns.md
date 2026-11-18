@@ -1,12 +1,19 @@
-# SELECT examples
+# 조회 예시
 
-Use fictional tables only as structural examples. Do not add these business rules to a target unless its caller and approved source require them.
+## SELECT contract
+
+| 바뀌는 부분 | 작성할 형태 |
+| --- | --- |
+| 표시명·업무 자격 | 설명이 없어도 남는 행은 LEFT OUTER JOIN. 반드시 있어야 하는 자격 행은 INNER JOIN. 같은 키가 여러 건이면 JOIN 전 반환 단위를 확인한다. |
+| 헤더별 상세 합계 | 상세를 전체 헤더 키로 먼저 GROUP BY한 뒤 붙인다. 사용자의 지시 없이 누락 합계를 0으로 대체하지 않는다. |
+| 처리된 행 제외 | 처리 테이블에 전체 키로 LEFT OUTER JOIN 후 NULL 불가 키의 IS NULL로 골라낸다. |
+| 같은 모드의 여러 결과 | 한 분기에 호출자의 결과표 순서대로 SELECT를 둔다. 공통 처리와 서로 다른 모드의 조건은 원래 범위를 유지한다. |
+
+아래에서 현재 변경하는 항목의 예시를 대조한다. 표·값은 가상이다.
 
 ## Lookup and eligibility
 
-Do not use INNER JOIN merely to fetch descriptive data when the main row must survive a missing description. Conversely, do not replace a required eligibility JOIN with LEFT OUTER JOIN and display a plausible default.
-
-This fictional request lists only approved orders, including orders whose customer description is missing. ORDER_HEADER and ORDER_APPROVAL each have at most one row per COMPANY_ID/ORDER_NO; CUSTOMER_MASTER is unique by COMPANY_ID/CUSTOMER_ID. Approval belongs to the order role (A1), while customer data is another role (B).
+승인 건만 조회하되 거래처 설명이 없는 승인 건도 남기는 예다. 회사·주문별 승인은 최대 한 행이다.
 
 ```sql
 SELECT A.ORDER_NO
@@ -24,13 +31,9 @@ WHERE A.COMPANY_ID = @COMPANY_ID
   AND A.ORDER_DATE BETWEEN @FROM_DATE AND @TO_DATE
 ```
 
-Check both cases: a missing customer keeps an approved order; a missing approval excludes it. If approval has multiple matching rows in the actual target, resolve that actual row grain before using this shape.
-
 ## Grouped detail JOIN
 
-Do not let matching detail rows multiply a header result, or fetch a total with a SELECT inside the output list. Aggregate to the header key before joining.
-
-ORDER_HEADER has one row per COMPANY_ID/ORDER_NO and ORDER_DETAIL has multiple lines per header. The example preserves NULL totals when no detail exists; add a zero fallback only when the user explicitly requests that missing-result substitution.
+회사·주문별로 상세 금액을 먼저 합산해 헤더 행 수를 보존한다.
 
 ```sql
 SELECT A.COMPANY_ID
@@ -55,9 +58,7 @@ WHERE A.COMPANY_ID = @COMPANY_ID
 
 ## Exclusion JOIN
 
-Do not introduce WHERE NOT EXISTS/NOT IN for a new exclusion when the approved JOIN form meets the contract. Join the processing key and keep only unmatched rows.
-
-In this fictional request, DOCUMENT_HEADER and POSTED_DOCUMENT use COMPANY_ID/DOCUMENT_NO as their non-null key. This example selects documents with no posting.
+게시되지 않은 문서를 조회한다. 처리 키의 문서번호는 NULL 불가다.
 
 ```sql
 SELECT A.DOCUMENT_NO
@@ -70,13 +71,9 @@ WHERE A.COMPANY_ID = @COMPANY_ID
   AND A1.DOCUMENT_NO IS NULL
 ```
 
-Do not use a nullable descriptive field as the absence test. Preserve a genuinely required existing exclusion when changing its shape would alter NULL behavior, full-key matching or results.
-
 ## One branch with multiple results
 
-Do not repeat the same mode condition just to return another table, or merge different modes with conditional OR predicates merely to share SQL. Keep each mode's ordered results in its owning branch.
-
-Here the caller expects LIST to return one table, and DETAIL to return header then detail. That order is part of this fictional caller contract.
+이 호출자의 LIST는 1표, DETAIL은 헤더와 상세 2표를 순서대로 소비한다.
 
 ```sql
 IF @WORKTYPE = 'LIST'
@@ -105,5 +102,3 @@ BEGIN
     ORDER BY A.LINE_NO
 END
 ```
-
-Do not copy this result count/order to another caller. Preserve separate shared phases when they have a real responsibility.

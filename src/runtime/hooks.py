@@ -16,7 +16,7 @@ from src.context.store import Store, data_root, session_key
 from src.context.transcript import add_user, capture, discard_host_records, recent_users, _host_block
 from src.runtime.check_context import SourceBaselines, companion, literal_project_sources, nearby_projects
 from src.runtime.write_targets import shell_write_targets
-from src.runtime.skill_usage import DOMAINS, HOOK_EVENTS, explicit_skill_requests, matching_prompt, native_skill_usage
+from src.runtime.skill_usage import DOMAINS, HOOK_EVENTS, explicit_skill_requests, matching_prompt, native_skill_usage, named_write_targets, successful_tool_result
 from src.runtime.workflows import (CYCLE, SCOPE_VERSION, application_hint, applications_domains,
                                    binding, guidance_paths, new_epoch, required_paths)
 from src.runtime.workflows import routing_problem
@@ -253,6 +253,41 @@ def snapshot(path: Path) -> tuple[str, str]:
     return raw.sha256, text
 
 
+def remember_named_targets(state: dict, targets: set[str], baselines: SourceBaselines) -> None:
+    """Keep the original before the first tool can write a user-named destination."""
+    if state.get('paused'):
+        return
+    names = set(state.get('named_targets', []))
+    for name in sorted(targets - names):
+        if len(names) >= MAX_FILES:
+            break
+        names.add(name)
+        path = Path(name)
+        try:
+            fingerprint, _ = snapshot(path)
+            baselines.capture(path)
+            peer = companion(path)
+            if peer is not None:
+                baselines.capture(peer)
+            if fingerprint != snapshot(path)[0]:
+                raise ValueError('Named target changed while capturing its original')
+            state.setdefault('named_originals', {})[name] = fingerprint
+        except (OSError, ValueError, UnicodeError, RuntimeError):
+            state.setdefault('named_originals', {})[name] = None
+    state['named_targets'] = sorted(names)
+
+
+def saved_body_returned(event: dict | None, path: Path, body: str) -> bool:
+    if not event or event.get('hook_event_name') != 'PostToolUse' or event.get('tool_name') not in {'Write', 'Edit'}:
+        return False
+    result = event.get('tool_response')
+    if not isinstance(result, dict) or not successful_tool_result(event):
+        return False
+    name = result.get('filePath')
+    saved = result.get('savedContent', result.get('content') if result.get('type') in ('create', 'update') else None)
+    return isinstance(name, str) and Path(name).is_absolute() and Path(name).resolve() == path.resolve() and saved == body
+
+
 def pending_writes(state: dict, domains: set[str], baselines: SourceBaselines,
                    paths: list[Path] | None = None) -> tuple[list[Path], dict]:
     """Keep a file's write intent until Stop; one completion cannot retire overlapping writes."""
@@ -292,16 +327,18 @@ def inspect(path: Path, text: str, *, original: str | None = None, peer: str | N
                            require_procedure_header=require_procedure_header, procedure_author=procedure_author,
                            procedure_changes_only=True, review_sp_changes=require_procedure_header and bool(original))
     elif suffix == '.cs':
+        layouts = {key.partition(':')[2]: value for key, value in comparisons.items() if key.startswith('designer:')}
         if path.name.casefold().endswith('.designer.cs'):
             from src.csharp.designer import check_designer
             result = check_designer(text, original=original, code_behind=peer or '', control_sources=control_sources or [],
-                                    style_reference=comparisons.get('designer'))
+                                    style_reference=comparisons.get('designer'), layout_references=layouts)
         else:
             from src.csharp.checks import check_csharp
             result = check_csharp(text, original=original, designer=peer,
                                   original_designer=original_peer, control_sources=control_sources or [],
                                   style_reference_csharp=comparisons.get('csharp'),
                                   style_reference_designer=comparisons.get('designer') if peer is not None else None,
+                                  layout_references=layouts if peer is not None else None,
                                   style_references={key.partition(':')[2]: value for key, value in comparisons.items()
                                                     if key.startswith('csharp:')})
     else:
@@ -431,7 +468,7 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
                     messages.append(name + ': ' + json.dumps({**item['check'], 'read_scope': item['read_scope']}, ensure_ascii=False))
             file_returned = returned if reads is None or any(path.resolve() == read for read in reads) else ''
             returned_body = undecorated(file_returned)
-            if sha == 'deleted' or (text.strip() and (normalized(text) in normalized(file_returned) or
+            if sha == 'deleted' or saved_body_returned(event, path, text) or (text.strip() and (normalized(text) in normalized(file_returned) or
                                                      undecorated(text) in returned_body)):
                 item['readback'] = sha
                 item['pending_spans'] = []
@@ -457,7 +494,8 @@ def update_files(state: dict, paths: list[Path], returned: str = '', before: dic
     return messages
 
 
-def observed_reads(returned: str, state: dict, bodies: dict[str, str] | None = None) -> set[str]:
+def observed_reads(returned: str, state: dict, bodies: dict[str, str] | None = None,
+                   selected: set[str] | None = None) -> set[str]:
     if not returned:
         return set()
     seen = set()
@@ -466,16 +504,23 @@ def observed_reads(returned: str, state: dict, bodies: dict[str, str] | None = N
              for line in returned.splitlines() if line.strip()}
     if bodies is None:
         bodies = {}
-    if not bodies:
-        texts = {}
-        bodies.update((relative, document(ROOT, relative, texts=texts)[1]) for relative in guidance_paths())
+    paths = guidance_paths()
+    if not lines:
+        paths &= set(coverage)
+    elif selected is not None:
+        paths = {relative for relative in paths if relative.partition('#')[0] in selected}
+    texts = {}
+    for relative in paths - bodies.keys():
+        bodies[relative] = document(ROOT, relative, texts=texts)[1]
     response_text = normalized(returned)
     origins: dict[str, set[str]] = {}
-    for relative, body in bodies.items():
+    for relative in paths:
+        body = bodies[relative]
         for line in body.splitlines():
             if line.strip():
                 origins.setdefault(line.strip(), set()).add(relative.partition('#')[0])
-    for relative, body in bodies.items():
+    for relative in paths:
+        body = bodies[relative]
         expected = {line.strip() for line in body.splitlines() if line.strip()}
         matches = expected & lines
         prior = coverage.get(relative, {})
@@ -504,8 +549,11 @@ def prerequisites_for(state: dict, path: Path) -> set[str]:
     return required_paths(item, path) if item is not None else set()
 
 
-def current_prerequisites(returned: str, state: dict, bodies: dict[str, str] | None = None) -> set[str]:
-    seen = observed_reads(returned, state, bodies)
+def current_prerequisites(returned: str, state: dict, bodies: dict[str, str] | None = None,
+                          selected: set[str] | None = None) -> set[str]:
+    seen = observed_reads(returned, state, bodies, selected)
+    if selected is not None:
+        seen.update(p for p in state.get('skills_seen', []) if p.partition('#')[0] not in selected)
     for name, record in state.get('native_skill_reads', {}).items():
         if name not in set(DOMAINS.values()):
             continue
@@ -515,7 +563,8 @@ def current_prerequisites(returned: str, state: dict, bodies: dict[str, str] | N
     return seen
 
 
-def observe_usage(returned: str, state: dict, *, native: str | None = None, event: str = '', prompt_id=None, prompt=None, bodies: dict[str, str] | None = None) -> None:
+def observe_usage(returned: str, state: dict, *, native: str | None = None, event: str = '', prompt_id=None, prompt=None,
+                  bodies: dict[str, str] | None = None, selected: set[str] | None = None) -> None:
     if native is not None:
         body = (ROOT / 'skills' / native / 'SKILL.md').read_text(encoding='utf-8-sig')
         record: dict[str, object] = {'sha256': hashlib.sha256(body.encode('utf-8')).hexdigest(), 'event': event}
@@ -530,7 +579,7 @@ def observe_usage(returned: str, state: dict, *, native: str | None = None, even
                 record['previous_native'] = settled_native(prior)
             record['pending_submission'] = True
         state.setdefault('native_skill_reads', {})[native] = record
-    seen = current_prerequisites(returned, state, bodies)
+    seen = current_prerequisites(returned, state, bodies, selected)
     state['skills_seen'] = sorted(seen)
     state['kh_used_skills'] = sorted(used_domains(state))
 
@@ -573,6 +622,10 @@ def clear_usage(state: dict) -> None:
     state['kh_used_skills'] = []
     state['native_skill_reads'] = {}
     state['requested_skills'] = []
+    state.pop('named_targets', None)
+    state.pop('named_originals', None)
+    state.pop('late_registrations', None)
+    state.pop('unregistered_writes', None)
     state.pop('write_registration_domains', None)
     state['applications'] = {}
     state.pop('application_errors', None)
@@ -652,12 +705,23 @@ def handle(event: dict, host: str) -> dict:
     store = Store(data_root(), event['cwd'])
     key = session_key(event, host)
     paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse', 'PostToolUseFailure'} else ([], [])
-    returned = flatten(event.get('tool_response', {})) if name == 'PostToolUse' else ''
+    returned = flatten(event.get('tool_response', {})) if name == 'PostToolUse' and successful_tool_result(event) else ''
     native = native_skill_usage(event, host)
     explicit = explicit_skill_requests(event, host, plugin_root=ROOT)
     observation = {}
     guidance: dict[str, str] = {}
-    observed_reads(returned, observation, guidance)
+    read_files = successful_read_paths(event) if returned else []
+    skill_root = (ROOT / 'skills').resolve()
+    selected = {path.relative_to(skill_root).as_posix() for path in read_files if path.is_relative_to(skill_root)}
+    # Some hosts deliver a Read body without a file argument. Only an actual
+    # read tool may use the existing content-based observation in that case.
+    shell_bundle = (event.get('tool_name') in {'exec_command', 'PowerShell', 'Bash'} and not read_files and
+                    any('name: ' + domain in returned for domain in DOMAINS.values()) and '---' in returned)
+    anonymous_read = (shell_bundle or event.get('tool_name') in {'Read', 'read_file'} and not event.get('tool_input')) and not (
+        isinstance(event.get('tool_response'), dict) and any(event['tool_response'].get(k) for k in ('error', 'isError', 'is_error')))
+    guidance_output = returned if selected or anonymous_read else ''
+    relevant = None if anonymous_read else selected
+    observed_reads(guidance_output, observation, guidance, relevant)
     create = bool(native or explicit or observation.get('read_coverage')) or name == 'PreCompact'
     with store.connect(create=create) as connection:
         if connection is None:
@@ -703,10 +767,38 @@ def handle(event: dict, host: str) -> dict:
                 state.pop('scope_reset_pending', None)
             except (OSError, ValueError, UnicodeError):
                 pass  # Preserve originals; unrelated work must not inherit their checks.
-        if name in {'PostToolUse', 'UserPromptExpansion'}:
-            observe_usage(returned, state, native=native, event=str(name), prompt_id=event.get('prompt_id'), prompt=event.get('prompt'), bodies=guidance)
+        if name in {'PostToolUse', 'UserPromptExpansion'} and (native or guidance_output):
+            observe_usage(guidance_output, state, native=native, event=str(name), prompt_id=event.get('prompt_id'), prompt=event.get('prompt'), bodies=guidance, selected=relevant)
+            if native and name == 'PostToolUse':
+                targets = named_write_targets(state.get('latest_prompt', {}).get('text', ''), {native}, event['cwd'])
+                if targets:
+                    remember_named_targets(state, targets, baselines)
         domains = used_domains(state)
         unapplied = [path for path in paths if not applied_path(state, path)]
+        named = {Path(p) for p in state.get('named_targets', [])}
+        missing = [str(p) for p in unapplied if p in named]
+        if named:
+            store.agent_scope(connection, event, host, key=key)
+        if missing and name == 'PreToolUse':
+            reason = 'Register the named KH output with kh_context.py apply before writing: ' + ', '.join(missing)
+            if state.get('paused'):
+                reason = 'KH task remains paused. ' + reason
+            store.save(connection, key, state)
+            return ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
+                    if mode == 'enforce' else context(name, reason))
+        if missing and name == 'PostToolUse' and successful_tool_result(event):
+            state['unregistered_writes'] = sorted(set(state.get('unregistered_writes', [])) | set(missing))
+        if name in {'Stop', 'SubagentStop'} and not state.get('paused'):
+            for path in named:
+                if applied_path(state, path) or state.get('check_epoch_closed'):
+                    continue
+                expected = state.get('named_originals', {}).get(str(path))
+                try:
+                    changed = expected != snapshot(path)[0]
+                except (OSError, ValueError, UnicodeError, RuntimeError):
+                    changed = True
+                if changed:
+                    state['unregistered_writes'] = sorted(set(state.get('unregistered_writes', [])) | {str(path)})
         paths = [path for path in paths if applied_path(state, path)]
         unresolved = unresolved if paths else []
         # A skill token/read/native selection does not identify which files the
@@ -823,7 +915,9 @@ def handle(event: dict, host: str) -> dict:
                 paths = [path for path in paths if str(path) not in baseline or path in recovered]
             paths = list(dict.fromkeys([*recovered, *paths]))
             active = state['files'] if domains and not state.get('scope_reset_pending') and not state.get('check_epoch_closed') else {}
-            messages = update_files(state, list(dict.fromkeys([*(Path(p) for p in active), *paths])), returned, baseline,
+            read_paths = set(read_files)
+            active_reads = (Path(p) for p in active if Path(p) in read_paths)
+            messages = update_files(state, list(dict.fromkeys([*active_reads, *paths])), returned, baseline,
                                     baselines=baselines, event=event)
             if paths:
                 capture(state, event, host)
@@ -880,6 +974,10 @@ def handle(event: dict, host: str) -> dict:
             observe_usage('\n', state, bodies=guidance)  # Re-evaluate accumulated body evidence after resolving pending delivery.
             # Invocation tokens alone establish neither delivery nor development scope.
             state['requested_skills'] = sorted(set(state.get('requested_skills', [])) | explicit)
+            targets = named_write_targets(prompt, explicit | set(matched), event['cwd']) if isinstance(prompt, str) else set()
+            if targets:
+                remember_named_targets(state, targets, baselines)
+                store.agent_scope(connection, event, host, key=key)
             previous_user_sequence = max((item['seq'] for item in state['users']), default=0)
             capture(state, event, host)
             if isinstance(prompt, str) and prompt:
@@ -914,6 +1012,14 @@ def handle(event: dict, host: str) -> dict:
                          before=baseline, baselines=baselines)
             pending = []
             hard_pending = []
+            from src.runtime.screen_contract import applied_screen_contracts
+            try:
+                cross_checks = applied_screen_contracts(state, baselines)
+            except (OSError, ValueError, RuntimeError) as error:
+                cross_checks = [{'status': 'incomplete', 'new_errors': [], 'unresolved': [str(error)]}]
+            state['last_screen_contract_checks'] = cross_checks
+            cross_errors = [message for report in cross_checks for message in report['new_errors']]
+            lost_links = [report['caller'] + ' ' + target for report in cross_checks for target in report.get('lost_call_targets', [])]
             for path, item in state['files'].items():
                 check = item.get('check', {})
                 if item.get('error') or item.get('routing_problem') or (item.get('pending_spans') and item.get('readback') != item.get('sha256')) or check.get('errors'):
@@ -928,8 +1034,8 @@ def handle(event: dict, host: str) -> dict:
                 pending = sorted(set(pending) | set(state['files']))
             application_errors = state.get('application_errors', {})
             reference_errors = [problem for path in state['files'] if (problem := reference_problem(state, Path(path)))]
-            fingerprint = hashlib.sha256(json.dumps([state['files'], missing_references, legacy, application_errors, reference_errors], sort_keys=True).encode()).hexdigest()
-            if pending or state.get('file_warning') or application_errors or reference_errors:
+            fingerprint = hashlib.sha256(json.dumps([state['files'], missing_references, legacy, application_errors, reference_errors, cross_errors, lost_links], sort_keys=True).encode()).hexdigest()
+            if pending or state.get('file_warning') or application_errors or reference_errors or cross_errors or lost_links:
                 state['completion_status'] = 'requires_repair_or_evidence'
                 state['semantic_audit_verified'] = False
                 reason = ('KH cannot verify completion for these saved files: ' + ', '.join(pending) + '. '
@@ -947,17 +1053,30 @@ def handle(event: dict, host: str) -> dict:
                               for path in pending if state['files'][path].get('check', {}).get('sp_changes')]
                 if sp_changes:
                     reason += ' Compare these changes to the actual request and named reference SPs before reporting completion: ' + ' '.join(sp_changes)[:3000]
-                hard_block = bool(hard_pending or missing_references or legacy or application_errors or reference_errors)
+                if cross_errors:
+                    reason += ' Resolve the new mismatch between applied C# and SQL sources: ' + ' | '.join(cross_errors)[:3000]
+                if lost_links:
+                    reason += ' A previously resolved screen-to-procedure call no longer resolves. Compare the new target with its actual definition: ' + ', '.join(lost_links)
+                hard_block = bool(hard_pending or missing_references or legacy or application_errors or reference_errors or cross_errors)
                 if mode == 'enforce' and not event.get('stop_hook_active') and (hard_block or state.get('stop_notice') != fingerprint):
                     state['stop_notice'] = fingerprint
                     output = {'decision': 'block', 'reason': reason}
                 else:
                     output = {'systemMessage': reason}
-            else:
+            elif not state.get('unregistered_writes'):
                 try:
                     retire_checks(state, baselines, 'checks_complete')
                 except (OSError, ValueError, UnicodeError):
                     output = {'systemMessage': 'KH could not verify cleanup of its task-local source baselines; inspect ' + str(baselines.directory)}
+        if name in {'Stop', 'SubagentStop'} and state.get('unregistered_writes') and not state.get('paused'):
+            reason = ('KH observed an unregistered change to a named output. Run kh_context.py apply for this output, '
+                      'then compare its saved change with the captured pre-edit original: ' + ', '.join(state['unregistered_writes']))
+            state['completion_status'] = 'requires_repair_or_evidence'
+            state['semantic_audit_verified'] = False
+            output = ({'decision': 'block', 'reason': reason} if mode == 'enforce' and not event.get('stop_hook_active')
+                      else {'systemMessage': reason})
+        elif name in {'Stop', 'SubagentStop'} and named and not domains and not state.get('paused'):
+            baselines.cleanup()
         if name in {'Stop', 'SubagentStop', 'SessionEnd'}:
             state['kh_scope_closed'] = True
             settle_native_usage(state)

@@ -1,44 +1,28 @@
-# Actual data and event flow
+# 화면 데이터 흐름
 
-For full screens, trace Load/initControl → Search → detail → protection → requested commands → requery and focus. Read actual permissions, toolbar and custom-button paths. For a local edit, trace only the affected flow.
+전체 화면은 Load/initControl → 조회 → 상세 → 편집 보호 → 명령 → 재조회·포커스를 확인한다. 국소 변경은 관련 이벤트·권한·툴바·사용자 버튼만 따라간다.
 
 ## Connecting functionality to an existing screen
 
-| Operation | Establish from the current screen |
+| 작업 | 기존 화면에서 확인할 동작 |
 | --- | --- |
-| New | Reuse existing initialization and DataTable schema. Query empty DETAIL only if needed for that schema. |
-| Edit | Preserve bound values and switch to the established edit mode and tab. Fetch only missing data. |
-| Remove editable detail | Use the established GridView API. Add per-row processing only for a required effect. |
-| Delete persisted documents | Save the selected master keys as the expected XML rowset. A focus call returns one row. |
-| Add detail | Use NewRow, field assignment and Rows.Add. Put keys and numbering in their established owner. |
-| Save/delete | Keep current confirmations, validation, error messages and pending changes on failure. |
-| Initialize dates | Read the actual control API and same-screen usage before choosing a date helper. |
-| Change number display | Trace DB expression, DataColumn, editor and report. Preserve numeric type, precision and NULLs unless a verified consumer requires conversion. |
-
-- Keep named handlers and existing query/save boundaries. Read the actual helper including its return value, schema cloning and DataRowState behavior before adding code. See [coding style](coding-style.md).
-- Use direct DataTable operations when the project does. Add a helper, state flag, restriction or extra query only for a concrete gap. A status column alone does not grant permission to change button or edit behavior.
-- After feedback, inspect declarations, initialization, assignments and uses together. Revert only your changes, preserve later user edits and re-read the final caller and SP.
+| 신규·수정 | 초기화와 기존 스키마를 재사용한다. 스키마가 필요할 때만 빈 DETAIL을 조회한다. 수정은 바인딩 값을 유지하고 기존 편집 모드·탭을 선택한다. |
+| 상세 추가·삭제 | NewRow → 필드 대입 → Rows.Add. 채번은 기존 담당에 둔다. 편집 중인 상세 삭제는 기존 GridView API를 사용한다. |
+| 저장된 문서 삭제 | 체크한 마스터 전체 키를 XML 배치로 전달한다. 현재 포커스 한 행, 화면 정렬 순서, 실제 선택은 구분한다. |
+| 저장 오류 | 기존 확인창·검증·오류 메시지와 미저장 변경을 유지한다. 재조회는 성공 경로에 둔다. |
+| 날짜·금액 | 날짜 초기화는 실제 컨트롤과 같은 화면 용례를 확인한다. 숫자는 DB 식 → DataColumn → 편집기/출력까지 타입·정밀도·NULL을 보존한다. |
 
 ## Save modes, selection and binding
 
-- Read the caller's actual save operation and the full comparable implementation. Trace mode, checked keys, TableName, row states, XML generation, transaction, result and requery. Inspect ExecSP/ExecSPTrn and the actual edit-mode API.
-- Derive WORKTYPE from the established edit-mode API for ordinary saves. Use a fixed mode for an actual dedicated operation. Match the exact strings to the SP.
-- Keep selected rows in the established batch. Printed pages per row do not imply separate DB saves. Distinguish checked rows, focused rows and sorted order. Keep SELECT, SAVE and print boundaries independently grounded.
-- Use the existing DataRowState/XML change selection. Clone/ImportRow when required for selected master keys. Read deleted Original keys where necessary. Avoid redundant comparison, commit, validation and delete/reinsert steps.
-- Requery via the existing success path. If the SP owns GETDATE(), add an output parameter only for a verified caller need.
-- Bind visible names and stored codes to their actual controls. For a specified hidden USERID, use its EditValue. Match FieldName, XML and query parameter contracts independently.
-- Apply edit-mode movement protection before any early return that bypasses it. Preserve selection and details. Use the screen's protection routine for availability and colors.
-- Follow the [SQL workflow](../../sql-formatting/SKILL.md) for SP changes. Compare actual schema, parameter names/types, XML keys and ordered results.
-
-| C# source | Verify in the paired source |
-| --- | --- |
-| DataRowToPanel / MasterToDataTable | Read the target library overload for BindingField, key handling and hidden/bound controls. |
-| DataTableToXml | Follow TableName and selected row states into the actual XML root, row path and OPENXML mapping. |
-| BindingCode / BindingorgdivCode | Check the overload's organization argument and the target editor's value/display columns. |
-| GetDataSetFromSP / ExecSPTrn | Compare one call's literal parameter names with the actual SP using `kh_check.py sp-call`. Trace the mode, output direction, result order and grid FieldName in the caller. |
+- 저장 유형과 행 선별은 실제 호출부와 같은 역할의 비교 프로그램을 읽는다. 일반 저장은 기존 편집 모드 API를 쓰고, 전용 작업만 고정 모드를 쓴다. SP 문자열과 맞춘다.
+- 체크 키, 변경 행, TableName·XML, 트랜잭션, 성공 후 재조회를 잇는다. 선택 마스터 키에 필요하면 Clone/ImportRow를 쓰고 삭제 행의 Original 키를 확인한다. 행별 인쇄를 이유로 저장 배치를 나누지 않는다.
+- 표시명과 저장 코드는 각 컨트롤에 연결한다. 숨은 USERID를 지정했다면 해당 EditValue를 쓴다. FieldName·XML·SP 인자는 실제 양쪽 이름으로 대조한다.
+- 이동 방지는 우회되는 조기 반환 전에 적용한다. 선택·상세를 유지하고 기존 보호 루틴에 색상·활성 처리를 맡긴다. 상태 열만 보고 새 제한을 추가하지 않는다.
+- 헬퍼·상태 플래그·재질의·추가 검증·삭제 후 재입력은 기존 처리로 해결되지 않는 요구에 한정한다. 서버 GETDATE() 저장시각은 실제 호출자가 필요할 때만 출력한다.
+- C_KONE120에서 바인딩·XML·사업장 코드의 구현을 찾을 때는 [프로젝트 API 표](c-kone120-framework.md)를 참고한다. SP를 바꿀 때는 [SQL 규칙](../../sql-formatting/SKILL.md)의 화면 교차 검사를 적용한다.
 
 ## Preserving original integrations as comments
 
-- Keep the original integration body and disable its execution when requested. Preserve already-commented JOINs and filters. Verify actual calls, fields, bindings and schemas separately.
-- For uploads, inspect the actual workbook headers, types, dates and keys. Use the target's direct DataTable loop. If requested to save valid rows and collect errors, keep that behavior local to that upload.
-- For TY lookup changes, distinguish query RTRUSER from edit USER. Keep established get blocks and separate parsing and comparison conditions.
+- 연동 중지 요청은 원래 본문·기존 주석 처리된 JOIN·필터를 남기고 실행만 막는다. 호출·필드·바인딩·스키마를 각각 확인한다.
+- 업로드는 실제 헤더·타입·날짜·키를 확인하고 대상 방식의 DataTable 반복을 쓴다. 정상행 저장·오류 수집 요청은 해당 업로드에 적용한다.
+- TY에서 조회 RTRUSER와 편집 USER를 구별한다. 피드백 수정은 선언·초기화·대입·사용처를 함께 보고 사용자 후속 편집을 보존한다.

@@ -32,6 +32,7 @@ def main(argv=None):
     apply.add_argument('--reference', action='append', default=[], help='actual comparison source, optionally #Lstart-Lend; selection does not establish a read or approval')
     apply.add_argument('--author', help='name for the target SP AUTHOR header')
     apply.add_argument('--reference-author', action='append', help='search existing SP AUTHOR headers for this name; repeat once per user-selected name')
+    apply.add_argument('--remember-authors', action='store_true', help='only with user approval, reuse the selected names in future SP work in this project')
     get = sub.add_parser('get', help='retrieve one archived user record without preview shortening')
     get.add_argument('seq', type=int)
     memory_get = sub.add_parser('memory-get')
@@ -71,18 +72,42 @@ def main(argv=None):
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0)}
             elif args.command == 'apply':
                 applied = register(state, epoch=args.epoch, targets=args.target, work=args.work, cwd=args.cwd)
-                if args.author is not None or args.reference_author is not None:
-                    if not any(set(item['work']) & {'sql-select', 'sql-save'} for item in applied):
+                sp_files = [item for item in applied if set(item['work']) & {'sql-select', 'sql-save'}]
+                explicit_authors = args.author is not None or args.reference_author is not None
+                if explicit_authors or args.remember_authors:
+                    if not sp_files:
                         raise ValueError('Author selection belongs to actual SP work, not formatting-only or non-SP work.')
-                    from src.sql.procedure_authorship import selected_authors
+                    from src.sql.procedure_authorship import procedure_headers, selected_authors
+                    if args.author is None and args.reference_author:
+                        from src.runtime.check_context import SourceBaselines, source_text
+                        originals = SourceBaselines(store.path.parent / 'checks' / key, state)
+                        owners = set()
+                        for item in sp_files:
+                            path = Path(item['target'])
+                            original = originals.original(path)
+                            headers = procedure_headers(original if original is not None else source_text(path) if path.is_file() else '')
+                            if len(headers) != 1 or not headers[0].fields.get('AUTHOR'):
+                                raise ValueError('The original SP has no unique author; supply --author.')
+                            owners.add(headers[0].fields['AUTHOR'])
+                        if len(owners) != 1:
+                            raise ValueError('These SPs have different original authors; select them separately.')
+                        args.author = owners.pop()
                     state['sql_authorship'] = selected_authors(args.author, args.reference_author)
-                for item in applied:
-                    if set(item['work']) & {'sql-select', 'sql-save'}:
-                        application = binding(state, Path(item['target']))
-                        if application is not None and state.get('sql_authorship') and (
-                                args.author is not None or 'sql_authorship' not in application):
-                            application['sql_authorship'] = dict(state['sql_authorship'])
-                        item['sql_authorship'] = (application or {}).get('sql_authorship')
+                    if args.remember_authors:
+                        store.remember(connection, 'kh.sql.author-selection', json.dumps(state['sql_authorship'], ensure_ascii=False))
+                elif sp_files and not state.get('sql_authorship'):
+                    saved = connection.execute('SELECT body FROM memories WHERE id=?', ('kh.sql.author-selection',)).fetchone()
+                    if saved:
+                        from src.sql.procedure_authorship import selected_authors
+                        choice = json.loads(saved[0])
+                        if not isinstance(choice, dict):
+                            raise ValueError('Invalid project author selection. Replace or forget kh.sql.author-selection.')
+                        state['sql_authorship'] = selected_authors(choice.get('author'), choice.get('reference_author'))
+                for item in sp_files:
+                    application = binding(state, Path(item['target']))
+                    if application is not None and state.get('sql_authorship') and (explicit_authors or 'sql_authorship' not in application):
+                        application['sql_authorship'] = dict(state['sql_authorship'])
+                    item['sql_authorship'] = (application or {}).get('sql_authorship')
                 from src.runtime.source_evidence import select_references, reference_problem
                 select_references(state, applied, args.reference, args.cwd, work=args.work)
                 from src.runtime.check_context import SourceBaselines, companion
@@ -112,10 +137,25 @@ def main(argv=None):
                                 attempted_hashes[str(source)] = snapshot(source)[0]
                             for source in sources:
                                 baselines.capture(source)
+                            named = state.get('named_originals', {})
+                            if str(path) in named:
+                                saved = baselines.original(path)
+                                if named[str(path)] is None or saved is None:
+                                    raise ValueError('The named target has no verified pre-edit original.')
+                                sha, body = named[str(path)], saved
                             state.setdefault('before', {})[str(path)] = line_hashes(body)
                             state.setdefault('before_sha256', {})[str(path)] = sha
+                        if str(path) in state.get('unregistered_writes', []):
+                            state['unregistered_writes'].remove(str(path))
+                            state.setdefault('late_registrations', {})[str(path)] = state.get('application_epoch')
                         state.get('application_errors', {}).pop(str(path), None)
                         state.get('application_failure_hashes', {}).pop(str(path), None)
+                        if item in sp_files:
+                            from src.sql.procedure_authorship import procedure_headers
+                            application = binding(state, path)
+                            headers = procedure_headers(baselines.original(path) or '')
+                            if application is not None and len(headers) == 1 and headers[0].fields.get('AUTHOR'):
+                                application['original_sp_author'] = headers[0].fields['AUTHOR']
                     except (OSError, ValueError, UnicodeError, RuntimeError) as exc:
                         state.setdefault('application_errors', {})[str(path)] = redact(str(exc))
                         state.setdefault('application_failure_hashes', {}).setdefault(str(path), attempted_hashes)
@@ -179,6 +219,10 @@ def main(argv=None):
                           'audit_note': 'Static checks and observed reference/readback evidence do not establish semantic necessity, source approval, full comparison or regression audit.',
                           'sql_authorship': state.get('sql_authorship'),
                           'requested_skills': state.get('requested_skills', []),
+                          'named_outputs': state.get('named_targets', []),
+                          'unregistered_changes': state.get('unregistered_writes', []),
+                          'late_registrations': state.get('late_registrations', {}),
+                          'screen_contract_checks': state.get('last_screen_contract_checks', []),
                           'available_prerequisites': sorted(available),
                           'application_original_errors': state.get('application_errors', {}),
                           'applied_files': {item.get('target', path): {'work': item.get('work', []),

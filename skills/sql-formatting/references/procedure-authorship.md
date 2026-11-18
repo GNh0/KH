@@ -1,14 +1,10 @@
-# SP author and comparison-source selection
+# 프로시저 작성자와 참고 SP
 
-This is part of SQL-FORMATTING, not another skill or replacement style. Use it before creating or changing a SELECT/SAVE procedure. Query explanation, reading a procedure, and formatting-only preservation do not trigger author setup.
+SELECT/SAVE를 새로 작성하거나 로직을 수정할 때 적용한다. 단순 읽기·설명·서식 정리는 바로 진행한다.
 
-Ask only for missing information. For example: “이번 SP의 AUTHOR에 넣을 이름은 무엇인가요? 작성 스타일은 누구의 기존 SP를 찾아 참고할까요?” If the user chooses their own SPs, reuse the header name as the search name. If they give several search names, search each one. Keep the search names in the task context; the target header contains only its actual author. Reuse explicit answers in the current task, without guessing identities from existing headers or account names.
-
-Search the authorized project/database definitions or the user-designated reference collection by AUTHOR. Select by responsibility from the matches and read the complete bodies: SELECT for 조회, SAVE for 처리. Identify the SP names, their actual header authors and the relevant style decision before drafting. Report a requested name with no matches. If no suitable source is available, ask for another source. A generic example, generated draft or similarly named file cannot establish the author's style.
-
-Read the selected SPs before drafting. Compare parameter/caller flow, operation branches, XML preparation, JOIN/alias roles, writes and outputs against those bodies. The user's explicit rules and SQL-FORMATTING still govern spaces/alignment, aliases, JOIN forms, value substitutions and unnecessary code. An author's older exceptions do not override those rules. Use the author's source to choose unspecified details while preserving the actual target's behavior.
-
-Every worked-on SP must contain this header with actual values:
+1. 신규 SP는 **헤더에 쓸 이름**과 **작성 방식을 참고할 기존 SP의 작성자**를 확인한다. 기존 SP는 원본 헤더의 작성자를 보존하고 참고할 작성자만 확인한다. 이미 정한 이름은 재사용한다. 본인 SP를 지정하면 같은 이름으로 찾고, 여러 명이면 각 이름으로 찾는다.
+2. 지정받은 프로젝트·정의에서 실제 AUTHOR를 검색한다. 조회는 SELECT, 처리는 SAVE의 같은 역할 참고 SP를 찾는다. 참조명·실제 작성자와 선택한 이유를 표시하고 헤더부터 끝까지 읽는다. 대상자를 찾지 못하면 검색 결과를 밝히고 대체 출처를 확인한다.
+3. 명시한 사용자 규칙과 SQL-FORMATTING을 우선한다. 참고 SP는 미지정 작성 방식, 대상 SP·호출부는 실제 인자·키·분기·쓰기·반환의 근거다.
 
 ```sql
 -- =============================================
@@ -18,12 +14,10 @@ Every worked-on SP must contain this header with actual values:
 -- =============================================
 ```
 
-Replace the placeholders; `처리OR조회` means choose `처리` for the actual processing purpose or `조회` for retrieval. Derive the program title from the real screen/request. Use the real first creation date in the project's date notation, not each modification date. For an existing SP, verify its original attribution/date and preserve them unless the user directs a correction; recover missing original facts from actual source/history or ask rather than inventing them.
+신규 헤더에는 실제 대상 작성자 한 명과 최초 작성일을 쓴다. 화면·요청에서 프로그램명을 확인하고 작업 성격에 맞는 `처리` 또는 `조회`를 쓴다. 기존 SP의 작성자·최초 작성일은 명시적 정정 요청이 있을 때만 바꾼다. 새 로컬 파일이나 `ALTER`·`CREATE OR ALTER`일 때도 실제 DB 개체의 원본·이력을 확인한다. 원본 정보가 없으면 확인이 필요한 항목을 밝힌다.
 
-A new local `.sql` file may be an export/patch for an existing database object. `ALTER` never establishes first creation, and `CREATE OR ALTER` alone does not distinguish it. Preserve verified original facts; if the exact definition/schema is unavailable, leave that attribution explicitly unverified and retrieve the real evidence instead of rewriting it to the current worker.
+파일 작업은 `apply --author <헤더 이름> --reference-author <검색 이름> --reference <기존 SP>`로 등록한다. 검색 이름·참조는 반복할 수 있다. 현재 프로젝트·채팅·에이전트에서 확인한 답을 재사용하고 정정 시 해당 대상에 다시 등록한다. 실제 작성자가 표시된 기존 주석도 참고 출처가 될 수 있다. 대화에서 SQL만 제공하거나 DB 작업만 맡았으면 실제 정의를 비교한다.
 
-For scoped project-file work, the agent records the header name with `--author` and repeats `--reference-author` once per search name in `kh_context.py apply`. Register each selected definition with `--reference`, including its header and complete batch, then retrieve its current body. Reuse the selection in the same project/chat/agent. If the user corrects a search name, reapply the corrected names with the confirmed header author to the affected targets. A legacy adjacent AUTHOR comment may establish source authorship. Registration alone cannot establish a read or style compliance.
+저장 직전과 저장 후에 선택한 작성자의 같은 역할 SP와 실제 호출부를 대조한다. SP 이름·확인한 분기와 확인되지 않은 원본 정보는 결과에 남긴다.
 
-For SP text delivered directly in chat or an authorized database-only task, ask the same questions and compare the approved complete definitions without inventing a local target file merely to run apply. SQL generation and database execution remain separate authorizations.
-
-After writing, audit the exact final body against both the selected author's SPs and SQL-FORMATTING, repair confirmed deviations, and recheck affected behavior. Hooks can check missing selections, current reference author/read evidence and header structure; the question/answer provenance, style compliance, correct first date, program title and necessity remain source/user-evidence judgments.
+기존 SP의 원본 헤더에 작성자 한 명이 확인되면 `--reference-author`만 지정할 수 있다. 사용자가 다음 채팅에도 같은 이름을 쓰겠다고 한 경우 두 이름과 `--remember-authors`를 함께 등록한다. 프로젝트의 저장값은 `forget kh.sql.author-selection`으로 삭제한다. 이름을 재사용할 때도 이번 작업의 참고 SP 본문을 읽는다.

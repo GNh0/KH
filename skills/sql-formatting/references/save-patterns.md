@@ -1,140 +1,41 @@
-# SAVE examples
+# 저장 예시
 
-These fragments use fictional input contracts. Do not copy their types, lengths, states, key allocation or transaction choices into a target without checking its complete SAVE flow.
+아래는 가상 계약이다. 실제 키·자료형·상태문자·XML 경로·트랜잭션은 대상 원본과 동작하는 같은 역할의 SAVE를 따른다.
 
 ## Parsed rows and NEW
 
-Do not copy each XML row field into scalar variables before INSERT SELECT. Parse the required rows once and consume them as rows.
-
-This example receives contacts for one COMPANY_ID/CUSTOMER_ID. CONTACT_ID is already assigned by the approved key-allocation path and is unique within that customer. The caller sends NEW/MOD/DEL. The example's VARCHAR fields and lengths are fictional. The owning error path must release an allocated XML handle that is still live and preserve the original failure. Clear the handle after successful removal so a later INSERT failure cannot cause a second removal. The success-path fragment below does not replace that error/transaction flow.
+XML은 기존 처리 범위에서 한 번 파싱한다. 필요한 열·타입을 정의하고 파싱한 행을 INSERT SELECT에 직접 쓴다. 할당한 문서 핸들은 정상·예외 경로에서 해제한다. 정상 해제 후 핸들을 비워 뒤의 오류가 이중 해제를 유발하지 않게 한다.
 
 ```sql
-DECLARE @DOC_ID INT
-
-DECLARE @TMP_CONTACT TABLE
-(
-      CHANGE_STATE VARCHAR(3)
-    , CONTACT_ID VARCHAR(20)
-    , CONTACT_NAME VARCHAR(80)
-    , EMAIL VARCHAR(100)
-    , PHONE VARCHAR(30)
-)
-
-EXEC SP_XML_PREPAREDOCUMENT @DOC_ID OUTPUT, @XML_DATA
-
-INSERT INTO @TMP_CONTACT
-(
-       CHANGE_STATE , CONTACT_ID , CONTACT_NAME , EMAIL , PHONE
-)
-SELECT CHANGE_STATE , CONTACT_ID , CONTACT_NAME , EMAIL , PHONE
-FROM OPENXML(@DOC_ID, '/ROOT/CONTACT', 1)
-WITH
-(
-      CHANGE_STATE VARCHAR(3)
-    , CONTACT_ID VARCHAR(20)
-    , CONTACT_NAME VARCHAR(80)
-    , EMAIL VARCHAR(100)
-    , PHONE VARCHAR(30)
-)
-
-EXEC SP_XML_REMOVEDOCUMENT @DOC_ID
-SET @DOC_ID = NULL
-
 INSERT INTO CONTACTS
 (
        COMPANY_ID  , CUSTOMER_ID  , CONTACT_ID   , CONTACT_NAME
-     , EMAIL       , PHONE        , CREATED_AT   , CREATED_BY
 )
 SELECT @COMPANY_ID , @CUSTOMER_ID , A.CONTACT_ID , A.CONTACT_NAME
-     , A.EMAIL     , A.PHONE      , GETDATE()    , @USER_ID
 FROM @TMP_CONTACT A
 WHERE A.CHANGE_STATE = 'NEW'
 ```
 
-Do not use the XML row index as a persisted key merely because it is available. If the target generates new keys, follow its actual numbering scope, deterministic ordering and concurrency contract. A necessary numbering variable or staging UPDATE recording the generated key remains valid.
+기존 채번 범위·순서·동시성을 지킨다. XML 행 인덱스는 영구 키의 근거가 될 수 없다. 생성한 키를 기록할 필요가 있으면 스칼라·스테이징 갱신을 원래 책임에 둔다.
 
 ## Operation ownership
 
-Compare the complete owning flow, not just whether each individual IF looks valid. This scattered layout is a review failure when the phases belong to the same operation and no real dependency needs their separation:
+| 업무 | 분기 위치 |
+| --- | --- |
+| 신규 모드에만 필요한 검증·헤더·상세 쓰기 | 같은 신규 분기에서 실행 순서대로 처리 |
+| 이름 변경에만 필요한 수정 | 해당 변경 분기 안에서 처리 |
+| 두 모드가 같은 결과를 반환하거나 같은 해제를 수행 | 자료 의존성이 같은 공통 위치에서 한 번 실행 |
 
-```text
-IF CREATE: prepare operation values
-IF CREATE: validate that operation
-IF CREATE: write its header
-IF CREATE: write its details
-IF CREATE: return its result
-```
-
-Calling the blocks preparation, validation or postprocessing does not establish a separate responsibility. Follow the approved procedure's dispatch structure and keep those operation-owned steps together. A working result or five individually valid conditions does not establish style compliance. Inspect all occurrences and the full execution order before applying the draft; recheck the complete saved procedure afterward.
-
-The following fictional shape assumes parsed input rows and an owning transaction/error boundary. Only in this example, CREATE rejects an existing document and records one generated timestamp in both the new header and its creation event. RENAME changes the caption. Both return the same persisted result. These fictional conditions, tables, action strings and types do not authorize adding validation or an event table to a real target.
-
-```sql
-DECLARE @EVENT_TIME DATETIME
-
-IF @ACTION = 'CREATE'
-BEGIN
-    IF EXISTS (
-               SELECT 1
-               FROM DOCUMENTS A
-                       INNER JOIN @TMP_DOCUMENT B
-                               ON A.DOCUMENT_NO = B.DOCUMENT_NO
-               WHERE A.COMPANY_ID = @COMPANY_ID
-              )
-    BEGIN
-        RAISERROR('The document already exists.', 16, 1);
-        RETURN;
-    END
-
-    SET @EVENT_TIME = GETDATE()
-
-    INSERT INTO DOCUMENTS
-    (
-           COMPANY_ID  , DOCUMENT_NO   , CAPTION   , CREATED_AT  , CREATED_BY
-    )
-    SELECT @COMPANY_ID , A.DOCUMENT_NO , A.CAPTION , @EVENT_TIME , @USER_ID
-    FROM @TMP_DOCUMENT A
-
-    INSERT INTO DOCUMENT_EVENTS
-    (
-           COMPANY_ID  , DOCUMENT_NO   , EVENT_TYPE , EVENT_AT    , CREATED_BY
-    )
-    SELECT @COMPANY_ID , A.DOCUMENT_NO , 'CREATED'  , @EVENT_TIME , @USER_ID
-    FROM @TMP_DOCUMENT A
-END
-ELSE IF @ACTION = 'RENAME'
-BEGIN
-    UPDATE A
-    SET A.CAPTION = B.CAPTION
-    FROM DOCUMENTS A
-            INNER JOIN @TMP_DOCUMENT B
-                    ON A.DOCUMENT_NO = B.DOCUMENT_NO
-    WHERE A.COMPANY_ID = @COMPANY_ID
-END
-
-SELECT A.DOCUMENT_NO
-     , A.CAPTION
-FROM DOCUMENTS A
-        INNER JOIN @TMP_DOCUMENT B
-                ON A.DOCUMENT_NO = B.DOCUMENT_NO
-WHERE A.COMPANY_ID = @COMPANY_ID
-```
-
-The final SELECT is genuinely shared here, so it remains outside the dispatch without another action guard. Shared XML preparation, required validation, cleanup and transaction/error ownership may likewise remain separate when the actual caller/data dependencies establish that need. Do not merge every IF, forbid IF EXISTS, count IF statements as violations or move necessary work merely to imitate this shape. In a real SAVE, keep its own parameters, preparation, validation, related writes and ordered outputs aligned with the complete approved comparison source; fictional actions and fields do not authorize adding behavior.
+같은 모드를 준비·검증·쓰기마다 다시 검사하지 않는다. 기존 호출자가 요구하는 공통 XML 전처리·검증·트랜잭션의 시작/종료·오류 처리는 해당 범위에 둔다. 검증을 바꾸면 [실제 입력과 수량 검증 예시](validation-patterns.md)를 대조한다.
 
 ## MOD and DEL
 
-Do not normalize the input table or introduce a scalar-field copying phase merely to prepare these writes. Use parsed row values directly in their owning UPDATE/DELETE.
-
-This continues the same single-customer contact contract. CONTACTS has the key COMPANY_ID/CUSTOMER_ID/CONTACT_ID.
+한 고객의 선택된 연락처를 수정·삭제하는 경우다. 회사·고객·연락처가 전체 키다.
 
 ```sql
 UPDATE A
 SET CONTACT_NAME = B.CONTACT_NAME
-  , EMAIL = B.EMAIL
-  , PHONE = B.PHONE
   , MODIFIED_AT = GETDATE()
-  , MODIFIED_BY = @USER_ID
 FROM CONTACTS A
         INNER JOIN @TMP_CONTACT B
                 ON A.CONTACT_ID = B.CONTACT_ID
@@ -151,13 +52,9 @@ WHERE A.COMPANY_ID = @COMPANY_ID
   AND B.CHANGE_STATE = 'DEL'
 ```
 
-Apply needed value expressions at the write when that preserves the actual contract. Do not turn this preference into a ban on required input/key preparation.
-
 ## Multiple-master-delete
 
-Do not collapse several selected document keys into one scalar assignment, and do not confuse deleting detail rows with deleting entire documents. Keep all selected full keys as a set.
-
-Here @TMP_DOCUMENT already contains COMPANY_ID/DOCUMENT_NO/CHANGE_STATE for multiple selected masters. Required deletion preconditions run in the actual owning SAVE flow. Within that transaction, delete related details before their selected headers.
+여러 문서의 삭제 키를 받은 경우 선택한 전체 키 집합을 끝까지 유지한다. 삭제 가능 조건을 확인하고 원래 트랜잭션에서 연관 상세를 먼저, 헤더를 다음에 삭제한다.
 
 ```sql
 DELETE A
@@ -167,14 +64,6 @@ FROM DOCUMENT_DETAIL A
                 AND A.DOCUMENT_NO = B.DOCUMENT_NO
 WHERE A.COMPANY_ID = @COMPANY_ID
   AND B.CHANGE_STATE = 'DEL'
-
-DELETE A
-FROM DOCUMENT_HEADER A
-        INNER JOIN @TMP_DOCUMENT B
-                ON A.COMPANY_ID = B.COMPANY_ID
-                AND A.DOCUMENT_NO = B.DOCUMENT_NO
-WHERE A.COMPANY_ID = @COMPANY_ID
-  AND B.CHANGE_STATE = 'DEL'
 ```
 
-Check two selected masters, an unselected master and the same document number in another company. Do not remove required related writes or target-specific deletion restrictions to imitate this short fragment.
+같은 키 조건으로 해당 헤더를 처리한다. 선택 2건, 미선택 1건, 다른 회사의 동일 번호로 대상·제외 결과를 확인한다.

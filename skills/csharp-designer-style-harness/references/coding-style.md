@@ -1,20 +1,14 @@
-# User's C# coding style
-
-Use a working source from the designated comparison project, or an approved comparable project. Read the relevant complete bodies. Use the current target for APIs, inherited behavior and data contracts.
+# C# 작성 방식
 
 ## Priority of requirements
 
-- Apply current instructions and agreed C# rules first. Source examples fill unspecified choices. An inconsistent sample cannot override an explicit rule.
-- Respect the requested edit boundary. Preserve original properties, branching, transactions and bindings outside it. Adding state or changing permissions is a behavior change.
-- Use these conventions for the applicable WinForms/DevExpress architecture. Check the actual architecture for other targets.
+최신 요청과 합의한 규칙을 우선한다. 지정 비교 프로그램은 미지정 작성 방식의 근거다. 대상의 기존 속성·분기·트랜잭션·바인딩은 요청 범위에서만 바꾼다. 다른 UI 구조는 해당 프로젝트를 따른다.
 
 ## Syntax and naming
 
-- Use four spaces, separate-line braces and braced bodies for if/else and loops, including one-line returns. Preserve else-if chains.
-- Prefer explicit DataTable, DataRow, DataSet and primitive types. Use get blocks. Keep existing code outside scope.
-- Follow local variable prefixes and casing, including str/dt/dr/ds and control names. Preserve early returns, explicit assignments and switch branches.
-- Check TryParse success and compare the parsed value in separate if statements. Preserve established if/else handling.
-- Use interpolation for composed display text. Preserve SQL/XML/key construction semantics. Uppercase application action Tags and matching switch cases. Preserve external identifiers.
+- 공백 4칸, 괄호는 별도 줄. 한 줄 return도 if/else·반복문의 중괄호 안에 둔다. 기존 else-if와 조기 반환을 유지한다.
+- DataTable·DataRow·DataSet·기본형을 명시한다. get 블록, 명시적 대입, switch 분기를 유지한다. 지역명은 str/dt/dr/ds와 화면 관례를 따른다.
+- TryParse 성공 여부와 변환 값은 별도 if로 확인한다. 화면 표시 문자열 조합은 보간을 쓴다. SQL·XML·키의 형식과 외부 식별자는 보존한다. 앱 액션 Tag와 대응 case는 대문자로 맞춘다.
 
 ```csharp
 DataTable dtList
@@ -28,16 +22,14 @@ DataTable dtList
 
 ## Screen structure and events
 
-- Apply [user-control selection and naming](user-controls.md). Date inputs use ymd plus the field name.
-- In FrmDevBase follow the target's order of enum, state/data properties, constructor, commands and query/save helpers. Align subsequent multiline arguments and enum members with leading commas.
-- Keep static control layout in Designer. Where the screen subscribes after InitializeComponent, use named handlers there. Inspect subscriptions in both files and handle dynamic lifetimes. Check Repository ButtonClick and grid RowCellClick for duplicate popups.
-- Keep commands linked to the established query/save methods. Resolve names, arguments, return, failure, cancellation, reset, protection and requery in the actual caller. Reuse a shared handler or helper when the project and task need it.
+- FrmDevBase에서 실제 화면의 enum, 상태/데이터 속성, 생성자, 명령, 조회·저장 메서드 순서를 따른다. 여러 줄 인자와 enum 멤버는 선행 쉼표로 맞춘다. 날짜 입력명은 ymd와 필드명이다.
+- 정적 배치는 Designer에 둔다. 대상이 InitializeComponent 후 구독하면 그곳에 이름 있는 핸들러를 연결한다. 양쪽 파일에서 중복 구독, 동적 해제, Repository ButtonClick·Grid RowCellClick의 중복 팝업을 확인한다.
+- 기존 조회·저장 호출에서 인자·반환, 실패·취소, 초기화·보호·재조회를 확인한다. 공유 핸들러·헬퍼는 실제 필요에 맞춰 쓴다.
 
 ## Database and row handling
 
-- Use one DbParameter per line with leading commas and actual argument order. Preserve ExecSP/ExecSPTrn, edit-mode semantics, XML TableName, row states and result order.
-- Prefer direct DataTable and DataRow operations. Inspect helpers before cloning schemas or building intermediate tables. Apply the user's [necessity criteria](../../work-execution/references/preferences.md) to LINQ, intermediate tables and builds.
-- Trace checked and focused rows, actual event branches, exception handling and ShowMessage APIs. See [data flow](data-flow.md). Preserve explicit [grid HTML defaults](grid-layout.md).
+- DbParameter는 한 줄에 하나씩, 실제 인자 순서와 선행 쉼표를 쓴다. ExecSP/ExecSPTrn, 편집 모드, XML TableName과 행 상태, 결과표 순서를 보존한다.
+- DataTable·DataRow에 직접 추가한다. 스키마 복제나 중간 표가 필요하면 기존 헬퍼의 반환을 먼저 확인한다. 체크/포커스 행, 실제 예외와 ShowMessage 경로를 대조한다.
 
 ```csharp
 DataRow drNew = dtList.NewRow();
@@ -47,14 +39,12 @@ dtList.Rows.Add(drNew);
 
 ## Numeric display formats
 
-| Requirement | Format | Suppress zero when requested |
+| 요청 | 형식 | 0 숨김을 요청한 경우 |
 | --- | --- | --- |
-| Thousands, no decimals | `#,##0` | `#,###` |
-| Up to two decimals | `#,##0.##` | `#,###.##` |
-| Exactly two decimals | `#,##0.00` | Verify the requested zero display |
+| 천 단위 정수 | `#,##0` | `#,###` |
+| 소수 최대 두 자리 | `#,##0.##` | `#,###.##` |
+| 소수 두 자리 고정 | `#,##0.00` | 요청한 표기를 확인 |
 
-- Prefer custom formats over N0/N2 where a format is required. Preserve a user-specified format exactly. Check constructors, base classes and shared Repository initialization before adding a screen setting.
-- Apply summary formats in SummaryItem.DisplayFormat or GridColumnSummaryItem. Preserve suffixes, alignment, SummaryType and FieldName. Match the same notation in existing ToString, string.Format and interpolation.
-- Retain existing precision, rounding, culture, negative/zero display and data type. Change cell display, edit masks or Repository settings only where that property is required.
-
-See [Microsoft numeric formats](https://learn.microsoft.com/en-us/dotnet/standard/base-types/custom-numeric-format-strings) and [DevExpress summary formats](https://docs.devexpress.com/WindowsForms/DevExpress.XtraGrid.GridSummaryItem.DisplayFormat).
+- 요구 형식이 있으면 그대로 쓰고 그 외에는 N0/N2보다 사용자 지정 형식을 우선한다. 생성자·공통 Repository 초기화를 먼저 확인한다.
+- 합계는 SummaryItem.DisplayFormat 또는 GridColumnSummaryItem에 둔다. 접미사·정렬·SummaryType·FieldName을 보존하고 관련 ToString·string.Format·보간 표기도 맞춘다.
+- 타입·정밀도·반올림·문화권·음수/0 표기를 보존한다. 셀 표시·입력 마스크·Repository는 해당 속성 변경이 필요할 때 수정한다. [숫자 형식](https://learn.microsoft.com/en-us/dotnet/standard/base-types/custom-numeric-format-strings), [DevExpress 합계](https://docs.devexpress.com/WindowsForms/DevExpress.XtraGrid.GridSummaryItem.DisplayFormat).

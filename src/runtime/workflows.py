@@ -29,8 +29,8 @@ WORK = {
     'csharp-monitoring': (CS, ('coding-style.md#screen-structure-and-events', 'coding-style.md#database-and-row-handling', 'data-flow.md', 'screen-behavior.md')),
     'sql-format': (SQL, ('style.md',)),
     'sql-query': (SQL, ('style.md', 'select-patterns.md')),
-    'sql-select': (SQL, ('style.md', 'procedure-authorship.md', 'procedure-contracts.md#save-boundary-and-reuse', 'procedure-contracts.md#modes-and-multiple-rows', 'procedure-contracts.md#composite-keys', 'procedure-contracts.md#parameters-outputs-and-dates', 'procedure-patterns.md', 'select-patterns.md')),
-    'sql-save': (SQL, ('style.md', 'procedure-authorship.md', 'procedure-contracts.md', 'procedure-patterns.md', 'save-patterns.md', 'validation-patterns.md')),
+    'sql-select': (SQL, ('style.md#sql-layout', 'procedure-authorship.md', 'procedure-contracts.md#save-boundary-and-reuse', 'procedure-contracts.md#modes-and-multiple-rows', 'procedure-contracts.md#composite-keys', 'procedure-contracts.md#parameters-outputs-and-dates', 'select-patterns.md#select-contract')),
+    'sql-save': (SQL, ('style.md#sql-layout', 'procedure-authorship.md', 'procedure-contracts.md', 'save-patterns.md')),
     'pb-edit': (PB, ('datawindow.md', 'validation.md')),
     'pb-migrate': (PB, ('datawindow.md', 'validation.md')),
 }
@@ -112,7 +112,7 @@ def register(state: dict, *, epoch: str, targets: list[str], work: list[str], cw
         raise ValueError('Task is paused; apply cannot resume it.')
     if not epoch or epoch != state.get('application_epoch'):
         raise ValueError('Application scope is stale or unknown; use the current hook scope.')
-    if state.get('kh_scope_closed') and not state.get('files') and not state.get('before'):
+    if state.get('kh_scope_closed') and not state.get('files') and not state.get('before') and not state.get('unregistered_writes'):
         raise ValueError('This task scope ended; a new user task must open the scope first.')
     chosen = set(work)
     if not chosen or chosen - WORK.keys() or not targets:

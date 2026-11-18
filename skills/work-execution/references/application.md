@@ -1,5 +1,7 @@
 # Applying KH to actual development
 
+Codex·Claude가 현재 작업의 scope를 발급하면 아래 `apply`를 사용한다. Antigravity는 [별도 저장본 검사](../../../docs/antigravity.md)를 사용하고 원본·비교 소스와 실제 저장본은 직접 대조한다.
+
 Apply KH once to the owned outputs before editing. Skill discovery, documentation review, explanations and pure PB extraction do not register files.
 
 ```text
@@ -11,6 +13,8 @@ python -B <plugin-root>/scripts/kh_context.py --cwd <cwd> --session <session> --
 3. Attach approved reference units to the work kinds selected in this call. Read the complete relevant bodies from their actual paths after selection. Use Read/read_file or an explicit Get-Content/cat command. Segments can accumulate. Re-read changed files and stale or newly selected ranges.
 4. Read the returned missing Markdown sections at their file/line ranges. A `#fragment` is a heading. A full read covers its sections. Registration captures the original but does not count as a read.
 5. Apply the [source-style cycle](source-style-cycle.md). Compare the final saved code, actual callers and reference implementations. The main agent owns missing coverage and regressions.
+
+An explicit skill command can name destinations, for example `$sql-formatting --target One.sql --target Two.sql`. Register those files before writing. If a host missed a write event, register the named change and audit it against its pre-edit snapshot. A successful write response containing the exact saved path and full body can cover readback. A success message alone still needs the changed lines read from disk.
 
 | Work | Responsibility |
 | --- | --- |

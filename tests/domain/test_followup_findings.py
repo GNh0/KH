@@ -77,6 +77,45 @@ class FollowupFindingsTests(unittest.TestCase):
         self.assertTrue([i for i in check_designer(source, control_sources=[explicit_false]).issues
                          if i.details.get('property', '').endswith('UseTextOptions') and i.severity != 'info'])
 
+    def test_hidden_or_conditional_external_peers_cannot_establish_a_font_or_height(self):
+        visible = screen('shown', font=12)
+        hidden = screen('hidden', font=20, visible='false').replace('100, 25', '100, 60')
+        wrong = screen('lblTarget', font=20).replace('100, 25', '100, 60')
+        for invisible in (hidden, hidden.replace('this.hidden.Visible = false;', 'this.hidden.Visible = showKeys;'),
+                          hidden.replace('this.hidden.Visible = false;', 'this.panel.Visible = false;')
+                                .replace('this.Controls.Add(this.hidden);', 'this.panel.Controls.Add(this.hidden);')):
+            normal = check_designer(screen('lblTarget', font=12), style_reference=visible + '\n' + invisible, control_sources=[LABEL])
+            self.assertFalse([i for i in normal.issues if i.severity != 'info'])
+            only_hidden = check_designer(wrong, style_reference=invisible, control_sources=[LABEL])
+            self.assertTrue(only_hidden.incomplete)
+            self.assertIn('label_font_reference_required', codes(only_hidden))
+            self.assertIn('control_height_unverified', codes(only_hidden))
+
+    def test_same_role_screen_metrics_do_not_waive_constructor_behavior(self):
+        library = '''namespace Demo { public class ScreenPanel : System.Windows.Forms.Panel {
+ public ScreenPanel() { base.Margin = new System.Windows.Forms.Padding(2); base.MaximumSize = new System.Drawing.Size(0, 0); }
+} public class InputBox : DevExpress.XtraEditors.TextEdit {
+ public InputBox() { base.Properties.Appearance.Font = new System.Drawing.Font("Arial", 10); base.Properties.ReadOnly = true; }
+} }'''
+        target = '''this.panel = new Demo.ScreenPanel();
+this.panel.Margin = new System.Windows.Forms.Padding(1, 2, 1, 2);
+this.panel.MaximumSize = new System.Drawing.Size(450, 60);
+this.panel.Controls.Add(this.txtKey);
+this.txtKey = new Demo.InputBox();
+this.txtKey.Properties.Appearance.Font = new System.Drawing.Font("Arial", 25F);
+this.txtKey.Properties.ReadOnly = false;'''
+        approved = target.replace('25F', '25')
+        mismatch = target.replace('450, 60', '415, 60').replace('1, 2, 1, 2', '4').replace('25F', '10F')
+        result = check_designer(target, style_reference=approved, control_sources=[library])
+        self.assertEqual(['txtKey.Properties.ReadOnly'], [i.details.get('property') for i in result.issues if i.code == 'user_control_default_override'])
+        changed = check_designer(mismatch, style_reference=approved, control_sources=[library])
+        self.assertEqual({'panel.Margin', 'panel.MaximumSize', 'txtKey.Properties.Appearance.Font'},
+                         {i.details['property'] for i in changed.issues if i.code == 'user_control_screen_property_review'})
+        hidden = approved + '\nthis.panel.Visible = false;'
+        for reference in (hidden, approved.replace('this.panel', 'this.other').replace('this.txtKey', 'this.otherInput')):
+            unfounded = check_designer(target, style_reference=reference, control_sources=[library])
+            self.assertIn('panel.Margin', [i.details.get('property') for i in unfounded.issues if i.code == 'user_control_default_override'])
+
     def test_selection_options_need_an_agreeing_actual_reference(self):
         source = '''this.view = new DevExpress.XtraGrid.Views.Grid.GridView();
 this.view.OptionsSelection.MultiSelect = true;

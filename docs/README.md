@@ -2,6 +2,8 @@
 
 현재 사용법은 [한국어 README](../README.ko.md)와 `skills/*/SKILL.md`다. 실행 지침으로 쓰는 문서는 현재 스킬에서 연결한 참고 파일이다.
 
+[Antigravity 훅](antigravity.md)은 명시적으로 선택한 언어의 작업공간 저장본을 검사한다.
+
 ## 2026-09-07 재구성
 
 - [구현 및 검증 결과](kh/reports/2026-09-07-codex-implementation.md): 실제 변경, 요구별 반영 위치와 수행한 검사 및 미확인 범위.

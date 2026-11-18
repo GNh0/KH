@@ -5,6 +5,7 @@ import unittest
 
 from src.runtime.source_evidence import control_work, observe_references, reference_problem, select_references, read_paths, observed_comparisons
 from src.runtime.workflows import register
+from src.runtime.hooks import inspect
 
 
 class SourceEvidenceTests(unittest.TestCase):
@@ -48,6 +49,60 @@ class SourceEvidenceTests(unittest.TestCase):
         self.assertEqual({'csharp-control'}, control_work('edit.Enabled = true;', 'edit.Enabled = false;', peer))
         self.assertEqual({'csharp-control'}, control_work('this.edit.Enabled = false;', '', peer))
         self.assertEqual({'csharp-grid'}, control_work('', 'var grid = new DevExpress.XtraGrid.GridControl();'))
+
+    def test_overlapping_and_out_of_order_source_reads_only_credit_returned_lines(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'Reference.cs'
+            target = Path(folder) / 'Candidate.cs'
+            lines = ['class Reference', '{', ' int Read;', ' int Write;', '}']
+            source.write_text('\n'.join(lines), encoding='utf-8')
+            for first, second in ((lines[:3], lines[2:]), (lines[3:], lines[:3])):
+                state = {'application_epoch': 'current'}
+                applied = register(state, epoch='current', work=['csharp-code'], targets=[str(target)], cwd=folder)
+                select_references(state, applied, [str(source)], folder)
+                event = {'cwd': folder, 'tool_name': 'Read', 'tool_input': {'file_path': str(source)}}
+                observe_references(state, '\n'.join(first), event)
+                observe_references(state, '\n'.join(first), event)
+                self.assertTrue(reference_problem(state, target))
+                observe_references(state, '\n'.join(second), event)
+                self.assertEqual('', reference_problem(state, target))
+            lines = ['first', 'same', 'middle', 'same', 'last']
+            source.write_text('\n'.join(lines), encoding='utf-8')
+            state = {'application_epoch': 'current'}
+            applied = register(state, epoch='current', work=['csharp-code'], targets=[str(target)], cwd=folder)
+            select_references(state, applied, [str(source) + '#L4-L4'], folder)
+            observe_references(state, 'same', event)
+            self.assertTrue(reference_problem(state, target))
+            observe_references(state, '4: same', event)
+            self.assertEqual('', reference_problem(state, target))
+
+    def test_control_and_grid_layouts_reach_both_saved_file_entry_points(self):
+        layout = 'this.lbl = new DevExpress.XtraEditors.LabelControl();\nthis.lbl.Size = new Size(110, 39);'
+        grid = 'this.view = new DevExpress.XtraGrid.Views.Grid.GridView();\nthis.view.OptionsSelection.MultiSelect = true;'
+        with tempfile.TemporaryDirectory() as folder:
+            for target_name in ('Screen.cs', 'Screen.Designer.cs'):
+                target = Path(folder) / target_name
+                state = {'application_epoch': 'current'}
+                work = ['csharp-control', 'csharp-grid']
+                applied = register(state, epoch='current', work=work, targets=[str(target)], cwd=folder)
+                for role, body in zip(work, (layout, grid)):
+                    reference = Path(folder) / (role + '.Designer.cs')
+                    reference.write_text(body, encoding='utf-8')
+                    select_references(state, applied, [str(reference)], folder, work=[role])
+                    observe_references(state, body, {'cwd': folder, 'tool_name': 'Read', 'tool_input': {'file_path': str(reference)}})
+                self.assertEqual('', reference_problem(state, target))
+                comparisons, _, problems = observed_comparisons(state, target)
+                self.assertEqual([], problems)
+                design = layout + '\n' + grid
+                def check(body):
+                    code, peer = ('class Screen {}', body) if target_name == 'Screen.cs' else (body, 'class Screen {}')
+                    return inspect(target, code, original='', peer=peer, original_peer='', style_comparisons=comparisons)
+                good = check(design)
+                self.assertTrue(good['comparison_baselines']['style_reference'])
+                self.assertNotIn('grid_option_outside_baseline', good['warnings'])
+                wrong = check(design.replace('110, 39', '110, 29').replace('MultiSelect = true', 'MultiSelect = false'))
+                self.assertIn('label_height_mismatch', wrong['errors'])
+                self.assertIn('grid_option_outside_baseline', wrong['warnings'])
 
     def test_literals_comments_dtos_and_unchanged_controls_do_not_expand_work(self):
         source = 'class Screen { void Run() { DevExpress.XtraEditors.TextEdit edit = new DevExpress.XtraEditors.TextEdit(); } int Read() { return 1; } }'

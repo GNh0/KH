@@ -2,30 +2,15 @@
 
 ## Migration with source preservation
 
-When importing an original screen for renames, control deletion, or partial edits, copy its existing Designer and resx, then change only what is needed. Screenshots establish deletion/change scope; they do not justify recreating visible controls in a new Designer. Do not replace retained controls' Font, Size, AutoHeight, alignment, buttons, masks, display properties, or other settings with new defaults. Preserve existing properties the current user explicitly requests, even when they differ from an older general preference to avoid them.
-
-Apply the user-control/default rules below to newly added controls. If target API differences require replacing an existing control, limit edits to those differences. For renames, align declarations, Name, references, events, and resx keys. For deletion, check fields, initialization, registration, events, and resource references. Verify preservation of retained properties and behavior against the actual original diff.
-
-Preserve copies of the original C#/Designer/resx before editing. Use explicit rename mappings for comparison; do not alter the original's properties or conditions to match the candidate just to pass. The [checker](checks.md) can compare explicit assignments in retained Designer members with `--preserve-existing` and `--member-rename`. Separately check deletions, new controls, indirect initialization, and resource contents against the actual request and diff.
+- 원본 C#·Designer·resx를 비교용으로 확보한다. 원본 화면을 가져올 때는 기존 Designer·resx를 복사하고 요청한 이름·삭제·수정만 반영한다. 스크린샷은 대상과 범위를 확인하는 데 쓴다.
+- 이름 변경은 선언·Name·참조·이벤트·resx 키를 맞춘다. 삭제는 필드·생성·등록·이벤트·리소스까지 확인한다. 대상 API 차이로 교체하는 부분은 필요한 차이만 반영한다.
+- 남는 컨트롤의 Font·Size·AutoHeight·정렬·버튼·마스크·표시 속성·Visible은 원본 diff와 대조한다. 원본과 명시적 rename 매핑은 [검사](checks.md)의 `--preserve-existing`, `--member-rename`에 사용한다. 간접 초기화·리소스는 별도로 확인한다.
 
 ## New controls and general structural review
 
-When a supplied slide defines a new screen, inspect the complete rendered slide with its text, shapes, tables and images together before deriving the column list. Extracted embedded images are partial evidence; they can omit or separate captions and reorder the intended layout. Compare the final ordered captions/fields and editable columns with the full slide and latest user corrections. A rendering or temporary extraction belongs outside the project source tree.
-
-For new controls, follow [user-control selection and initialization](user-controls.md). Prefer appropriate user controls from the current project and retain their constructor, initialization, and inherited defaults unless a property has a specific requirement. This applies to all user controls.
-
-Keep static fields and control/column/Repository creation, layout, and properties in Designer. Helper-based construction that Visual Studio Designer cannot read is a compatibility defect. Keep business logic and dynamic binding in the current framework's code-behind.
-
-This does not move all event subscriptions into Designer. Follow the existing screen's [coding style](coding-style.md): connect named handlers after InitializeComponent in the constructor, without duplicating existing subscriptions.
-
-Read current UserControl defaults for dimensions, AutoHeight, buttons and alignment. For new controls, preserve initialized width unless the user requests a smaller size; expand for longer content. For labels and single-line inputs, match height and sizing constraints to similar controls in the actual screen, rather than treating constructor height as a universal floor. Resolve unavailable/conflicting screen evidence from the relevant source instead of guessing a height. Do not hardcode one size or font for every control; an explicit current requirement takes precedence. Check right-side lookup/date buttons in the rendered form, since their initialization can live in Designer rather than the user-control constructor. Preserve user-edited font and Visible values. Align TabIndex with the specified input order, including container order.
-
-Follow [DataWindowToXml rules](grid-layout.md) for grid defaults, Appearance, and editing modes. Do not extend centered headers to cell alignment. Connect numbers to the actual Spin Repository, codes/display values to lookup binding, and buttons to real actions. A request for a Spin Repository alone does not justify EditMask. Preserve its actual creation and shared-initialization defaults; add display/edit format settings only for the verified missing behavior. Review callbacks and helper paths that override the same behavior. Keep permitted report expression formats in their report scope.
-
-Check default counts, summaries, group footer/merge/EvenRow, and requested display locations. Use current project naming such as colList_, colDetail_, or colTABLE_FIELD. Correct names without bindings are incomplete.
-
-Check the actual referenced DevExpress version/APIs and csproj/.resx registration. When an existing property is obsolete in that version, use its supported equivalent with the same behavior instead of copying the obsolete assignment or suppressing its warning. Do not add unrelated options during that correction or apply this UI contract wholesale to MAUI/PDA.
-
-Do not add business-manager, DB, or Task cleanup to Designer Dispose. Attach required cleanup to the actual shutdown/cancellation lifecycle in current code-behind without duplicating inherited/partial Dispose implementations. Successfully reopening Designer does not verify Task cleanup during shutdown.
-
-If column widths or numeric editors change after a query or resize, also trace runtime overwrites using [screen behavior contracts](screen-behavior.md).
+- 슬라이드가 요구사항이면 전체 렌더링의 글·도형·표·이미지와 최신 정정을 함께 본다. 최종 캡션·필드 순서·편집 가능 열을 대조한다. 임시 추출물은 소스 밖에 둔다.
+- 필드와 정적 컨트롤·열·Repository 생성·배치·속성은 Visual Studio Designer가 읽는 형식으로 둔다. 동적 바인딩·업무 코드는 코드비하인드, 명명한 핸들러는 기존 구독 위치에 한 번만 연결한다.
+- [컨트롤 기본값](user-controls.md)의 생성자·상속·초기화 값을 유지한다. 폭 축소는 요청 범위, 긴 내용은 필요한 폭, 라벨·한 줄 입력 높이는 같은 화면의 같은 역할이 기준이다. 버튼 있는 우측 공간과 TabIndex·컨테이너 순서도 확인한다.
+- 그리드는 [HTML 기본값](grid-layout.md) 기준이다. 머리글 가운데 정렬, 셀 표시, 뷰 속성은 각 범위에서 수정한다. 숫자는 실제 Spin, 코드는 값/표시 Lookup, 버튼은 이벤트까지 연결한다. Spin 요청만으로 EditMask를 추가하지 않는다.
+- 합계·건수·표시 위치, 그룹 푸터/병합/EvenRow와 colList_/colDetail_/colTABLE_FIELD의 실제 바인딩을 확인한다. 조회·리사이즈 후 덮이는 속성은 [실행 경로](screen-behavior.md)를 따른다.
+- 참조 DevExpress 버전의 API와 csproj/resx 등록을 확인한다. 더 이상 지원하지 않는 속성은 같은 동작의 지원 속성으로 교체한다. DB·Task 종료 정리는 기존 코드비하인드의 종료/취소 경로에서 처리하고 상속·partial Dispose와 중복되지 않게 한다.
