@@ -5,7 +5,7 @@ from typing import Iterable, Mapping, Sequence
 from src.common.results import CheckResult, Issue
 from .lexer import _scan_csharp
 from .syntax import _method_declarations
-from .designer_model import DesignerModel, parse_designer_source, _normalized_csharp_value
+from .designer_model import DesignerModel, parse_designer_source, _normalized_csharp_value, locate_issues
 from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
@@ -142,6 +142,7 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         result.not_checked.append('available user-control selection and constructor-default overrides; no control sources supplied')
     result.issues.extend(check_grid_style(with_control_base_types(model, defaults),
                                          original=with_control_base_types(baseline, defaults) if baseline else None,
+                                         reference=with_control_base_types(parse_designer_source(style_reference), defaults) if style_reference is not None else None,
                                           column_edit_modes=column_edit_modes,
                                           allowed_property_changes=allowed_property_changes, check_style=check_style))
     if check_style:
@@ -215,4 +216,5 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     result.metadata["controls"] = sorted(model.controls)
     result.metadata['review_status'] = 'needs_review' if any(i.severity != 'info' for i in result.issues) else 'static_checks_only'
     result.metadata['project_style_verified'] = False
+    result.issues = locate_issues(model, result.issues, 'designer')
     return result

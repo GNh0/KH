@@ -12,7 +12,7 @@ from src.context.store import Store, session_key
 from src.context.transcript import add_user, capture, recent_users, user_text
 from src.runtime.hooks import CYCLE, ROOT, handle, inspect
 from src.runtime.hooks import file_paths, write_paths, line_hashes, update_files, restore
-from hook_application_fixture import apply_files
+from tests.domain.hook_application_fixture import apply_files
 from src.runtime.workflows import guidance_paths
 from src.runtime.guidance import document
 
@@ -42,7 +42,7 @@ class HooksContextTests(unittest.TestCase):
         body = '\n'.join((ROOT / 'skills' / relative).read_text(encoding='utf-8-sig')
                          for relative in (CYCLE, 'sql-formatting/SKILL.md'))
         self.event('PostToolUse', tool_name='Bash', tool_input={'command': 'read skills'}, tool_response={'output': body})
-        return apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'])
+        return apply_files(self.base, 'codex', ['sql-query'], [self.project / 'example.sql'])
 
     def edit_event(self, name):
         return self.event(name, tool_name='apply_patch', tool_input={'command': '*** Begin Patch\n*** Add File: example.sql\n+SELECT 1\n*** End Patch'}, tool_response={'output': 'Success'})
@@ -60,7 +60,7 @@ class HooksContextTests(unittest.TestCase):
         self.assertEqual({}, self.edit_event('PreToolUse'))
         body = (ROOT / 'skills/sql-formatting/SKILL.md').read_text(encoding='utf-8-sig')
         self.event('PostToolUse', tool_name='Read', tool_response=body)
-        apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'], deliver=False)
+        apply_files(self.base, 'codex', ['sql-query'], [self.project / 'example.sql'], deliver=False)
         for _ in range(3):
             denied = self.edit_event('PreToolUse')
             self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
@@ -129,7 +129,7 @@ class HooksContextTests(unittest.TestCase):
         for relative in (CYCLE, 'pb-to-csharp-migration-harness/SKILL.md'):
             self.event('PostToolUse', tool_name='Read',
                        tool_response=(ROOT / 'skills' / relative).read_text(encoding='utf-8-sig'))
-        apply_files(self.base, 'codex', ['pb-migrate', 'sql-select'], [self.project / 'example.sql'], deliver=False)
+        apply_files(self.base, 'codex', ['pb-migrate', 'sql-query'], [self.project / 'example.sql'], deliver=False)
         denied = self.edit_event('PreToolUse')
         self.assertEqual('deny', denied['hookSpecificOutput']['permissionDecision'])
         self.assertIn(str(ROOT / 'skills/sql-formatting/SKILL.md'), denied['hookSpecificOutput']['permissionDecisionReason'])
@@ -160,9 +160,10 @@ class HooksContextTests(unittest.TestCase):
         response = self.edit_event('PostToolUse')
         self.assertIn('partial', response['hookSpecificOutput']['additionalContext'])
         self.assertEqual('block', self.event('Stop')['decision'])
-        # No unbounded automatic continuation even if the host forgets its active flag.
-        self.assertNotIn('decision', self.event('Stop'))
-        self.event('PostToolUse', tool_name='Bash', tool_response={'output': 'SELECT 1\n'})
+        # Unread source is still actionable on a normal repeated Stop.
+        self.assertEqual('block', self.event('Stop')['decision'])
+        self.assertNotIn('decision', self.event('Stop', stop_hook_active=True))
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(path)}, tool_response='SELECT 1\n')
         self.assertEqual({}, self.event('Stop'))
         path.write_text('SELECT 2\n', encoding='utf-8')
         # A completed edit is no longer monitored during another task/chat.
@@ -318,7 +319,7 @@ class HooksContextTests(unittest.TestCase):
         path = self.project / 'example.sql'
         path.write_text('SELECT 1\n', encoding='utf-8')
         self.edit_event('PostToolUse')
-        self.event('PostToolUse', tool_name='Bash', tool_response='SELECT 1\n')
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(path)}, tool_response='SELECT 1\n')
         self.assertEqual({}, self.event('Stop'))
         path.write_text('SELECT 2\n', encoding='utf-8')  # external later work
         with patch('src.runtime.hooks.snapshot') as read:
@@ -458,7 +459,7 @@ class HooksContextTests(unittest.TestCase):
                 returned = '\n'.join(f'{i+1}: {lines[i]}' for i in range(start, end))
                 self.event('PostToolUse', tool_name='Read', tool_response=returned)
         self.assertTrue({CYCLE, 'sql-formatting/SKILL.md'} <= set(self._state(Store(self.root / 'data/context-v1', str(self.project)))['skills_seen']))
-        applied = apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'], deliver=False)
+        applied = apply_files(self.base, 'codex', ['sql-query'], [self.project / 'example.sql'], deliver=False)
         for relative in set(applied[0]['required']) - {CYCLE, 'sql-formatting/SKILL.md'}:
             self.event('PostToolUse', tool_name='Read', tool_response=document(ROOT, relative)[1])
         self.assertEqual({}, self.edit_event('PreToolUse'))
@@ -500,7 +501,7 @@ class HooksContextTests(unittest.TestCase):
                 if line.strip():
                     self.event('PostToolUse', tool_name='Read', tool_response=line)
         self.assertTrue({CYCLE, 'sql-formatting/SKILL.md'} <= set(self._state(Store(self.root / 'data/context-v1', str(self.project)))['skills_seen']))
-        applied = apply_files(self.base, 'codex', ['sql-select'], [self.project / 'example.sql'], deliver=False)
+        applied = apply_files(self.base, 'codex', ['sql-query'], [self.project / 'example.sql'], deliver=False)
         for relative in set(applied[0]['required']) - {CYCLE, 'sql-formatting/SKILL.md'}:
             self.event('PostToolUse', tool_name='Read', tool_response=document(ROOT, relative)[1])
         self.assertEqual({}, self.edit_event('PreToolUse'))
@@ -518,7 +519,7 @@ class HooksContextTests(unittest.TestCase):
         self.assertEqual('block', self.event('Stop')['decision'])
         # Return the actual changed unit/context in two chunks, with line numbers.
         for start, end in ((58, 61), (61, 63)):
-            self.event('PostToolUse', tool_name='Read', tool_response='\n'.join(f'{i+1}: {lines[i]}' for i in range(start, end)))
+            self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(path)}, tool_response='\n'.join(f'{i+1}: {lines[i]}' for i in range(start, end)))
         self.assertEqual({}, self.event('Stop'))
         # Deletion requires fresh adjacent-context observation, even if it was read previously.
         self.edit_event('PreToolUse')
@@ -594,7 +595,7 @@ class HooksContextTests(unittest.TestCase):
                                         capture_output=True, timeout=15, env={**os.environ, 'PLUGIN_ROOT': str(ROOT)},
                                         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertEqual(0, activation.returncode, activation.stderr.decode('utf-8', errors='replace'))
-            apply_files(self.base, host, ['sql-select'], [self.project / '한글 example.sql'], deliver=False)
+            apply_files(self.base, host, ['sql-query'], [self.project / '한글 example.sql'], deliver=False)
             result = subprocess.run(args, input=json.dumps(event, ensure_ascii=False).encode('utf-8'),
                                     capture_output=True, timeout=15, env={**os.environ, 'PLUGIN_ROOT': str(ROOT)},
                                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

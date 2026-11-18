@@ -71,7 +71,7 @@ def build_bundle(output: Path) -> dict:
                 copy_source(relative, stage / source.relative_to(template))
         plugin = stage / 'plugins/company-dev'
         for relative in sorted(path for path in inventory if path.is_relative_to(Path('src')) and path.suffix == '.py'):
-            if relative.parts[1] == 'maintenance' and relative.name not in {'__init__.py', 'package_check.py'}:
+            if relative.parts[1] == 'maintenance' and relative.name not in {'__init__.py', 'package_check.py', 'agents.py'}:
                 continue
             copy_source(relative, plugin / relative)
         copy_source(Path('scripts/kh_check.py'), plugin / 'scripts/kh_check.py')

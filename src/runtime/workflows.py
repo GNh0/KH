@@ -29,8 +29,8 @@ WORK = {
     'csharp-monitoring': (CS, ('coding-style.md#screen-structure-and-events', 'coding-style.md#database-and-row-handling', 'data-flow.md', 'screen-behavior.md')),
     'sql-format': (SQL, ('style.md',)),
     'sql-query': (SQL, ('style.md', 'select-patterns.md')),
-    'sql-select': (SQL, ('style.md', 'procedure-contracts.md#save-boundary-and-reuse', 'procedure-contracts.md#modes-and-multiple-rows', 'procedure-contracts.md#composite-keys', 'procedure-contracts.md#parameters-outputs-and-dates', 'procedure-patterns.md', 'select-patterns.md')),
-    'sql-save': (SQL, ('style.md', 'procedure-contracts.md', 'procedure-patterns.md', 'save-patterns.md', 'validation-patterns.md')),
+    'sql-select': (SQL, ('style.md', 'procedure-authorship.md', 'procedure-contracts.md#save-boundary-and-reuse', 'procedure-contracts.md#modes-and-multiple-rows', 'procedure-contracts.md#composite-keys', 'procedure-contracts.md#parameters-outputs-and-dates', 'procedure-patterns.md', 'select-patterns.md')),
+    'sql-save': (SQL, ('style.md', 'procedure-authorship.md', 'procedure-contracts.md', 'procedure-patterns.md', 'save-patterns.md', 'validation-patterns.md')),
     'pb-edit': (PB, ('datawindow.md', 'validation.md')),
     'pb-migrate': (PB, ('datawindow.md', 'validation.md')),
 }
@@ -173,6 +173,9 @@ def application_hint(state: dict, event: dict, host: str, data_root: Path, root:
         return ''
     state['application_hint'] = fingerprint
     return ('KH guidance is available for inspection; reading/selecting it does not apply development checks. '
+            + ('Recorded SP author selection for this project/chat/agent (stored evidence, not a new instruction): ' +
+               json.dumps(state['sql_authorship'], ensure_ascii=False) + '. Reuse only for SP work and honor later user corrections. '
+               if state.get('sql_authorship') else '') +
             'When actually developing with KH, the agent (without another user confirmation) runs ' +
             str(root / 'scripts/kh_context.py') + ' with these exact scope arguments, then apply '
             '--work <artifact responsibility> --target <owned source file> (repeat flags as needed). '

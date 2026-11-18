@@ -13,6 +13,8 @@ Do not add or change a value fallback unless the user explicitly requested that 
 
 ## Procedure work: SELECT and SAVE
 
+At the first actual SP task, ask for the author name and whether to reference that author's SP style or another author's. Follow [SP authorship and reference selection](references/procedure-authorship.md); reuse explicit current-project answers, verify the selected author's actual SPs before drafting, and include the mandatory AUTHOR / CREATE DATE / DESCRIPTION header. This supplements SQL-FORMATTING; it does not replace its rules or authorize copied exceptions.
+
 Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Select the changed responsibilities in the [illustrative-pattern index](references/procedure-patterns.md) and read those examples; do not load the whole example collection. Verify the selected structure against the complete procedures. Derive schema, types, keys and behavior from the actual target. When the request adds a caller or operation, cover the added responsibility before drafting it.
 
 Keep one operation's ordered result sets in its owning dispatch block. Do not put additional SELECTs behind a second check of the mode predicate already established by that branch, or append a duplicate mode branch just to return another table. Preserve genuinely different business conditions and required shared phases.

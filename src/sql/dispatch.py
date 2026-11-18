@@ -3,7 +3,7 @@
 This is a narrow source review, not a T-SQL control-flow or business parser.
 """
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.common.results import Issue
 from .lexer import _SqlToken, _scan_sql_tokens
@@ -24,6 +24,7 @@ class _Frame:
     kind: str
     guard: _Guard | None = None
     mutated: bool = False
+    siblings: dict[_Signature, _Guard] = field(default_factory=dict)
 
 
 def _guard(tokens: list[_SqlToken], index: int) -> tuple[int, _Guard] | None:
@@ -85,24 +86,26 @@ def _assignment(tokens: list[_SqlToken], index: int) -> bool:
              index + 2 < len(tokens) and tokens[index + 2].text == '='))
 
 
-def _repetitions(source: str) -> list[tuple[_Signature, int, int]]:
+def _repetitions(source: str) -> list[tuple[_Signature, int, int, str]]:
     tokens = [token for token in _scan_sql_tokens(source)[0]
               if token.kind not in {'line_comment', 'block_comment'}]
     if any(token.kind == 'word' and token.normalized == 'GOTO' for token in tokens):
         return []  # A jump can enter a block without testing its lexical guard.
-    frames: list[_Frame] = []
+    frames: list[_Frame] = [_Frame('root')]
     pending: dict[int, _Guard] = {}
     projection: dict[int, bool] = {}
-    found: list[tuple[_Signature, int, int]] = []
+    found: list[tuple[_Signature, int, int, str]] = []
 
     def changed(parameter: str | None = None) -> None:
         for frame in frames:
+            frame.siblings = {key: guard for key, guard in frame.siblings.items()
+                              if parameter is not None and key[0].casefold() != parameter.casefold()}
             if frame.guard and (parameter is None or frame.guard.signature[0].casefold() == parameter.casefold()):
                 frame.mutated = True
 
     for index, token in enumerate(tokens):
         if token.kind == 'batch_separator':
-            frames.clear()
+            frames = [_Frame('root')]
             pending.clear()
             projection.clear()
             continue
@@ -125,7 +128,10 @@ def _repetitions(source: str) -> list[tuple[_Signature, int, int]]:
                                if frame.guard and not frame.mutated and
                                frame.guard.signature == current.signature), None)
                 if parent:
-                    found.append((current.signature, current.offset, parent.offset))
+                    found.append((current.signature, current.offset, parent.offset, 'enclosing'))
+                sibling = frames[-1].siblings.get(current.signature)
+                if sibling:
+                    found.append((current.signature, current.offset, sibling.offset, 'sibling'))
             frames.append(_Frame('block', current))
             projection.clear()
         elif word == 'CASE':
@@ -133,11 +139,23 @@ def _repetitions(source: str) -> list[tuple[_Signature, int, int]]:
         elif word == 'END':
             if index + 1 < len(tokens) and tokens[index + 1].normalized == 'CONVERSATION':
                 continue
-            if frames:
+            if len(frames) > 1:
                 ended = frames.pop()
                 if ended.kind == 'block':
                     projection.clear()
-        elif word in {'EXEC', 'EXECUTE', 'FETCH', 'RECEIVE', 'WHILE'}:
+                    if ended.guard and not ended.mutated:
+                        frames[-1].siblings[ended.guard.signature] = ended.guard
+        elif word in {'EXEC', 'EXECUTE'}:
+            if index + 2 < len(tokens) and tokens[index + 1].text.startswith('@') and tokens[index + 2].text == '=':
+                changed(tokens[index + 1].text)  # Stored-procedure return status.
+            for cursor in range(index + 1, len(tokens) - 1):
+                argument = tokens[cursor]
+                if argument.text == ';' or argument.kind == 'batch_separator' or argument.normalized in {'IF', 'BEGIN', 'END', 'SELECT', 'SET', 'EXEC', 'EXECUTE', 'RETURN'}:
+                    break
+                if argument.text.startswith('@') and tokens[cursor + 1].normalized in {'OUT', 'OUTPUT'}:
+                    changed(argument.text)  # Actual argument, not the formal name.
+            projection.clear()
+        elif word in {'FETCH', 'RECEIVE', 'WHILE'}:
             changed()  # External assignment or loop re-entry is not evaluated.
             projection.clear()
         elif word in {'SET', 'DECLARE'}:
@@ -157,16 +175,16 @@ def _repetitions(source: str) -> list[tuple[_Signature, int, int]]:
 
 
 def review_dispatch(candidate: str, original: str | None = None) -> list[Issue]:
-    previous = Counter(signature for signature, _, _ in _repetitions(original or ''))
+    previous = Counter((signature, kind) for signature, _, _, kind in _repetitions(original or ''))
     issues = []
-    for signature, offset, outer_offset in _repetitions(candidate):
-        if previous[signature]:
-            previous[signature] -= 1
+    for signature, offset, outer_offset, kind in _repetitions(candidate):
+        if previous[signature, kind]:
+            previous[signature, kind] -= 1
             continue
-        issues.append(Issue('repeated_enclosing_mode_guard', 'warning',
-            'This scalar-mode predicate repeats an enclosing branch condition without an observed mode assignment. '
+        issues.append(Issue('repeated_' + kind + '_mode_guard', 'warning',
+            'This scalar-mode predicate repeats an ' + ('enclosing branch condition' if kind == 'enclosing' else 'earlier sibling phase') + ' without an observed mode assignment. '
             'Review the operation boundary and ordered result sets; keep additional results in their owning branch. '
             'This does not ban other nested conditions or authorize an automatic rewrite.',
             line=candidate.count('\n', 0, offset) + 1,
-            details={'parameter': signature[0], 'outer_line': candidate.count('\n', 0, outer_offset) + 1}))
+            details={'parameter': signature[0], 'outer_line': candidate.count('\n', 0, outer_offset) + 1, 'relationship': kind}))
     return issues

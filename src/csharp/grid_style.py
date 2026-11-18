@@ -34,6 +34,7 @@ def column_edit_properties(mode: str) -> dict[str, str]:
 
 
 def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = None,
+                     reference: DesignerModel | None = None,
                      column_edit_modes: Mapping[str, str] | None = None,
                      allowed_property_changes: Iterable[str] = (),
                      check_required_defaults: bool = True, check_style: bool = True) -> list[Issue]:
@@ -95,7 +96,12 @@ def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = N
                     continue
                 expected = DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS.get(prop.removeprefix('OptionsView.')) if prop.startswith('OptionsView.') else None
                 if expected is None:
-                    warn('grid_option_outside_baseline', 'This option is outside the supplied HTML layout defaults; verify the specific behavior requiring it.', prop)
+                    peers = [c for c in reference.controls.values() if known_control_kind(c.type_name) == type_name] if reference else []
+                    named = [c for c in peers if c.name == name]
+                    values = [c.properties.get(prop) for c in named or peers]
+                    if values and all(v is not None and _normalized_csharp_value(v) == _normalized_csharp_value(value) for v in values):
+                        continue  # An actual selected role reference establishes this option.
+                    warn('grid_option_outside_baseline', 'This option has no agreeing selected comparison and is outside the HTML layout defaults; verify the specific behavior requiring it.', prop)
                 elif value.strip() != expected:
                     warn('grid_layout_default_changed', 'This option differs from the supplied HTML layout default; retain a verified target requirement.', prop)
 

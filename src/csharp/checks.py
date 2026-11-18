@@ -7,7 +7,7 @@ from src.common.results import CheckResult, HarnessResult, Issue, from_legacy_is
 from .lexer import _scan_csharp
 from .source import _call_count, _target_local_method_inventory, _designer_wired_event_handlers, _row_rewrite_loops, _transaction_invocation_drift_issues
 from .designer import check_designer
-from .designer_model import parse_designer_source
+from .designer_model import parse_designer_source, locate_issues, _normalized_csharp_value
 from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
 from .flow_review import check_project_flow
@@ -18,7 +18,7 @@ from .view_appearance import check_view_appearance
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .label_style import check_label_style
-from .syntax import _property_assignments, linq_candidates
+from .syntax import linq_candidates, static_ui_sites
 from .source_preservation import remap_members
 
 
@@ -29,7 +29,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                  style_reference_csharp: str | None = None, screen_commands: Sequence[str] | None = None,
                  allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
                  numeric_columns: Sequence[str] = (), preserve_existing: bool = False,
-                 member_renames: Mapping[str, str] | None = None, check_style: bool = True) -> CheckResult:
+                 member_renames: Mapping[str, str] | None = None, check_style: bool = True,
+                 style_references: Mapping[str, str] | None = None) -> CheckResult:
     allowed = allowed_changes or {}
     result = CheckResult(checked=["C# lexical source patterns"],
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
@@ -77,20 +78,23 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         control_sources=control_sources))
     result.checked.append('recognizable UI/data helpers, entry queries, save gates, save-mode literals, original-row comparisons, input Tag values, action codes and focus-guard ordering')
     result.not_checked.append('necessity of validation, dynamic edit-mode values, indirect event order, XML/SP field ownership and project-wide coding-style compliance')
+    references = style_references or {}
+    command_reference = references.get('csharp-code', references.get('csharp-data', style_reference_csharp))
+    data_reference = references.get('csharp-data', style_reference_csharp)
     command_flow = check_command_flow(candidate, original=original,
-        style_reference=style_reference_csharp, allowed_commands=screen_commands,
+        style_reference=command_reference, allowed_commands=screen_commands,
         designer=designer,
         original_designer=remap_members(original_designer, member_renames or {}) if original_designer is not None else None)
     result.issues.extend(command_flow.issues)
     result.checked.extend(command_flow.checked)
     result.not_checked.extend(command_flow.not_checked)
     result.metadata.update(command_flow.metadata)
-    save_contract = check_save_contract(candidate, original=original, style_reference=style_reference_csharp)
+    save_contract = check_save_contract(candidate, original=original, style_reference=data_reference)
     result.issues.extend(save_contract.issues)
     result.checked.extend(save_contract.checked)
     result.not_checked.extend(save_contract.not_checked)
     result.metadata.update(save_contract.metadata)
-    select_contract = check_select_contract(candidate, original=original, style_reference=style_reference_csharp)
+    select_contract = check_select_contract(candidate, original=original, style_reference=data_reference)
     result.issues.extend(select_contract.issues)
     result.checked.extend(select_contract.checked)
     result.not_checked.extend(select_contract.not_checked)
@@ -112,6 +116,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         result.metadata.update(labels.metadata)
     result.issues.extend(check_grid_style(with_control_base_types(candidate_model, defaults),
                          original=with_control_base_types(baseline_model, defaults) if baseline_model else None,
+                         reference=with_control_base_types(parse_designer_source(style_reference_designer), defaults) if style_reference_designer is not None else None,
                          column_edit_modes=column_edit_modes if designer is None else None,
                          allowed_property_changes=allowed_property_changes, check_required_defaults=False, check_style=check_style))
     display_types = {name: control.type_name for name, control in
@@ -158,14 +163,25 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                 old_loops[loop["fingerprint"]] -= 1
             elif not set(loop["columns"]) <= set(allowed.get("whole_table_columns", [])):
                 result.issues.append(Issue("whole_table_row_rewrite", "warning", "Check XML/SP field ownership before propagating values across every row.", details=loop))
-        previous_properties = _property_assignments(original)
-        for member, properties in _property_assignments(candidate).items():
-            for prop, (value, line) in properties.items():
-                old = previous_properties.get(member, {}).get(prop)
-                if check_style and (prop in {'Location', 'Size', 'Font', 'Caption', 'FieldName', 'ColumnEdit'} or prop.startswith('Appearance')) and (old is None or old[0] != value):
-                    result.issues.append(Issue('static_ui_in_code_behind_review', 'warning', 'Place static UI setup in Designer; retain a code-behind assignment when the actual event requires dynamic behavior.', line=line, details={'member': member, 'property': prop}))
+    if check_style:
+        from .control_names import _PREFIXES, known_control_kind
+        known_ui = {name for name, kind in display_types.items() if known_control_kind(kind) in
+                    set(_PREFIXES) | {'Control', 'Form', 'UserControl', 'GridColumn', 'GridBand', 'TileView', 'XtraReport'} or
+                    kind.startswith('DevExpress.XtraReports.UI.XR')}
+        previous_properties = Counter((member, prop, _normalized_csharp_value(value), owner)
+            for member, prop, value, _line, owner, _offset in static_ui_sites(original or '', known_ui))
+        for member, prop, value, line, owner, _offset in static_ui_sites(candidate, known_ui):
+            if prop not in {'Location', 'Size', 'Font', 'Caption', 'FieldName'} and not prop.startswith('Appearance'):
+                continue
+            key = member, prop, _normalized_csharp_value(value), owner
+            if previous_properties[key]:
+                previous_properties[key] -= 1
+            else:
+                result.issues.append(Issue('static_ui_in_code_behind_review', 'warning',
+                    'This direct fixed-value setup may belong in Designer. Conditional branches and dynamic values are excluded; verify the actual event before changing it.',
+                    line=line, details={'member': member, 'property': f'{member}.{prop}', 'method': owner}))
+        result.not_checked.append('necessity of intermediate DataTables and conditional/dynamic UI setup; compare actual row-selection, binding, XML and report contracts')
     patterns = {
-        "intermediate_table_preference": r"\b(?:Clone|ImportRow)\s*\(",
         "expression_body_preference": r"\b(?:public|protected|private|internal)\b[^;{}\n]*=>",
     }
     if check_style and len(linq_candidates(candidate)) > len(linq_candidates(original or '')):
@@ -217,6 +233,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         result.not_checked.append('runtime paths, dynamic column recreation and unsupplied numeric data types')
     result.metadata['review_status'] = 'needs_review' if any(i.severity != 'info' for i in result.issues) else 'static_checks_only'
     result.metadata['project_style_verified'] = False
+    result.issues = locate_issues(candidate_model, result.issues, 'csharp')
     return result
 
 

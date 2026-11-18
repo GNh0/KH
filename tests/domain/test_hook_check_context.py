@@ -11,7 +11,7 @@ from src.context.store import Store, session_key
 from src.runtime.check_context import SourceBaselines, companion, literal_project_sources
 from src.runtime.hooks import CYCLE, ROOT, handle, inspect, update_files
 from src.sql.checks import check_sql
-from hook_application_fixture import apply_files
+from tests.domain.hook_application_fixture import apply_files
 
 
 CONTROL = '''namespace Widgets {
@@ -83,7 +83,7 @@ class HookCheckContextTests(unittest.TestCase):
                          for path in (CYCLE, domain + '/SKILL.md'))
         self.event('PostToolUse', tool_name='exec_command', tool_response={'output': body})
         if domain == 'sql-formatting':
-            apply_files(self.scope, 'codex', ['sql-select'], [self.project / 'Save.sql'])
+            apply_files(self.scope, 'codex', ['sql-query'], [self.project / 'Save.sql'])
         else:
             apply_files(self.scope, 'codex', ['csharp-code', 'csharp-designer'],
                         [self.project / 'Screen.cs', self.project / 'Screen.Designer.cs'])
@@ -148,7 +148,7 @@ class HookCheckContextTests(unittest.TestCase):
         after = before.replace('N0', 'N2')
         code.write_text(after, encoding='utf-8', newline='')
         self.write_event('PostToolUse', code)
-        self.event('PostToolUse', tool_name='Read', tool_response=after)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(code)}, tool_response=after)
         check = self.state()['files'][str(code)]['check']
         self.assertEqual('review_required', check['status'])
         self.assertIn('numeric_format_preference', check['warnings'])
@@ -158,7 +158,7 @@ class HookCheckContextTests(unittest.TestCase):
         fixed = after.replace('N2', '#,##0.##')
         code.write_text(fixed, encoding='utf-8', newline='')
         self.write_event('PostToolUse', code)
-        self.event('PostToolUse', tool_name='Read', tool_response=fixed)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(code)}, tool_response=fixed)
         self.assertEqual({}, self.event('Stop'))
         self.assertFalse((self.store.path.parent / 'checks' / self.key).exists())
         self.assertEqual({}, self.state()['check_baselines'])
@@ -177,7 +177,7 @@ class HookCheckContextTests(unittest.TestCase):
         sql.write_text(added, encoding='utf-8', newline='')
         response = self.write_event('PostToolUse', sql)
         self.assertIn('value_fallback_review', response['hookSpecificOutput']['additionalContext'])
-        self.event('PostToolUse', tool_name='Read', tool_response=added)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(sql)}, tool_response=added)
         check = self.state()['files'][str(sql)]['check']
         self.assertEqual('review_required', check['status'])
         self.assertEqual(1, check['warning_counts']['value_fallback_review'])
@@ -185,7 +185,7 @@ class HookCheckContextTests(unittest.TestCase):
         self.write_event('PreToolUse', sql)
         sql.write_text(before, encoding='utf-8', newline='')
         self.write_event('PostToolUse', sql)
-        self.event('PostToolUse', tool_name='Read', tool_response=before)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(sql)}, tool_response=before)
         self.assertEqual({}, self.event('Stop'))
         self.assertFalse((self.store.path.parent / 'checks' / self.key).exists())
 

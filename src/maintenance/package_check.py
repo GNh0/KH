@@ -91,6 +91,15 @@ def check_package(path: str | Path) -> CheckResult:
         check_links(entry, 'agent_link_broken')
     if len(agent_names) != len(set(agent_names)):
         error('agent_name_duplicate', 'Agent names must be unique.')
+    if agent_files and claude_manifest_path.is_file():
+        try:
+            from src.maintenance.agents import agent_definitions
+            definitions = agent_definitions(root)
+            if set(definitions) != set(agent_names):
+                error('agent_adapter_mismatch', 'Codex exports and shared role definitions must name the same roles.')
+            result.metadata['exportable_codex_agents'] = sorted(definitions)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            error('agent_export_invalid', str(exc))
     result.not_checked.append('host agent discovery, invocation and review behavior')
     hook_paths: dict[Path, set[str]] = {}
     if (root / 'hooks/hooks.json').exists():

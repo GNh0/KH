@@ -5,7 +5,7 @@ from src.common.results import CheckResult, Issue
 from .control_defaults import ControlDefaults, _same_type, with_control_base_types
 from .control_names import SINGLE_LINE_INPUT_KINDS as _INPUT_KINDS, known_control_kind
 from .control_values import HEIGHT_PROPERTIES, LABEL_PROPERTIES, label_constructor_value, label_value_key
-from .designer_model import ControlRecord, DesignerModel, _normalized_csharp_value
+from .designer_model import ControlRecord, DesignerModel, _normalized_csharp_value, statically_hidden
 
 
 _DIMENSIONS = frozenset({'Size', 'Height', 'Bounds'})
@@ -94,6 +94,8 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
     inspected: list[str] = []
     screen_members = {}
     for name, control in model.controls.items():
+        if statically_hidden(model, name):
+            continue
         kind = known_control_kind(typed.controls[name].type_name)
         is_label = kind == 'LabelControl'
         if not is_label and kind not in _INPUT_KINDS:
@@ -142,6 +144,11 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
                     continue
             actual = _property_value(control.properties, prop)
             inherited = _property_value(constructor, prop)
+            if prop == 'Appearance.Options.UseTextOptions' and actual == 'true' and inherited in {None, 'true'} and all(
+                    _key(p, constructor.get(p)) is not None and
+                    _key(p, control.properties.get(p, constructor.get(p))) == _key(p, constructor.get(p))
+                    for p in ('Appearance.TextOptions.HAlignment', 'Appearance.TextOptions.VAlignment')):
+                continue
             refs = (comparisons or similar) if prop in HEIGHT_PROPERTIES else comparisons
             values = [_property_value(c.properties, prop) for c in refs
                       if prop not in {'MinimumSize', 'MaximumSize'} or comparisons]
@@ -159,9 +166,9 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
                         'This size constraint prevents the height established by the actual comparison controls.',
                         details={'property': f'{name}.{prop}', 'screen_height': height, 'actual': actual}))
                     continue
-            # Control-owned font/alignment win over copied screen overrides.
-            # Actual screen heights win over unscaled constructor dimensions.
-            use_reference = bool(present) and (prop in HEIGHT_PROPERTIES or inherited is None)
+            # Approved role references/unchanged peers can establish a screen
+            # font. Alignment still follows the actual control initialization.
+            use_reference = bool(present) and (prop in HEIGHT_PROPERTIES or prop == 'Font' or prop.endswith('.Font') or inherited is None)
             expected = present[0] if use_reference else inherited
             source = ('unchanged same-screen controls' if automatic else 'comparison controls') if use_reference else 'control constructor'
             if use_reference and len({_key(prop, v) or ('expression', _normalized_csharp_value(v)) for v in present}) > 1:

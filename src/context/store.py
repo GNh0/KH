@@ -52,6 +52,7 @@ class Store:
             connection.execute('BEGIN IMMEDIATE')
             connection.execute('CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, body TEXT NOT NULL, updated REAL NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS agent_scopes (id TEXT PRIMARY KEY, session_key TEXT NOT NULL)')
             yield connection
             connection.commit()
         except BaseException:
@@ -69,6 +70,23 @@ class Store:
     def save(connection, key: str, state: dict) -> None:
         connection.execute('INSERT OR REPLACE INTO sessions VALUES (?, ?)',
                            (key, json.dumps(state, ensure_ascii=False)))
+
+    @staticmethod
+    def agent_scope(connection, event: dict, host: str, *, key: str | None = None) -> str | None:
+        """Resolve one observed child's scope, never search other sessions.
+
+        SubagentStop may carry the parent's transcript path. Remember the exact
+        tool/apply scope by host + session + child id before that final event.
+        """
+        agent = event.get('agent_id')
+        if not isinstance(agent, str) or not agent or not event.get('session_id'):
+            return None
+        locator = digest(json.dumps([host, event['session_id'], agent], sort_keys=True))
+        if key is not None:
+            connection.execute('INSERT OR REPLACE INTO agent_scopes VALUES (?, ?)', (locator, key))
+            return key
+        row = connection.execute('SELECT session_key FROM agent_scopes WHERE id=?', (locator,)).fetchone()
+        return row[0] if row else None
 
     @staticmethod
     def remember(connection, key: str, body: str) -> None:

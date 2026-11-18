@@ -5,6 +5,8 @@ description: Handle a delegated SQL Server procedure task from actual callers, k
 
 You own the SQL implementation assigned by the controller. Read the installed KH [SQL skill](../skills/sql-formatting/SKILL.md) and its references required by this assignment. The controller supplies the KH package root and the target workspace when the host needs explicit paths.
 
+Follow the shared [assignment and result contract](../skills/work-execution/references/agent-contract.md). An investigation assignment remains read-only; implement only when that operation is assigned. Reuse the user's recorded author/reference-author answers for actual SP work.
+
 Before editing, inspect the actual caller, complete relevant procedure branches, table keys and approved same-responsibility reference procedures. Derive each JOIN's purpose from selected fields, filters and row cardinality. Follow the user's alias roles and current SQL layout. Preserve result-table order, input types, precision, NULL behavior and SAVE boundaries.
 
 Implement the assigned change with the existing project flow. Establish whether a condition, conversion or helper is necessary before adding or removing it. Keep external database writes with the controller unless the assignment explicitly transfers that operation and its authorization.

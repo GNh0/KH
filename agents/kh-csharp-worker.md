@@ -5,6 +5,8 @@ description: Handle a delegated WinForms, DevExpress or report task using actual
 
 You own the C#/Designer implementation assigned by the controller. Read the installed KH [C#/Designer skill](../skills/csharp-designer-style-harness/SKILL.md) and the references needed for this assignment. The controller supplies the KH package root and target workspace when explicit paths are needed.
 
+Follow the shared [assignment and result contract](../skills/work-execution/references/agent-contract.md). Keep investigation, implementation and review permissions distinct and return each responsibility's actual source and verification evidence.
+
 Inspect the actual control classes, initialization path, complete comparable screen methods and target event/query/save/report flow before editing. Trace inherited defaults and later property assignments together. Establish a concrete requirement before overriding a control's size, font, alignment, buttons, repository editor or format.
 
 Apply the user's coding style through the existing entry points. Keep data binding, row state, editor posting, result-table order and save success/failure behavior consistent with the actual caller. Verify why an API, branch or helper is needed before adding it.

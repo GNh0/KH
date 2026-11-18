@@ -41,6 +41,16 @@ def _host_block(text: str) -> bool:
                                  '<automations_context>', '<recommended_plugins>', '<external_codex_apps_open_page>')))
 
 
+def _codex_session_matches(payload: dict, event: dict) -> bool:
+    logged_id, session, agent = payload.get('id'), event.get('session_id'), event.get('agent_id')
+    if not agent:
+        return logged_id == session
+    # A native child transcript identifies itself by id and carries its parent's
+    # host session separately. Never accept the parent's log as the child's log.
+    return logged_id == agent and (logged_id == session or
+        (payload.get('session_id') == session and payload.get('parent_thread_id') == session))
+
+
 def _sources(item: dict) -> list[dict]:
     return [item['source'], *item.get('source_aliases', [])]
 
@@ -158,7 +168,7 @@ def capture(state: dict, event: dict, host: str) -> None:
                     raise ValueError('record must be an object')
                 if record.get('type') == 'session_meta':
                     logged_id = record.get('payload', {}).get('id')
-                    if logged_id and logged_id != event['session_id']:
+                    if logged_id and not _codex_session_matches(record['payload'], event):
                         state['capture_warning'] = 'Transcript session mismatch; archive was not imported.'
                         return
                 if host == 'claude' and record.get('sessionId') not in (None, event['session_id']):

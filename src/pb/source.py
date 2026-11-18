@@ -53,7 +53,7 @@ def parse_pb_export(text: str, *, path: str | None = None) -> PBExport:
     by_start = {item.start: item for item in literals}
     dataobjects: list[str] = []
     unresolved: list[dict] = []
-    for match in re.finditer(r'(?im)(?:^|(?<=;)|\bthen\b|\belse\b)[ \t]*(?:\w+[ \t]*\.[ \t]*)*dataobject[ \t]*=', code):
+    for match in re.finditer(r'(?im)(?:^|(?<=;)|\bthen\b|\belse\b)[ \t]*(?:string[ \t]+)?(?:\w+[ \t]*\.[ \t]*)*dataobject[ \t]*=', code):
         start = match.end()
         while start < len(text) and comments_masked[start].isspace():
             start += 1

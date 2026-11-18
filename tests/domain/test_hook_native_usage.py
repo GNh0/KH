@@ -11,7 +11,7 @@ from unittest.mock import patch
 from src.context.store import Store, session_key
 from src.runtime.hooks import CYCLE, ROOT, handle
 from src.runtime.check_context import SourceBaselines
-from hook_application_fixture import apply_files
+from tests.domain.hook_application_fixture import apply_files
 from src.runtime.workflows import required_paths
 from src.runtime.guidance import document
 
@@ -40,12 +40,12 @@ class NativeHookTests(unittest.TestCase):
             return self.store.load(connection, self.key)
 
     def cycle(self):
-        for relative in sorted(required_paths({'work': ['sql-select']}, self.project / 'Save.sql') - {'sql-formatting/SKILL.md'}):
+        for relative in sorted(required_paths({'work': ['sql-query']}, self.project / 'Save.sql') - {'sql-formatting/SKILL.md'}):
             _path, body, _start, _end = document(ROOT, relative)
             self.event('PostToolUse', tool_name='Read', tool_response=body)
 
     def apply_sql(self, path=None, *, deliver=False, work=None):
-        return apply_files(self.scope, 'claude', work or ['sql-select'],
+        return apply_files(self.scope, 'claude', work or ['sql-query'],
                            [path or self.project / 'Save.sql'], deliver=deliver)
 
     def test_native_delivery_is_available_and_apply_owns_only_its_target(self):
@@ -181,7 +181,7 @@ class NativeHookTests(unittest.TestCase):
         sql = self.project / 'Output.sql'
         before = 'SELECT A.QTY FROM INPUT_ROWS A;'
         sql.write_text(before, encoding='utf-8')
-        self.apply_sql(sql, deliver=True, work=['pb-migrate', 'sql-select'])
+        self.apply_sql(sql, deliver=True, work=['pb-migrate', 'sql-query'])
         edit = {'tool_name': 'Write', 'tool_input': {'file_path': str(sql)}}
         self.assertEqual({}, self.event('PreToolUse', **edit))
         sql.write_text(before.replace('A.QTY', 'ISNULL(A.QTY, 0)'), encoding='utf-8')
@@ -328,7 +328,7 @@ class NativeHookTests(unittest.TestCase):
         sql.write_text(candidate, encoding='utf-8')
         self.event('PostToolUseFailure', **edit, is_interrupt=True)
         with patch('src.runtime.hooks.snapshot') as read:
-            self.event('PostToolUse', tool_name='Read', tool_response=candidate)
+            self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(sql)}, tool_response=candidate)
             self.event('PreCompact')
             self.event('Stop')
             read.assert_not_called()
@@ -337,12 +337,12 @@ class NativeHookTests(unittest.TestCase):
         self.assertIn('value_fallback_review', self.state()['files'][str(sql)]['check']['warnings'])
         original = SourceBaselines(self.store.path.parent / 'checks' / self.key, self.state()).original(sql)
         self.assertEqual(before, original)
-        self.event('PostToolUse', tool_name='Read', tool_response=candidate)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(sql)}, tool_response=candidate)
         self.assertIn('cannot verify', self.event('Stop', stop_hook_active=True)['systemMessage'])
         self.event('PreToolUse', **edit)
         sql.write_text(before, encoding='utf-8')
         self.event('PostToolUse', **edit)
-        self.event('PostToolUse', tool_name='Read', tool_response=before)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(sql)}, tool_response=before)
         self.assertEqual({}, self.event('Stop'))
         self.assertEqual('checks_complete', self.state()['last_file_checks_outcome'])
         self.assertFalse(self.state()['semantic_audit_verified'])
@@ -402,6 +402,7 @@ class NativeHookTests(unittest.TestCase):
         first = original.replace('SELECT 1;', 'SELECT 101;')
         sql.write_text(first, encoding='utf-8')
         self.event('PostToolUse', **edit, tool_response=first)
+        self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(sql)}, tool_response=first)
         self.event('PreToolUse', **edit)
         second = first.replace('SELECT 18;', 'SELECT 118;')
         sql.write_text(second, encoding='utf-8')

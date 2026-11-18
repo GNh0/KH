@@ -24,6 +24,22 @@ def findings(source, original=None):
 
 
 class SqlDispatchTests(unittest.TestCase):
+    def test_sibling_observation_is_review_not_ownership_or_automatic_merge(self):
+        source = "IF @Mode = 'CREATE' BEGIN SELECT 1; END IF @Mode = 'CREATE' BEGIN SELECT 2; END"
+        result = check_sql(source, check_style=False, check_preferences=False)
+        self.assertEqual(1, len([i for i in result.issues if i.code == 'repeated_sibling_mode_guard']))
+        self.assertFalse([i for i in check_sql(source, original=source, check_style=False, check_preferences=False).issues if i.code == 'repeated_sibling_mode_guard'])
+        changed = source.replace('END IF', "END SET @Mode = 'OTHER'; IF")
+        self.assertFalse([i for i in check_sql(changed, check_style=False, check_preferences=False).issues if i.code == 'repeated_sibling_mode_guard'])
+
+    def test_exec_only_invalidates_actual_outputs_or_return_assignment(self):
+        for statement in ('EXEC dbo.LogEvent;', 'EXEC dbo.ReadMode @Mode;', 'EXEC dbo.P @Mode=@Other OUTPUT;', 'EXEC @Other = dbo.P;'):
+            source = "IF @Mode = 'READ' BEGIN " + statement + " IF @Mode = 'READ' BEGIN SELECT 1; END END"
+            self.assertEqual(1, len(findings(source)), statement)
+        for statement in ('EXEC dbo.P @Mode OUTPUT;', 'EXEC dbo.P @Other=@Mode OUT;', 'EXEC @Mode = dbo.P;'):
+            source = "IF @Mode = 'READ' BEGIN " + statement + " IF @Mode = 'READ' BEGIN SELECT 1; END END"
+            self.assertFalse(findings(source), statement)
+
     def test_same_mode_guard_inside_its_proven_branch_is_reported(self):
         result = findings(REPEATED)
         self.assertEqual(1, len(result))
