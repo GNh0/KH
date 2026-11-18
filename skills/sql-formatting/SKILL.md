@@ -3,34 +3,21 @@ name: sql-formatting
 description: Create, change, format or review SQL/T-SQL query and procedure artifacts using the user's style.
 ---
 
-# SQL formatting
+# SQL 작성·정리
 
-Execute in the current agent by default. Use the [KH delegation flow](../work-execution/references/delegation.md) only when a bounded specialist task or independent review benefits from a separate agent. An assigned SQL worker completes its scope and returns evidence without further delegation.
+| 요청 | 적용 |
+| --- | --- |
+| 정렬·정리 | [SQL 서식](references/style.md). “별칭 그대로/정렬만”이면 별칭 유지, 일반 “정리”면 업무 역할별로 정돈한다. 완성 SQL 또는 요청한 교체 블록을 반환한다. |
+| SELECT 작성 | 결과 한 행의 단위, 포함·제외 조건, 표시용 JOIN과 필수 JOIN을 확인한다. [조회 예시](references/select-patterns.md) |
+| SELECT/SAVE 프로시저 | [작성자와 참고 SP](references/procedure-authorship.md)를 정하고 실제 호출부·같은 역할 참고 SP 전체와 [프로시저 계약](references/procedure-contracts.md)을 대조한다. |
+| SAVE 작성 | 호출 모드와 선택 키·XML 행 상태를 맞춘다. [저장 예시](references/save-patterns.md), 업무 검증 변경 시 [검증 예시](references/validation-patterns.md) |
 
-For project-file work, use the [scoped application](../work-execution/references/application.md) for the actual `sql-format`, `sql-query`, `sql-select` and/or `sql-save` responsibility and named files. Read the returned required references, then complete the shared [source-style cycle](../work-execution/references/source-style-cycle.md). Document inspection or query explanation alone does not apply code-writing checks.
+- 원래 JOIN 종류·순서, 조건, 출력 형식·순서, 리터럴, 한글, 주석을 보존한다. 함수 → JOIN 변경은 실제 정의·NULL·중복·건수·성능을 확인한다.
+- 조회·합산·제외는 전체 키와 행 수를 지키는 JOIN을 우선한다. SAVE의 필수 `IF EXISTS`, 채번·출력 변수는 유지한다.
+- 저장·조회 값의 **신규·변경 대체값은 사용자 명시 요청이 필요하다**. 산술식의 `ISNULL(..., 0)`도 해당한다. 입력 컨트롤 초기값은 해당 초기화에서만 적용한다.
+- 기존 SP는 쓰기·실행 전에 원본↔초안, 저장 후 원본↔저장본을 비교한다. 새 모드·쓰기·호출 위치·결과 형식마다 실제 요구와 호출 근거를 확인한다. 같은 모드의 결과는 한 분기 안에서 호출 순서대로 반환한다. [변경 검사](references/checks.md)
+- 화면 계약 변경 시 `python -B <KH>/scripts/kh_check.py screen-contract <caller.cs> <SELECT.sql> <SAVE.sql> --designer <Designer.cs>`로 최종 양쪽을 맞춘다. 입력이 부족하면 빠진 SP·모드·결과를 실제 소스로 검증한다.
 
-Do not add or change a value fallback unless the user explicitly requested that substitution. Preserve the actual supplied/stored value; NULLs, blanks, missing legacy data or defensive coding do not authorize replacing it with another field, master/default value, zero or a literal. A request to initialize an input default does not authorize replacing submitted values during SAVE or later SELECT. Changing ISNULL to COALESCE, CASE or another form does not change this rule; preserve unchanged existing handling outside the requested correction.
+호스트가 파일 작업 범위를 발급하면 [apply](../work-execution/references/application.md)에 실제 파일과 역할을 등록한다. [작성 전·후 대조](../work-execution/references/source-style-cycle.md)는 해당 원본으로 수행한다. 대화에 붙인 SQL은 직접 정리한다. 비교·설명은 제공 자료로 답하고 DB 실행은 사용자가 지정한 범위를 따른다.
 
-## Procedure work: SELECT and SAVE
-
-At the first actual SP task, ask whose name belongs in the target AUTHOR header and whose existing SPs to find for style. Reuse explicit answers. Search existing AUTHOR headers for each requested name, read relevant SELECT/SAVE bodies before drafting, and identify the procedures used. Only the target author belongs in the new header. Apply [SP authorship and reference selection](references/procedure-authorship.md) alongside SQL-FORMATTING.
-
-Before creating or changing procedure logic, including SELECT-only/report procedures, read the actual caller, complete approved same-responsibility procedures and the relevant [SELECT/SAVE procedure contracts](references/procedure-contracts.md). Select the changed responsibilities in the [illustrative-pattern index](references/procedure-patterns.md) and read those examples; do not load the whole example collection. Verify the selected structure against the complete procedures. Derive schema, types, keys and behavior from the actual target. When the request adds a caller or operation, cover the added responsibility before drafting it.
-
-Keep one operation's ordered result sets in its owning dispatch block. Do not put additional SELECTs behind a second check of the mode predicate already established by that branch, or append a duplicate mode branch just to return another table. Preserve genuinely different business conditions and required shared phases.
-
-Before writing or executing an SP edit, compare the **original and draft** with the requested operation and the named author's same-role SPs. Use the [SP change review](references/checks.md). For each new dispatch path, persisted write, moved call or changed result type, identify what request or existing caller requires it. A proposed caller change, a passing test or an assumed compatibility need cannot supply that requirement. Remove unsupported changes before execution, including rollback tests. Recheck the saved body, caller, affected and excluded cases.
-
-## Layout and preservation
-
-Apply the [user's SQL style](references/style.md) when generating, editing, or cleaning up SQL. For derived FROM/JOIN sources, align closing and opening parentheses, place inner clauses one space to the right, and align derived JOIN ON/AND with the parentheses. For ordinary table JOINs, align ON/AND with the I in JOIN. This user's general “정리” (cleanup) includes alias normalization by business role. Preserve original aliases for “별칭 그대로” (keep aliases) or “정렬만” (format only). Do not infer roles solely from table names/MAINCD.
-
-Align actual text columns with spaces, including within lists; equal tab counts do not establish alignment. For grouped INSERT/SELECT mappings, use shared column starts that fit both target names and source expressions, and preserve their matching row groups. Check the final token positions, not the number of indentation characters.
-
-For cleanup of supplied SQL alone, deliver the completed SQL directly. Do not rewrite SQL or connect to a database for simple comparison or explanation questions. Preserve semantics, JOIN types/order, conditions, literals, Korean text, existing comments, and output columns/types. SQL generation and database execution are separate request scopes.
-
-For other SQL work, use the [checker](references/checks.md) when it adds evidence. For changes that could alter semantics, such as replacing a function with a JOIN, check actual definitions, NULL behavior, duplicates, row counts, and performance. The checker does not replace database execution.
-
-Keep temporary query files and verification output outside the source project; follow [workspace files](../work-execution/references/workspace-files.md) when creating them.
-
-Use the approved JOIN-based form for lookups, aggregation and inclusion/exclusion in both SELECT and SAVE. Keep query sources in FROM/JOIN rather than adding SELECT/WHERE subqueries or copying row values into scalar variables for convenience. Preserve required IF EXISTS validations and necessary key/output variables. Apply [preferences and exceptions](../work-execution/references/preferences.md) when an actual requirement makes the preferred form unsuitable; verify full keys, NULLs and row cardinality before rewriting. Return the requested complete SQL or exact replacement block.
+작업용 파일은 [임시 경로](../work-execution/references/workspace-files.md)에 둔다. 메인이 직접 작업하며 위임이 필요한 경우 [역할별 인계](../work-execution/references/delegation.md)를 따른다.

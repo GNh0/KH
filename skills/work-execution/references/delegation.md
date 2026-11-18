@@ -1,40 +1,16 @@
-# KH selective delegation and independent review
+# 역할 선택과 위임
 
-The main agent handles the task by default, including implementation, and owns requirements, sequencing, integration and the final result. Delegate only when a bounded specialist task or independent review has a concrete benefit and the host permits it. A worker already assigned by the main agent completes its scope and returns evidence without further delegation.
+메인이 기본 구현자다. 짧은 변경과 앞 단계 결과가 필요한 변경은 직접 처리한다. 호스트가 허용하고 별도 조사·분할 가능한 구현·독립 검토가 실제로 필요할 때만 역할을 쓴다. 지정받은 작업자는 추가 위임 없이 자기 범위를 마친다.
 
-## Choose whether to delegate
+| 역할 | 맡길 범위 |
+| --- | --- |
+| [C#](../../../agents/kh-csharp-worker.md) | 화면 이벤트·Designer·데이터 바인딩·출력 |
+| [SQL](../../../agents/kh-sql-worker.md) | SELECT 결과 계약, SAVE의 키·행 상태·쓰기 |
+| [PB](../../../agents/kh-pb-worker.md) | PBL/DataWindow 원본 동작과 대상 C#/SQL 매핑 |
+| [감사](../../../agents/kh-rule-auditor.md) | 원래 요구와 최종 변경·검증의 독립 대조 |
 
-Useful cases include an independent investigation, specialist analysis whose intermediate output would crowd the main context, an implementation with a clear separate scope, or a fresh review justified by the change's risk, uncertainty or repeated violations. Honor an explicit request for independent review. Keep short tasks and dependent steps in the main agent. A domain name, task size, available role or tool call alone does not justify a subagent.
+화면과 SP가 한 기능이면 메인이 함께 수정하거나, 소유 파일을 나눈 뒤 **메인이 양쪽의 최종 계약을 검증한다**. 코드 작성자를 별도로 나누지 않고 검토만 위임해도 된다. [인계 자료·결과 판정](agent-contract.md), [작성 전·후 대조](source-style-cycle.md), [규칙 감사](../../rule-audit/SKILL.md).
 
-The main agent can implement the whole change and delegate only its review. Delegating implementation does not automatically require another agent for every step or review. In either mode, the same domain skills, required [source-style cycle](source-style-cycle.md) and [rule audit](../../rule-audit/SKILL.md) apply. A self-audit is not an independent review; report which was actually performed.
+호스트가 해당 역할을 제공하면 그 역할을 호출한다. 아니면 실제 하위 에이전트 호출에 역할 전문 또는 읽을 절대경로, KH·대상 경로, 현재 요청·권한과 담당 범위를 함께 준다. 호스트가 지원하면 필요한 근거만 담은 새 문맥을 사용하고 모델은 사용자의 선택을 따른다. 도구가 없으면 메인이 직접 수행하고 확인 범위를 밝힌다.
 
-When delegation is useful, choose the role that owns that scope.
-
-- [kh-sql-worker](../../../agents/kh-sql-worker.md) handles SQL procedures and query contracts.
-- [kh-csharp-worker](../../../agents/kh-csharp-worker.md) handles WinForms, Designer, DevExpress and reports.
-- [kh-pb-worker](../../../agents/kh-pb-worker.md) handles PB source behavior and migration across C#, Designer and SQL.
-- [kh-rule-auditor](../../../agents/kh-rule-auditor.md) independently checks the actual changes and evidence.
-
-## Dispatch
-
-Use an advertised native agent type when its definition matches the packaged role. Otherwise pass the complete role instructions in an actual host subagent call, or pass an absolute role-file path and require the child to read it completely before acting. Include the absolute KH package root, target workspace, original requirements and corrections, owned files, approved reference paths, applicable limits, expected result and verification scope. Use the host's actual tool schema. Prefer a fresh context with the necessary source evidence when supported. Inherit the session model unless the user or configured role chooses another model.
-
-Use the shared [assignment and result contract](agent-contract.md) for investigation/implementation permissions, responsibility-specific source evidence, result collection and the distinct audit verdict paths. Do not load unrelated domain references merely because another role is available.
-
-The main agent owns sequencing and shared state. Give independent workers disjoint edit scopes. Keep one owner for each file, database transaction and external apply operation. Convey existing authorization and limits accurately. The main agent can use domain tools and checkers directly; their availability does not require a worker.
-
-## Review and correction
-
-After the main agent or a worker finishes the change, audit the actual diff, baseline/reference paths and verification results against the original requirements. When independent review is selected, dispatch the auditor with that evidence; no implementation worker is required first. The auditor reads the current source and returns concrete findings, verification gaps and a status.
-
-For confirmed violations, the change owner repairs only the affected code: the main agent fixes its own work directly, or returns the findings to the responsible worker. Rerun affected checks and re-audit the repaired scope; retain the independent reviewer for its affected re-review when one was selected. Continue while confirmed violations remain and a supported repair is available. Diagnose repeated failures before another attempt. A missing dependency, authorization limit or unavailable runtime remains an explicit unresolved item.
-
-Before completion, the main agent checks the combined final change and whether the repairs introduced regressions in related callers, initialization, bindings, data contracts or previously working behavior. Repair introduced problems and repeat the affected audit and regression checks. A worker's completion, an agent status or a passing local checker alone does not establish the original task's outcome.
-
-## Host and lifecycle boundaries
-
-Creation of a subagent and completion of its work are separate events. Collect the actual tool result or error and track each live agent through completion or interruption. On user stop, interrupt outstanding workers and release finished task-owned resources under the runtime cleanup procedure.
-
-Claude Code can discover the packaged `agents/` definitions through its plugin. Codex plugin skill discovery supplies the skills; custom named-agent installation is a separate host feature. The role-instructions dispatch above works with the available Codex subagent tools without asserting that a plugin upgrade registered a native agent type. If subagent tools are unavailable, carry out the applicable source/style and rule-audit flow in the current agent and report the verification scope accurately.
-
-For explicit Codex custom-agent installation, run `python -B <KH-root>/scripts/kh_agents.py --output <absolute-project>/.codex/agents` or choose the user's personal `.codex/agents` directory. This generates supported TOML from the shared role bodies with current absolute package references, leaving model/effort inherited. It writes the selected configuration directory: keep that action within the user's requested installation scope. Existing customized agent files are preserved and reported rather than overwritten. After a plugin-path/version change, rerun the exporter for the same installation and inspect the resolved references. Export success is not host discovery or invocation; verify both separately in the intended client. Never edit a plugin cache to simulate installation.
+Claude Code는 패키지의 역할 정의를 사용한다. Codex에서 명명된 역할 설치를 요청받으면 `python -B <KH>/scripts/kh_agents.py --output <대상 프로젝트>/.codex/agents`를 사용한다. 개인 설치는 사용자가 지정한 개인 설정 경로에 한정한다. 생성기는 기존 사용자 수정 파일을 보존한다. KH 위치·버전 변경 후 같은 설치 대상에 재실행하고, 실제 호스트의 발견·호출을 따로 확인한다.

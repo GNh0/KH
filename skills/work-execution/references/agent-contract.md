@@ -1,23 +1,27 @@
-# KH domain assignment and audit handoff
+# 위임과 결과 인계
 
-The main agent implements by default. Use a specialist or an independent reviewer only for a current authorized assignment with a concrete benefit. The same source-style cycle applies to main-authored and delegated code.
+메인이 요구사항·순서·최종 결과를 맡는다. 역할별 작업은 파일·트랜잭션당 한 명이 소유한다. 조사·감사는 읽기 범위다. 구현을 맡긴 경우 각 작업자가 자기 호스트 범위에서 대상과 비교 소스를 등록하고 해당 부분의 작성 전·후 대조를 수행한다.
 
-## Assignment
+## 메인이 넘길 자료
 
-When a screen and its procedures are split between workers, the main agent owns their joint result. Hand over the actual C# call, SP definition, mode, parameters, XML rowset, and ordered result bindings for the changed path. Compare them after merging the workers' changes. Use `kh_check.py sp-call` on an isolated call for literal parameter names. Trace runtime-built modes, XML names and grid fields to their actual consumers.
+- 현재 요청과 정정 사항, 대상 프로젝트·KH 절대경로, 맡긴 파일과 조사/수정/감사 범위, 허용된 검증·외부 적용 범위.
+- 책임별 실제 원본·비교 소스 위치. SP는 사용자가 답한 대상 작성자·참고 작성자와 그 답의 출처. PB 변환은 원본 객체와 변환 대상 프로젝트의 작성 예시.
+- 화면과 SP가 연결되면 메인이 변경할 호출 경로를 한 줄로 공유한다. 예를 들면 `상세 조회 → 화면의 모드·파라미터 → SP 분기 → Tables[순서] → FieldName`이다. 저장 경로는 선택 키·행 상태·TableName → XML 매개변수·OPENXML → 쓰기·성공 후 화면까지 연결한다.
 
-Pass the current request and latest corrections, absolute KH root and target workspace, and whether the assignment is investigation, implementation or review. Identify owned files/operations, actual reference sources for each responsibility, available verification and existing limits. Forward user-supplied SP author/reference-author choices with their source; a child must not infer a name or ask the same answered question again. Missing information is not an approval.
+## 작업자가 돌려줄 자료
 
-Investigation/review does not apply development checks or authorize edits. For implementation, use the child's actual host scope for its owned outputs. A parent application is not evidence that the child read or applied guidance. PB migration needs both the real PB source behavior and the output project's C#/SQL style references. Keep query, save, printing and control responsibilities separate even when they belong to one file. The source-style cycle owns their before/after review; this contract does not start a second audit.
+변경 파일과 실제 비교 소스·메서드·분기, 수행한 검사와 결과, 미확인 입력·동작, 남은 작업 자원을 돌려준다. 양쪽 계약 중 자신이 확인한 필드와 상대 쪽에서 확인할 필드를 함께 적는다. SQL 작성, DB 적용, 화면 실행 확인은 실제 수행 범위를 명시한다.
 
-Keep one writer for each file or external transaction. A cross-language assignment can own several related outputs, but two workers must not own the same source. New user corrections, cancellation and stop requests supersede the assignment. A delayed result based on earlier requirements must be rechecked before integration; never replay it automatically.
+## 메인의 통합 확인
 
-## Result and correction
+같은 화면을 여러 명이 맡으면 양쪽 최종 파일을 모아 다음처럼 검사한다.
 
-Return the actual changed source/diff or investigation result, reference bodies/method locations inspected, verification commands and actual returns, unresolved requirements and remaining task-owned resources. Distinguish a prepared script, a saved artifact, an applied external change and verified runtime behavior.
+```text
+python -B <KH>/scripts/kh_check.py screen-contract <caller.cs> <SELECT.sql> <SAVE.sql> --designer <Designer.cs>
+```
 
-An independent audit returns `pass`, `changes_required` or `unverified` with its exact scope and evidence. `pass` goes to the main agent's combined regression/completion check. `changes_required` returns confirmed violations to the existing change owner; preserve compliant work, repair the affected part, re-read it and re-audit. `unverified` identifies missing source/runtime/evidence and requests only what is needed to resolve it; it is not permission to change working code or a reason to repeat repairs blindly. A checker pass cannot turn an unresolved audit into `pass`.
+호출별 파라미터·모드, XML 행 경로, 결과표 순서와 필드명을 원본과 대조한다. 누락된 프로시저나 동적 값으로 검사 결과가 불완전하면 해당 소스·런타임 경로를 직접 확인한다. 단일 호출의 파라미터만 비교할 때는 `sp-call`을 쓴다.
 
-The main agent collects the actual result/error, reviews current final sources and verifies that repairs introduced no related regressions. Use a fresh independent reviewer for a new audit cycle; affected follow-up review can reuse that cycle's reviewer and evidence. Keep self-review and independent review accurately labelled.
+독립 감사는 새 감사 주기마다 별도 검토자가 맡는다. `changes_required`는 기존 담당자가 해당 부분을 고치고 같은 검토자가 재검사한다. `unverified`에는 필요한 원본·환경을 명시한다. `pass`면 메인이 합쳐진 호출 경로와 회귀를 확인한다. 자체 검토와 독립 검토를 구분한다.
 
-On completion, failure or cancellation, join/interrupt task-owned workers as appropriate and dispose their temporary resources. Preserve shared/app-managed resources and other chats. If host hooks cannot observe child completion, collect its actual result and perform the same final checks explicitly; report the automatic lifecycle gap.
+정정·중단이 오면 진행 중 작업에 반영하고 오래된 결과를 재확인한다. 종료·실패·취소 시 메인이 실제 결과·오류를 수집하고 작업 소유 자원을 정리한다. 호스트가 하위 종료를 전달하지 않으면 메인이 결과 회수와 검증을 직접 맡고 확인 범위를 밝힌다.

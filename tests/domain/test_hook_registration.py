@@ -68,6 +68,42 @@ class RegistrationTests(unittest.TestCase):
         self.assertIn(str(other), response['hookSpecificOutput']['additionalContext'])
         self.assertIn('No KH compliance result', response['hookSpecificOutput']['additionalContext'])
 
+    def test_named_write_omission_blocks_only_owned_path_and_can_recover(self):
+        import json
+        import subprocess
+        import sys
+        target = self.project / 'Owned.sql'
+        target.write_text('SELECT 1;', encoding='utf-8')
+        self.event('UserPromptSubmit', prompt='$sql-formatting edit Owned.sql', turn_id='one')
+        self.assertEqual('deny', self.write(target)['hookSpecificOutput']['permissionDecision'])
+        self.assertNotIn('permissionDecision', self.write(self.project / 'Other.sql').get('hookSpecificOutput', {}))
+        target.write_text('SELECT 2;', encoding='utf-8')
+        self.assertEqual('block', self.event('Stop')['decision'])  # Host omitted both tool notifications.
+        result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/kh_context.py'), '--cwd', str(self.project),
+                                 '--session', self.scope['session_id'], '--transcript', str(self.log),
+                                 '--data-root', str(self.root / 'data/context-v1'), '--epoch', self.state()['application_epoch'],
+                                 'apply', '--work', 'sql-query', '--target', str(target)], capture_output=True, text=True, check=True)
+        self.assertEqual('applied', json.loads(result.stdout)['status'])
+        from src.runtime.hooks import line_hashes
+        repaired = self.state()
+        self.assertEqual(line_hashes('SELECT 1;'), repaired['before'][str(target)])
+        self.assertFalse(repaired.get('unregistered_writes'))
+        self.assertIn(str(target), repaired['late_registrations'])
+        self.assertEqual('block', self.event('Stop')['decision'])  # Read/reference gates still apply.
+
+    def test_actual_returned_saved_body_needs_matching_disk_and_path(self):
+        from src.runtime.hooks import saved_body_returned
+        path = self.project / 'Owned.sql'
+        event = {'hook_event_name': 'PostToolUse', 'tool_name': 'Write',
+                 'tool_input': {'file_path': str(path), 'content': 'SELECT 1;'}}
+        for result, expected in [({'type': 'update', 'filePath': str(path), 'content': 'SELECT 1;'}, True),
+                                 ({'filePath': str(path), 'savedContent': 'SELECT 1;'}, True),
+                                 ({'filePath': str(path), 'savedContent': 'SELECT 2;'}, False),
+                                 ({'filePath': str(self.project / 'Other.sql'), 'savedContent': 'SELECT 1;'}, False),
+                                 ({'success': False, 'filePath': str(path), 'savedContent': 'SELECT 1;'}, False),
+                                 ('File updated successfully', False)]:
+            self.assertEqual(expected, saved_body_returned({**event, 'tool_response': result}, path, 'SELECT 1;'))
+
     def test_document_read_and_other_application_do_not_claim_unregistered_files(self):
         path = ROOT / 'skills/sql-formatting/SKILL.md'
         self.event('PostToolUse', tool_name='Read', tool_input={'file_path': str(path)}, tool_response=path.read_text(encoding='utf-8'))

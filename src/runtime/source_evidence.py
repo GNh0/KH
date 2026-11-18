@@ -10,7 +10,7 @@ import re
 import shlex
 
 from src.common.files import read_file
-from src.runtime.skill_usage import DOMAINS
+from src.runtime.skill_usage import DOMAINS, successful_tool_result
 from src.runtime.workflows import binding
 from src.runtime.check_context import companion
 from src.sql.procedure_authorship import author_key
@@ -124,15 +124,7 @@ def designer_comparison(body: str) -> bool:
 
 
 def successful_read_paths(event: dict) -> list[Path]:
-    response = event.get('tool_response')
-    if event.get('hook_event_name') == 'PostToolUseFailure':
-        return []
-    if isinstance(response, dict):
-        if any(field in response and response[field] != 0 for field in ('exit_code', 'exitCode')):
-            return []
-        if response.get('isError') or response.get('is_error') or response.get('success') is False:
-            return []
-    return read_paths(event)
+    return read_paths(event) if successful_tool_result(event) else []
 
 
 def select_references(state: dict, applied: list[dict], names: list[str], cwd: str,
@@ -201,34 +193,75 @@ def select_references(state: dict, applied: list[dict], names: list[str], cwd: s
         raise ValueError('A comparison source has no matching responsibility; PB migration needs its PB original and the output-language style source separately.')
 
 
+def _read_positions(lines: list[str], returned: str, previous: list[str]) -> set[int]:
+    """Map returned text to physical source lines without guessing repeated fragments."""
+    def line_hash(line: str) -> str:
+        return hashlib.sha256(line.strip().encode()).hexdigest()
+
+    expected = {n: line_hash(line) for n, line in enumerate(lines, 1) if line.strip()}
+    numbers = list(expected)
+    values = set(expected.values())
+    sequence = '|' + '|'.join(expected.values()) + '|'
+    observed: set[int] = set()
+
+    def record(run: list[str]) -> None:
+        if not run:
+            return
+        needle = '|' + '|'.join(run) + '|'
+        offset = sequence.find(needle)
+        if offset >= 0 and sequence.find(needle, offset + 1) < 0:
+            first = offset // (hashlib.sha256().digest_size * 2 + 1)
+            observed.update(numbers[first:first + len(run)])
+
+    # Preserve uniquely located partial reads stored by the older checker.
+    record(previous)
+    run: list[str] = []
+    for line in returned.splitlines():
+        if not line.strip():
+            continue
+        raw = line_hash(line)
+        if raw in values:
+            run.append(raw)
+            continue
+        record(run)
+        run = []
+        numbered = re.match(r'^\s*L?(\d+)[:\t→](.*)$', line)
+        if numbered and expected.get(int(numbered[1])) == line_hash(numbered[2]):
+            observed.add(int(numbered[1]))
+    record(run)
+    return observed
+
+
 def observe_references(state: dict, returned: str, event: dict) -> None:
     paths = successful_read_paths(event)
     if not paths:
         return
-    hashes = [(hashlib.sha256(line.strip().encode()).hexdigest(),
-               hashlib.sha256(re.sub(r'^\s*(?:L?\d+[:\t→]\s*)', '', line).strip().encode()).hexdigest())
-              for line in returned.splitlines()]
     for item in state.get('applications', {}).values():
         for ref in item.get('references', []):
             try:
                 source_path = Path(ref['path'])
                 if owned_source(state, source_path) or not any(path == source_path or (path.exists() and path.samefile(source_path)) for path in paths):
                     continue
-                sha, expected = unit(ref)
+                source = read_file(source_path, max_bytes=1024 * 1024)
+                sha = source.sha256
                 if sha != ref.get('source_sha256'):
                     ref.pop('read_sha256', None)
                     ref.pop('read_buffer', None)
+                    ref.pop('read_lines', None)
                     continue
-                if ref.get('read_sha256') == sha or not hashes:
+                if ref.get('read_sha256') == sha or not returned.strip():
                     continue
-                expected_set = set(expected)
-                observed = [next((value for value in choices if value in expected_set), '') for choices in hashes]
-                stream = ref.get('read_buffer', []) + [value for value in observed if value]
-                if '|' + '|'.join(expected) + '|' in '|' + '|'.join(stream) + '|':
+                lines = source.text().splitlines()
+                start, end = ref['start'], ref['end']
+                if not 1 <= start <= end <= len(lines):
+                    continue
+                required = {n for n in range(start, end + 1) if lines[n - 1].strip()}
+                seen = set(ref.get('read_lines', [])) | (_read_positions(lines, returned, ref.pop('read_buffer', [])) & required)
+                if required and required <= seen:
                     ref['read_sha256'] = sha
-                    ref.pop('read_buffer', None)
+                    ref.pop('read_lines', None)
                 else:
-                    ref['read_buffer'] = stream[-(len(expected) + 32):]
+                    ref['read_lines'] = sorted(seen)
             except (OSError, ValueError, UnicodeError, RuntimeError):
                 ref.pop('read_sha256', None)
 
@@ -245,6 +278,9 @@ def reference_problem(state: dict, path: Path) -> str:
         try:
             authors = selected_authors(authors.get('author'), authors.get('reference_author'))
         except (AttributeError, ValueError):
+            if item.get('original_sp_author'):
+                return ('The original SP identifies its AUTHOR. Preserve that header and ask only whose existing SPs '
+                        'to find and read for style. Supply --reference-author for each selected name.')
             return ('Before this first SP draft, ask the user which name belongs in the target AUTHOR header and whose existing SPs to find and read for style. '
                     'Record the header name with --author; pass each search name separately with --reference-author.')
         names = authors['reference_author']
@@ -343,6 +379,11 @@ def observed_comparisons(state: dict, path: Path) -> tuple[dict[str, str], list[
     bodies = {}
     for kind, sources in groups.items():
         if len(sources) != 1:
+            if kind == 'designer:csharp-designer':
+                scoped = {source for role in ('designer:csharp-control', 'designer:csharp-grid')
+                          if len(group := groups.get(role, {})) == 1 for source in group}
+                if set(sources) <= scoped:
+                    continue  # The role-specific comparators consume each selected layout independently.
             problems.append('Multiple comparison programs for the same responsibility ' + kind + ' are ambiguous; narrow that responsibility before claiming this static comparison.')
             continue
         name, ranges = next(iter(sources.items()))
@@ -357,7 +398,8 @@ def observed_comparisons(state: dict, path: Path) -> tuple[dict[str, str], list[
     # query/report/etc. sources merely because they share a C# extension.
     for base in ('csharp', 'designer'):
         matches = [value for key, value in bodies.items() if key.startswith(base + ':')]
-        if matches and len(set(matches)) == 1:
+        if matches and len(set(matches)) == 1 and all(len(sources) == 1 for key, sources in groups.items()
+                                                     if key.startswith(base + ':')):
             bodies[base] = matches[0]
     return bodies, dependencies, problems
 

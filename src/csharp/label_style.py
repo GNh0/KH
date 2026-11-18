@@ -5,7 +5,7 @@ from src.common.results import CheckResult, Issue
 from .control_defaults import ControlDefaults, _same_type, with_control_base_types
 from .control_names import SINGLE_LINE_INPUT_KINDS as _INPUT_KINDS, known_control_kind
 from .control_values import HEIGHT_PROPERTIES, LABEL_PROPERTIES, label_constructor_value, label_value_key
-from .designer_model import ControlRecord, DesignerModel, _normalized_csharp_value, statically_hidden
+from .designer_model import ControlRecord, DesignerModel, _normalized_csharp_value, statically_hidden, visible_comparison
 
 
 _DIMENSIONS = frozenset({'Size', 'Height', 'Bounds'})
@@ -53,23 +53,12 @@ def _screen_peers(model: DesignerModel, original: DesignerModel, name: str) -> l
     if control.parent == '<form>' and control.add_order is None:
         return []
 
-    def visible(record: ControlRecord, source: DesignerModel) -> bool:
-        seen = set()
-        while record.name not in seen:
-            seen.add(record.name)
-            if record.properties.get('Visible', 'true').strip() != 'true':
-                return False
-            if record.parent not in source.controls:
-                return True
-            record = source.controls[record.parent]
-        return False
-
     peers = []
     for peer_name, before in original.controls.items():
         current = model.controls.get(peer_name)
         if (peer_name == name or current is None or before.parent != control.parent or
                 current.parent != before.parent or not _same_type(before.type_name, current.type_name) or
-                not visible(before, original) or not visible(current, model)):
+                not visible_comparison(original, peer_name) or not visible_comparison(model, peer_name)):
             continue
         if any(_normalized_csharp_value(_property_value(before.properties, p) or '') !=
                _normalized_csharp_value(_property_value(current.properties, p) or '') for p in LABEL_PROPERTIES):
@@ -93,6 +82,7 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
     typed_original = with_control_base_types(original, defaults) if original else None
     inspected: list[str] = []
     screen_members = {}
+    visible = [c for c in reference.controls.values() if visible_comparison(reference, c.name)] if reference else []
     for name, control in model.controls.items():
         if statically_hidden(model, name):
             continue
@@ -115,12 +105,15 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
             continue
         matching = [d for d in defaults if _same_type(control.type_name, d.type_name)]
         constructor = _constructor_values(matching[0], defaults) if len(matching) == 1 else {}
-        comparisons = [c for c in reference.controls.values() if _same_type(control.type_name, c.type_name)] if reference else []
+        comparisons = [c for c in visible if _same_type(control.type_name, c.type_name)]
+        same_member = [c for c in comparisons if c.name == name and c.parent == control.parent]
+        if same_member:
+            comparisons = same_member
         # Use another single-line input/label only when no same-type reference
         # exists and its visible heights agree. Conflicting roles stay unverified.
-        similar = [c for n, c in reference.controls.items()
-                   if typed_reference and known_control_kind(typed_reference.controls[n].type_name) in _INPUT_KINDS | {'LabelControl'}
-                   and c.properties.get('Multiline', '').strip() != 'true'] if reference else []
+        similar = [c for c in visible
+                   if typed_reference and known_control_kind(typed_reference.controls[c.name].type_name) in _INPUT_KINDS | {'LabelControl'}
+                   and c.properties.get('Multiline', '').strip() != 'true']
         automatic = reference is None and original is not None
         if reference is None and original is not None:
             peers = _screen_peers(model, original, name)
@@ -163,12 +156,7 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
             font = prop == 'Font' or prop.endswith('.Font')
             retained_font = (font and before is not None and not new and before.parent == control.parent
                              and _property_value(before.properties, prop) is not None)
-            if font and reference:
-                matched = [c for c in refs if c.name == name and c.parent == control.parent
-                           and not statically_hidden(reference, c.name)]
-                if matched:
-                    refs = matched
-            elif retained_font and before is not None and not any(_property_value(c.properties, prop) for c in refs):
+            if retained_font and before is not None and not any(_property_value(c.properties, prop) for c in refs):
                 refs = [before]
             values = [_property_value(c.properties, prop) for c in refs
                       if prop not in {'MinimumSize', 'MaximumSize'} or comparisons]
@@ -219,7 +207,7 @@ def check_label_style(model: DesignerModel, *, original: DesignerModel | None = 
             actual_key, expected_key = _key(prop, effective), _key(prop, expected)
             if actual_key is not None and actual_key == expected_key:
                 continue
-            if (prop == 'Font' or prop.endswith('.Font')) and original is None and reference is None:
+            if font and new and not present:
                 result.incomplete = True
                 result.issues.append(Issue('label_font_reference_required', 'warning',
                     'The screen font differs from the constructor. Compare an approved screen or unchanged pre-edit peer to establish the intended font for this role.',

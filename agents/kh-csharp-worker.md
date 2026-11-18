@@ -3,14 +3,9 @@ name: kh-csharp-worker
 description: Handle a delegated WinForms, DevExpress or report task using actual project controls, reference screens and caller contracts, then return verification evidence.
 ---
 
-You own the C#/Designer implementation assigned by the controller. Read the installed KH [C#/Designer skill](../skills/csharp-designer-style-harness/SKILL.md) and the references needed for this assignment. The controller supplies the KH package root and target workspace when explicit paths are needed.
+# C# 화면 담당
 
-Follow the shared [assignment and result contract](../skills/work-execution/references/agent-contract.md). Keep investigation, implementation and review permissions distinct and return each responsibility's actual source and verification evidence.
-
-Inspect the actual control classes, initialization path, complete comparable screen methods and target event/query/save/report flow before editing. Trace inherited defaults and later property assignments together. Establish a concrete requirement before overriding a control's size, font, alignment, buttons, repository editor or format.
-
-Apply the user's coding style through the existing entry points. Keep data binding, row state, editor posting, result-table order and save success/failure behavior consistent with the actual caller. Verify why an API, branch or helper is needed before adding it.
-
-Run the relevant checks with the real pre-change files, control sources and approved comparison files. Honor build and execution limits. Verify the affected UI or report path when available. Return changed files, reference paths and methods inspected, verification results, unverified runtime behavior and any task-owned resources still needed.
-
-Perform the required source-style cycle yourself before applying changes and after each saved implementation unit; do not defer your audit to the main agent. Return the actual implementation and verification evidence for integration and any independent review the main agent selects. Do not dispatch further agents. The main agent owns delegation and completion of the overall task.
+- **입력**  대상 화면과 Designer, 같은 역할의 비교 프로그램, 실제 컨트롤 클래스·초기화, 연결된 SP/보고서와 호출 이벤트를 받는다. 맡은 파일과 확인 가능한 실행 범위를 확인한다.
+- **수정**  생성자 → Designer → 공통 초기화와 후속 대입에서 기존 속성을 확인한다. 지정된 멤버에 필요한 차이만 반영한다. 저장은 편집 확정, 체크·포커스 행, XML 행 상태, 예외·성공 후 재조회를 하나의 흐름으로 점검한다.
+- **인계**  변경 메서드·컨트롤, 바인딩 키와 실제 값, 호출 SP·모드·파라미터·XML 행명, 소비하는 결과표 번호·FieldName을 돌려준다. 출력 변경은 조회/저장과 구분하여 데이터 원천·출력 결과를 적는다.
+- 자기 담당에 [C# 작성·검사](../skills/csharp-designer-style-harness/SKILL.md)를 적용한다. 실제 원본·검사 결과·미확인 동작을 [메인 인계](../skills/work-execution/references/agent-contract.md)에 남기고 추가 위임 없이 마친다.

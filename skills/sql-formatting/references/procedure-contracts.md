@@ -1,56 +1,39 @@
-# SELECT/SAVE procedure contracts
+# 조회·저장 프로시저 계약
 
-Choose a working procedure written by the selected reference author for each responsibility. Read the complete SELECT or SAVE and its actual caller. Use the target's schema and behavior and the [authorship and header rules](procedure-authorship.md).
+작성자와 참고 SP는 [지정 규칙](procedure-authorship.md)을 따른다. 해당 작성자의 같은 역할 SP와 실제 호출부를 읽는다.
 
 ## Save boundary and reuse
 
-- Identify the definition used for deployment and any maintained copies. Resolve differences against the actual caller.
-- Trace what the existing operation already does. Add only the missing behavior. Preserve validation, row counts, full keys, transaction ownership and error cleanup.
-- Keep requested disabled integrations as their complete commented bodies. Retrieve any missing part of the reference before writing.
-- Before applying a draft and again after saving, compare its operations with the original. For each new mode, write, call or result type, identify the request or caller that needs it.
+- 배포 대상 정의와 관리 중인 사본을 확인하고 호출부와 다른 부분을 대조한다. 필요한 동작만 추가하며 검증·건수·전체 키·트랜잭션 소유·실패 정리를 보존한다.
+- 연동을 주석 처리하라는 요청은 원래 본문을 남긴다. 실행 전 초안과 저장본에서 새 모드·쓰기·호출·반환 형식의 근거를 각각 확인한다.
 
 ### XML preparation and writes
 
-- When adding an XML action, check which documents the caller sends, where the target prepares them and which operations share cleanup. Reuse that boundary.
-- Keep XML/selected row values in their rowset through INSERT SELECT, UPDATE FROM or DELETE JOIN. Apply required expressions at the owning write.
-- Use scalars for genuinely single-document outputs, number allocation or required API parameters. Update staging when generated keys must be recorded. See [procedure patterns](procedure-patterns.md).
+XML 입력 문서·준비·공통 해제 범위를 원래 SAVE와 맞춘다. 선택 행은 INSERT SELECT·UPDATE FROM·DELETE JOIN까지 행 집합으로 넘긴다. 실제 쓰기에서 값을 계산하고, 단일 문서 출력·채번·필수 API 입력에 스칼라를 쓴다. 새 키를 행에 기록해야 할 때만 스테이징을 갱신한다. [NEW/MOD/DEL 예시](save-patterns.md)
 
 ## Modes and multiple rows
 
-- Give each operation a coherent dispatch branch. Match the target's IF/ELSE IF flow and return all of that mode's tables in caller order.
-- Use separate branches for different keys, joins or exclusions. Keep shared validation and preprocessing at their existing scope. Verify each caller's path.
+업무 모드별 IF/ELSE IF 분기 안에 해당 결과표를 호출 순서대로 둔다. 키·JOIN·제외 조건이 다르면 다른 분기로 둔다. 실제로 공유하는 검증·전처리는 원래 공통 위치를 유지한다.
 
 ### Save row operations
 
-- Match the caller's actual mode strings and Added/Modified/Deleted selection to the SAVE branches. Preserve the required XML log call at its original scope.
+호출자의 모드 문자열, Added/Modified/Deleted 행 선별과 SAVE 분기를 맞춘다. 필요한 XML 로그 호출은 원래 범위에서 실행한다.
 
 ### Composite keys
 
-- For composite keys, read the target's parser and a complete same-project usage. Join on the typed components of the full key. Preserve NULL behavior and row count.
-- Keep parsing in the established place. Avoid concatenating table columns or introducing scalars to reconstruct available keys.
+복합키는 대상의 기존 파서와 같은 프로젝트의 전체 사용례를 읽고 타입이 맞는 구성 열 전부로 JOIN한다. 원래 NULL·행 수를 지키고 키 파싱은 기존 위치에 둔다.
 
 ### Save batches and transitions
 
-- Preserve the set of selected master keys through XML and UPDATE/DELETE. Removing detail rows and deleting persisted documents have different owners.
-- Trace print/save selection, state and batch width. Keep SELECT's scalar/key transport when the XML change concerns only SAVE.
-- Allocate sequence numbers within the actual parent key and transaction. Verify deterministic ordering, multiple inserts and a second append. Use locking hints only with an established requirement and user authorization where applicable.
-- Compare proposed quantities in the correct units by full linked key. On edits, exclude the document's old contribution. Combine duplicate keys and include additions, changes and deletions. Preserve existing validation.
-- For eligibility, identify the current row, linked prerequisites and status update separately. Test included and excluded cases and one-to-many joins. Keep sample IDs out of business filters.
+- 선택 마스터 키 전체를 XML에서 UPDATE/DELETE까지 추적한다. 편집 중 상세 삭제, 저장된 문서 삭제, 행별 인쇄와 DB 저장 배치를 구분한다. SAVE만 XML을 바꿀 때 SELECT의 기존 조회 키는 유지한다.
+- 실제 상위 키·트랜잭션 안에서 채번한다. 여러 행 입력·두 번째 추가와 결정적 순서를 확인한다. 잠금 힌트는 실제 요구와 필요한 사용자 허가를 확인한다.
+- 수량 검증은 전체 연결 키·같은 단위로 비교한다. 수정 전 자기 문서 수량의 이중 집계를 피하고 중복 키·추가·변경·삭제를 반영한다. 대상 선별은 현재 행, 연결된 선행 행, 상태 갱신을 따로 확인한다. 포함·제외·일대다 사례를 검증한다. [검증 사례](validation-patterns.md)
 
 ## Parameters, outputs and dates
 
-- Follow the target's parameter template. Current screen procedures require WORKTYPE and ORGDIV. Ordinary optional parameters generally default to NULL.
-- Trace schema → parameter/XML/staging → result → caller. Preserve actual lengths, Unicode, precision, scale and NULL handling. Check master code/name fields against the real master.
-- Return the original calculation type unless the consuming contract needs a conversion. A display format belongs to the display layer. SQL aggregates can widen a numeric result.
-- Keep binding names, result fields and SP parameter names distinct. Remove excluded outputs and corresponding Designer bindings together.
-- Return persisted and submitted values directly. A **new or changed NULL/blank substitution requires the user's explicit request for that operation**. An editor default applies at initialization. Preserve existing handling outside the edit.
-- Use typed empty placeholders only when a real UNION or result schema needs that field. Verify the type against the consuming branch.
-- Preserve application, inspection and audit dates separately. Trace the actual writer, date filters, remarks, and INSERT column/value pairs. For a server-owned save time, retain GETDATE() and the caller's established requery.
-- Check the saved procedure against its caller, selected reference, signature, XML shape, keys, writes, result order and error path. Verify affected schema, concurrency and deployment separately. See [SQL checks](checks.md).
-
-For example, if the caller already consumes the aggregate below, changing the display to four decimal places gives no reason to narrow the SQL result.
-
-```sql
-SELECT SUM(A.AMOUNT) AS AMOUNT
-FROM ExampleLine A
-```
+- 화면 SP의 WORKTYPE·ORGDIV, 보통 선택 인자의 NULL 기본값 등 대상 템플릿과 호출 약속을 지킨다. 실제 스키마 → 인자/XML/스테이징 → 결과 → 호출자의 길이·Unicode·정밀도·스케일·NULL과 코드/명칭을 맞춘다.
+- 화면에 필요한 표시 자릿수는 표시 계층에 둔다. 소비자가 요구하는 경우에만 계산 타입을 변환한다. SUM이 넓혀 반환하는 타입도 확인한다.
+- 바인딩명·반환 열·SP 인자를 각각 대조한다. 제외 요청한 반환 열과 Designer 바인딩은 함께 정리한다. 빈 값의 타입 지정은 실제 UNION/결과 스키마가 요구할 때만 한다.
+- 제출·저장된 값을 그대로 전달한다. **NULL·빈 값의 신규 또는 변경 대체는 해당 작업에 대한 사용자 명시 요청이 필요하다.** 기존 처리와 입력 에디터의 초기값은 각 소유 위치에서 유지한다.
+- 업무일·검사일·감사일의 기록 주체, 날짜 필터·비고·INSERT 열과 값을 확인한다. 서버 저장시각은 기존 GETDATE()·성공 후 재조회를 지킨다.
+- 최종 시그니처·XML·키·쓰기·결과 순서·오류 경로는 호출부와 대조한다. 영향받는 스키마·동시성·실제 배포는 수행 범위에 맞춰 확인한다.

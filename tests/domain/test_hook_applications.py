@@ -158,8 +158,9 @@ class ApplicationTests(unittest.TestCase):
         target = self.project / 'Select.sql'
         result = self.apply(['sql-select'], [target])
         missing = set(result['files'][0]['missing'])
-        for name in ('style.md', 'procedure-contracts.md', 'procedure-patterns.md', 'select-patterns.md'):
+        for name in ('style.md', 'procedure-contracts.md', 'select-patterns.md'):
             self.assertIn('sql-formatting/references/' + name, {relative.partition('#')[0] for relative in missing})
+        self.assertNotIn('sql-formatting/references/procedure-patterns.md', result['files'][0]['required'])
         self.assertNotIn('sql-formatting/references/save-patterns.md', result['files'][0]['required'])
         self.load_required(result, omit={'sql-formatting/references/procedure-contracts.md'})
         self.assertIn('procedure-contracts.md', self.write(target)['hookSpecificOutput']['permissionDecisionReason'])
@@ -305,10 +306,11 @@ class ApplicationTests(unittest.TestCase):
         self.read('sql-formatting/SKILL.md')
         result = self.apply(['sql-select'], [self.project / 'Select.sql'])
         contracts = '\n'.join(document(ROOT, path)[1] for path in result['files'][0]['required'] if 'procedure-contracts.md' in path)
-        self.assertIn('For composite keys,', contracts)
-        self.assertIn('Give each operation a coherent dispatch branch', contracts)
-        self.assertNotIn('When adding an XML action,', contracts)
-        self.assertNotIn('Keep XML/selected row values in their rowset', contracts)
+        source = 'sql-formatting/references/procedure-contracts.md#'
+        for section in ('composite-keys', 'modes-and-multiple-rows'):
+            self.assertIn(document(ROOT, source + section)[1], contracts)
+        for section in ('xml-preparation-and-writes', 'save-row-operations'):
+            self.assertNotIn(document(ROOT, source + section)[1].strip(), contracts)
 
     def test_standalone_query_cannot_hide_a_procedure_and_format_cannot_create_source(self):
         self.read('sql-formatting/SKILL.md')

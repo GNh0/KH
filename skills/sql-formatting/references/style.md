@@ -1,16 +1,17 @@
-# KH SQL style
+# SQL 서식
 
-Current SQL semantics and explicit requirements take priority. General cleanup includes alias normalization; preserve aliases for “별칭 그대로/정렬만” (keep aliases/format only). Distinguish generation, cleanup, optimization, comparison, and execution.
+## SQL layout
 
-- Use A for the main query target, B/C/D for subsequent business roles, and B1/B2 for multiple tables within one role group. Use T-family aliases inside derived queries to distinguish scope. Different physical tables can share a business role. Do not assign E/F or E1/E2 solely from BA011T or MAINCD.
-- Follow the target's approved uppercase style for keywords and identifiers. Do not change strings, Korean text, or comments. Distinguish table-alias AS from output-column AS.
-- Follow the relevant examples' leading commas in SELECT, UPDATE SET, and SP parameters. Take SP parameter defaults from the approved template and actual caller contract.
-- For ordinary table JOINs, align ON and the same JOIN's AND with the I in the final IN of JOIN. For derived table JOINs, vertically align the closing ) and ON/AND with the opening (. Place SELECT, FROM, WHERE, GROUP BY, and other clauses inside FROM/JOIN parentheses one space to the right of the opening (. Anchor each nested block to its own opening (. Do not arbitrarily abbreviate LEFT OUTER JOIN.
-- Align EXISTS parentheses vertically; start inner SQL on the next line, one space to the right of the opening parenthesis. Keep short GROUP BY/ORDER BY clauses on one line and follow the relevant example's CASE parentheses.
-- Match INSERT columns to SELECT/VALUES values using the same horizontal groups, order, actual text columns, and line breaks. Use spaces for indentation and padding between list items. Equal tab counts, fixed tab repetitions or identical raw whitespace lengths do not establish alignment. UPDATE SET uses a vertical list. Aligned text does not replace checking the semantic column/value mapping.
-- Preserve JOIN types/order, filters, output fields, literals, and existing comments. When asked to comment out existing logic, do not delete it.
+- A는 주 대상, B/C/D는 후속 업무 역할, B1/B2는 같은 역할의 여러 테이블, 파생 쿼리 내부는 T 계열을 쓴다. 테이블명·MAINCD만으로 E/F를 정하지 않는다. “정렬만/별칭 그대로”는 원래 별칭을 보존한다.
+- 승인된 대문자·선행 쉼표 표기를 따른다. SELECT 목록, UPDATE SET, SP 인자 순서와 기본값을 맞춘다. 별칭 AS와 출력 열 AS를 구별한다.
+- 일반 JOIN의 ON과 그 조건의 AND는 JOIN의 I 열에 맞춘다. 파생 FROM/JOIN은 여는 괄호와 닫는 괄호를 맞추고 안쪽 절은 한 칸 더 들인다. 파생 JOIN의 ON·AND·OR는 여는 괄호 열에 둔다. 중첩·UNION은 각 괄호를 기준으로 한다.
+- EXISTS 괄호는 같은 열, 내부 SQL은 다음 줄에서 한 칸 더 들인다. 짧은 GROUP BY·ORDER BY는 한 줄, CASE 괄호는 해당 작성 예시와 맞춘다. BETWEEN의 AND는 해당 식 안에 둔다.
+- INSERT 열과 SELECT/VALUES 값은 순서·줄 그룹·실제 시작 열을 대응시킨다. 두 목록에서 가장 긴 표현에 맞춰 공백으로 정렬한다. UPDATE SET은 세로 목록으로 쓴다.
+- JOIN 종류·순서·조건, 출력 타입·필드, 리터럴·한글·기존 주석을 보존한다. 주석 처리 요청은 원문을 남긴다. 필요한 JOIN·IF EXISTS·업무 함수와 상수는 실제 의미를 지킨다.
+- JOIN으로 변경할 때는 전체 키·NULL·중복·집계 단위, 함수 원본·실행 의미를 확인한다. 다중 결과는 각 결과의 기간·필터·집계 키·UNION·비율을 맞춘다.
+- 요청이 UPDATE 하나면 해당 UPDATE FROM/CROSS APPLY를 완성한다. DB 변경은 지정한 연결·DB·키, 트랜잭션과 변경/제외 행을 확인한다. 중간 테이블은 [필요성 기준](../../work-execution/references/preferences.md)을 따른다.
 
-Basic layout example:
+## JOIN 예시
 
 ```sql
 SELECT A.ITEMCD
@@ -20,8 +21,6 @@ FROM MA210T A
                      ON A.ITEMCD = B.ITEMCD
 WHERE A.ORGDIV = @ORGDIV
 ```
-
-Distinguish alignment anchors for ordinary table JOINs and derived table JOINs. For a derived JOIN, place the opening `(`, closing `)`, and that JOIN's line-leading `ON`/`AND`/`OR` in the same column. Do not move the closing parenthesis back to the JOIN's LEFT/INNER start. Keep the alias on the closing parenthesis's line.
 
 ```sql
 SELECT A.ORDERNO
@@ -37,9 +36,9 @@ FROM ORDERS A
                         AND A.QTY = B.QTY
 ```
 
-This example indents FROM by 0 spaces, JOIN by 8, opening/closing parentheses and ON/AND by 24, and inner clauses by 25. These numbers are not global indentation constants; the actual opening parenthesis is the anchor. Apply the rule to AND/OR connecting the same JOIN's conditions. Retain the containing clause's layout for BETWEEN's AND, conditions inside CASE, and subquery conditions.
+파생 JOIN의 닫는 괄호, ON, AND는 여는 괄호와 같은 열이다. 실제 괄호 위치가 기준이다.
 
-Use the same parenthesis anchor for the first derived FROM source and nesting with UNION ALL. Keep SELECT-list leading commas and WHERE conditions positioned relative to their inner clause. For example, with FROM indented by 4 spaces, outer parentheses are at 9 and inner clauses at 10; parentheses in that inner FROM are at 15 and its inner clauses at 16.
+## 중첩·UNION 예시
 
 ```sql
     SELECT A.PERIOD
@@ -61,7 +60,7 @@ Use the same parenthesis anchor for the first derived FROM source and nesting wi
     ORDER BY A.PERIOD
 ```
 
-For a grouped INSERT/SELECT mapping, determine shared starts from the longest target name or source expression in each horizontal position across both lists. Leave enough space for the comma separator and align each corresponding item and leading comma at those real columns. Preserve already aligned wider spacing. Varying name lengths must not shift later groups.
+## INSERT 열 대응 예시
 
 ```sql
     INSERT INTO TARGET
@@ -74,10 +73,4 @@ For a grouped INSERT/SELECT mapping, determine shared starts from the longest ta
     FROM SOURCE A
 ```
 
-In the final SQL, compare actual opening parentheses with inner clauses, continuation lines, closing parentheses, and JOIN conditions together. `--normalize-layout` handles supported derived FROM/JOIN queries, JOIN/EXISTS layout and simple grouped INSERT/SELECT columns; it is not a complete SQL formatter. Inspect remaining diagnostics, including multiline/commented mapping lists and differing row groups, directly in the final text. Do not replace a required long expression merely to make a layout check pass.
-
-Prefer the target's JOIN form over unnecessary WHERE/SELECT subqueries, including positive EXISTS as well as NOT EXISTS/IN. A SAVE branch's IF EXISTS validation is a different responsibility; do not remove it merely because WHERE subqueries are disfavored. Keep correlated keys, NULL behavior, duplicates and aggregation cardinality correct when choosing the JOIN form. Before replacing a function with a JOIN, inspect its actual definition and execution semantics. Preserve existing exchange-rate functions such as GET_CHGRAT and original business constants; do not hardcode new example exchange rates.
-
-If only an UPDATE is requested, complete the requested UPDATE FROM/CROSS APPLY form. For an actual database-change request, verify the exact connection, database, keys, transaction, resulting values, and excluded rows. Do not report delivered SQL as executed.
-
-For queries returning multiple results, compare periods, filters, JOIN keys, NULL handling, and aggregation units across headers, grids, and charts. Check that UNION branches and total/ratio calculations use the actual comparison target's conditions too. Do not introduce temporary tables merely to shorten duplicated SQL; follow the existing [necessity criteria](../../work-execution/references/preferences.md).
+기존의 넉넉한 열 간격은 유지한다. 여러 줄 표현·주석이 있으면 최종 문자열에서 열/값의 의미와 시작 열을 직접 확인한다.

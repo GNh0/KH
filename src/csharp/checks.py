@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 from src.common.results import CheckResult, HarnessResult, Issue, from_legacy_issues
 from .lexer import _scan_csharp
 from .source import _call_count, _target_local_method_inventory, _designer_wired_event_handlers, _row_rewrite_loops, _transaction_invocation_drift_issues
-from .designer import check_designer
+from .designer import check_designer, layout_comparisons
 from .designer_model import parse_designer_source, locate_issues, _normalized_csharp_value
 from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
@@ -25,7 +25,7 @@ from .source_preservation import remap_members
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
                  allowed_changes: Mapping[str, Sequence[str]] | None = None,
                  original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
-                 style_reference_designer: str | None = None,
+                 style_reference_designer: str | None = None, layout_references: Mapping[str, str] | None = None,
                  style_reference_csharp: str | None = None, screen_commands: Sequence[str] | None = None,
                  allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
                  numeric_columns: Sequence[str] = (), preserve_existing: bool = False,
@@ -36,13 +36,14 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
     result.metadata['comparison_baselines'] = {'csharp': original is not None,
         'designer': original_designer is not None}
-    if style_reference_designer is not None:
+    layout, grid_layout = layout_comparisons(style_reference_designer, layout_references)
+    if layout is not None or grid_layout is not None:
         result.metadata['comparison_baselines']['style_reference'] = True
     if style_reference_csharp is not None:
         result.metadata['comparison_baselines']['command_style_reference'] = True
     if member_renames and (designer is None or original_designer is None):
         raise ValueError('C# member renames require both Designer versions')
-    if style_reference_designer is not None and designer is None:
+    if (layout is not None or grid_layout is not None) and designer is None:
         raise ValueError('A comparison Designer requires the candidate Designer')
     if original is None:
         result.not_checked.append('C# changes and source preservation; no original C# supplied')
@@ -102,11 +103,11 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     for call in ("PostEditor", "UpdateCurrentRow"):
         if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
             result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))
-    result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, defaults=defaults,
+    result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, reference=layout, defaults=defaults,
                          allowed_property_changes=allowed_property_changes, check_declarations=designer is None, check_style=check_style))
     if check_style:
         labels = check_label_style(candidate_model, original=baseline_model,
-                                   reference=parse_designer_source(style_reference_designer) if style_reference_designer is not None else None,
+                                   reference=layout,
                                    defaults=defaults, allowed_property_changes=allowed_property_changes,
                                    explicit_only=designer is not None)
         result.issues.extend(labels.issues)
@@ -116,7 +117,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         result.metadata.update(labels.metadata)
     result.issues.extend(check_grid_style(with_control_base_types(candidate_model, defaults),
                          original=with_control_base_types(baseline_model, defaults) if baseline_model else None,
-                         reference=with_control_base_types(parse_designer_source(style_reference_designer), defaults) if style_reference_designer is not None else None,
+                         reference=with_control_base_types(grid_layout, defaults) if grid_layout is not None else None,
                          column_edit_modes=column_edit_modes if designer is None else None,
                          allowed_property_changes=allowed_property_changes, check_required_defaults=False, check_style=check_style))
     display_types = {name: control.type_name for name, control in
@@ -192,7 +193,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
             result.issues.append(Issue(name, "warning", "Prefer the established project form. A difficult implementation without this construct or an extreme performance disadvantage can justify an exception; convenience alone cannot."))
     if designer is not None:
         ui = check_designer(designer, code_behind=candidate, original=original_designer,
-                            style_reference=style_reference_designer,
+                            style_reference=style_reference_designer, layout_references=layout_references,
                             column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes,
                             control_sources=control_sources, numeric_columns=numeric_columns,
                             preserve_existing=preserve_existing, member_renames=member_renames, check_style=check_style)

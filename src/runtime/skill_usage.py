@@ -167,6 +167,49 @@ def explicit_skill_requests(event: dict, host: str, *, plugin_root: Path) -> set
     return requested
 
 
+def named_write_targets(prompt: str, domains: set[str], cwd: str) -> set[str]:
+    """Accept a direct edit instruction with a literal destination. Mentions and code samples stay passive."""
+    if not domains or len(prompt) > 16000 or _host_block(prompt):
+        return set()
+    text = prompt.strip().rstrip('.! ').strip()
+    invocation = re.match(r'^(?:\[\$[\w:-]+\]\([^)]+\)|\$[\w:-]+|/[\w:-]+)\s+', text)
+    if invocation:
+        text = text[invocation.end():].strip()
+    # Require the entire remaining directive. In particular, a comparison file,
+    # quoted example or negative instruction cannot silently become an output.
+    file = r'(?:"([^"\r\n]+)"|`([^`\r\n]+)`|\x27([^\x27\r\n]+)\x27|([^\s\x27"`]+?\.(?i:sql|cs|srd|srw|sru|srf)))'
+    target = r'--target\s+' + file
+    if re.fullmatch(target + r'(?:\s+' + target + ')*', text):
+        matches = list(re.finditer(target, text))
+    else:
+        if '\n' in text:
+            return set()
+        purpose = r'[^\s?\n][^?\n]{0,180}'
+        match = re.fullmatch(r'(?:edit|modify|update|create|format)\s+' + file + r'(?:\s+to\s+(?P<purpose>' + purpose + '))?', text, re.I)
+        if match is None:
+            match = re.fullmatch(file + r'(?:에서|의|을|를)?\s*(?:(?P<purpose>' + purpose + r')\s+)?(?:수정|작성|생성|포맷)(?:해(?:줘|주세요|라)?|하세요|하자)?', text)
+        if match is None:
+            return set()
+        detail = match.groupdict().get('purpose') or ''
+        if re.search(r'(?i)[`"\x27$;/\\]|\.(?:sql|cs|sr\w)\b|\b(?:not|never|skip|without|instead|example|except|review|whether|if)\b|말고|하지|대신|예시|검토|제외|여부|않|[?]', detail):
+            return set()
+        matches = [match]
+    paths = set()
+    root = Path(cwd).resolve()
+    for match in matches:
+        raw = next(part for part in match.groups() if part)
+        if any(char in raw for char in '*?<>|$') or '://' in raw:
+            return set()
+        try:
+            path = (root / raw).resolve()
+        except (ValueError, OSError, RuntimeError):
+            return set()
+        if DOMAINS.get(path.suffix.casefold()) not in domains or not path.is_relative_to(root):
+            return set()
+        paths.add(str(path))
+    return paths
+
+
 def matching_prompt(record: dict, event: dict) -> bool:
     recorded, submitted = record.get('prompt_id'), event.get('prompt_id')
     if recorded is not None or submitted is not None:
@@ -175,6 +218,18 @@ def matching_prompt(record: dict, event: dict) -> bool:
     if not isinstance(prompt, str) or not prompt:
         return False
     return record.get('prompt_sha256') == hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+
+
+def successful_tool_result(event: dict) -> bool:
+    if event.get('hook_event_name') == 'PostToolUseFailure':
+        return False
+    response = event.get('tool_response')
+    if not isinstance(response, dict):
+        return True
+    return not (any(response.get(key) for key in ('error', 'isError', 'is_error')) or
+                response.get('success') is False or response.get('ok') is False or
+                str(response.get('status', '')).casefold() in {'failed', 'failure', 'error', 'cancelled', 'canceled'} or
+                any(key in response and response[key] != 0 for key in ('exit_code', 'exitCode', 'returncode')))
 
 
 def native_skill_usage(event: dict, host: str) -> str | None:
@@ -189,9 +244,7 @@ def native_skill_usage(event: dict, host: str) -> str | None:
         data = event.get('tool_input')
         if not isinstance(data, dict):
             return None
-        response = event.get('tool_response')
-        if isinstance(response, dict) and (response.get('is_error') is True or response.get('isError') is True or
-                                         response.get('error') or response.get('status') in ('error', 'failed', 'failure')):
+        if not successful_tool_result(event):
             return None
         value = data.get('skill')
     else:

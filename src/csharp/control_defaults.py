@@ -10,7 +10,7 @@ import re
 from src.common.results import Issue
 from .control_style import direct_statement_spans
 from .control_names import SINGLE_LINE_INPUT_KINDS, control_name_issue, known_control_kind
-from .designer_model import DesignerModel, _normalized_csharp_value, _parse_size, statically_hidden
+from .designer_model import ControlRecord, DesignerModel, _normalized_csharp_value, _parse_size, statically_hidden, visible_comparison
 from .lexer import _scan_csharp, balanced_close, string_literal_value
 from .control_values import LABEL_PROPERTIES, label_value_key
 
@@ -130,7 +130,41 @@ def _effective_size(model: DesignerModel, name: str,
     return width, height
 
 
-def check_control_defaults(model: DesignerModel, *, original: DesignerModel | None = None,
+def _presentation_key(prop: str, value: str | None) -> tuple | None:
+    if value is None:
+        return None
+    if prop == 'MaximumSize':
+        return _parse_size(value)
+    if prop == 'Margin':
+        match = re.fullmatch(r'new\s+(?:System\.Windows\.Forms\.)?Padding\s*\(\s*(\d+(?:\s*,\s*\d+){0,3})\s*\)', value)
+        if match:
+            values = tuple(int(part) for part in match[1].split(','))
+            if len(values) == 1:
+                return values * 4
+            if len(values) == 4:
+                return values
+        return None
+    return label_value_key(prop, value)
+
+
+def _role_peers(control: ControlRecord, source: DesignerModel) -> list[ControlRecord]:
+    peers = [c for c in source.controls.values() if _same_type(c.type_name, control.type_name)
+             and c.parent == control.parent and visible_comparison(source, c.name)]
+    exact = [c for c in peers if c.name == control.name]
+    if exact:
+        return exact
+    bindings = {p: value for p in ('BindingField', 'DataPropertyName')
+                if (value := string_literal_value(control.properties.get(p, ''))) and value.strip()}
+    bound = [c for c in peers if any(string_literal_value(c.properties.get(p, '')) == value
+                                     for p, value in bindings.items())]
+    if bound:
+        return bound
+    return [c for c in peers if control.add_order is not None and c.add_order is not None and
+            ((control.table_position is not None and c.table_position is not None and control.table_position[1] == c.table_position[1]) or
+             (control.table_position is None and control.location is not None and c.location is not None and control.location[1] == c.location[1]))]
+
+
+def check_control_defaults(model: DesignerModel, *, original: DesignerModel | None = None, reference: DesignerModel | None = None,
                           defaults: Sequence[ControlDefaults] = (),
                           allowed_property_changes: Iterable[str] = (),
                           check_declarations: bool = True, check_style: bool = True) -> list[Issue]:
@@ -142,6 +176,7 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
         old = before.properties if before else {}
         new_type = before is None or not _same_type(before.type_name, control.type_name)
         matching = [item for item in defaults if _same_type(control.type_name, item.type_name)]
+        comparison_peers = _role_peers(control, reference) if reference and visible_comparison(model, name) else []
 
         def changed(prop: str) -> bool:
             return (f'{name}.{prop}' not in allowed and prop in control.properties and
@@ -222,6 +257,16 @@ def check_control_defaults(model: DesignerModel, *, original: DesignerModel | No
             if check_style and screen_height and prop in {'Height', 'Bounds', 'MinimumSize', 'MaximumSize'}:
                 # These height contracts are checked with actual screen evidence below.
                 continue
+            if check_style and comparison_peers and (prop in {'Margin', 'MaximumSize', 'Font'} or prop.endswith('.Font')):
+                peer_keys = {_presentation_key(prop, c.properties.get(prop, expected)) for c in comparison_peers}
+                actual_key = _presentation_key(prop, actual)
+                if actual_key is not None and len(peer_keys) == 1 and None not in peer_keys:
+                    if actual_key not in peer_keys:
+                        issues.append(Issue('user_control_screen_property_review', 'warning',
+                            'The setting differs from the visible same-role control in the supplied screen. Verify the intended override.',
+                            details={'property': f'{name}.{prop}', 'screen_value': actual,
+                                     'comparison_members': [c.name for c in comparison_peers]}))
+                    continue
             issues.append(Issue('user_control_default_restatement' if equal else 'user_control_default_override',
                                 'info' if equal else 'warning',
                                 'This assignment repeats a supplied constructor default; prefer inheriting it unless Designer serialization requires it.' if equal else
