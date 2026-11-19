@@ -1,6 +1,6 @@
 ---
 name: csharp-designer-style-harness
-description: Develop or review WinForms/DevExpress source, Designer layouts and XtraReports against actual project contracts.
+description: Develop or review WinForms/DevExpress source, Designer layouts and XtraReports against actual project contracts (C# 화면·폼·그리드·컨트롤·Designer·보고서 수정).
 ---
 
 # C# 화면 수정

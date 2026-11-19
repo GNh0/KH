@@ -34,7 +34,7 @@ Subagent blind testing also showed the old installed cache still printed an inte
 
 ## Evidence
 
-Commands run from `C:\Users\KONEIT\Desktop\Jang\KH`:
+Commands run from `%USERPROFILE%\Desktop\Jang\KH`:
 
 ```text
 python -B -m unittest tests.test_kh_front_door_always_on tests.test_session_skill_audit -v
@@ -52,7 +52,7 @@ Result: quality_success=true, lowest_quality_score=9.3, low_quality_skills=[]
 python -B -m src.orchestration.kh_front_door --prompt "<empty-folder inventory process direction request>" --project "<empty target folder>" --host codex --summary
 Result: classification=medium/operations, recommended_execution=skill_read, selected_not_executed_skills includes brainstorming-harness, token-optimizer, workflow-usability-harness
 
-python -B -m src.orchestration.session_skill_audit --summary "C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T13-45-47-019e86a6-ef57-7592-94f6-ba236fbece94.jsonl"
+python -B -m src.orchestration.session_skill_audit --summary "%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T13-45-47-019e86a6-ef57-7592-94f6-ba236fbece94.jsonl"
 Result: issue_count=0, runtime_applied_skills=5, token_optimizer_status=considered_not_needed
 ```
 
@@ -61,7 +61,7 @@ Result: issue_count=0, runtime_applied_skills=5, token_optimizer_status=consider
 The repository version is ready for plugin upgrade testing. A new Codex subagent or new chat should verify the installed cache version after upgrade and re-run a blind prompt without KH terms:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\<new-empty-folder> 폴더에서 창고 재고 입출고 업무 프로세스 방향 잡아줘
+%USERPROFILE%\Desktop\Jang\SKillsTest\<new-empty-folder> 폴더에서 창고 재고 입출고 업무 프로세스 방향 잡아줘
 ```
 
 Expected live behavior:

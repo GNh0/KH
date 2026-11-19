@@ -71,7 +71,7 @@ Both blockers were fixed:
 
 Created a non-integrated sandbox under:
 
-`C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\Konesystem.PBMigrationSandbox_20260702`
+`%USERPROFILE%\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\Konesystem.PBMigrationSandbox_20260702`
 
 The sandbox does not modify the solution or existing project files. It proves the harness can inspect a target project, detect that `KoneLib.Controls.u_GridControl`, `u_TextEdit`, `u_Label`, `u_GroupControl`, `u_Panel`, and `u_TabControl` are available in that target checkout, and select them as `target-project` controls. If those files were absent, the same runtime policy would fall back to DevExpress and then WinForms basics.
 
@@ -141,9 +141,9 @@ Applied verification on `d_ba_item3_get.srd`:
 
 Generated sample project verification:
 
-- `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\PBMIG_D_BA_ITEM3_GET.Designer.cs`
-- `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\layout\PBMIG_D_BA_ITEM3_GET_datawindow.xml`
-- `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\evidence\verification.json`
+- `%USERPROFILE%\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\PBMIG_D_BA_ITEM3_GET.Designer.cs`
+- `%USERPROFILE%\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\layout\PBMIG_D_BA_ITEM3_GET_datawindow.xml`
+- `%USERPROFILE%\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\evidence\verification.json`
 
 The sample project builds successfully. Remaining compiler warnings are pre-existing warnings in `CR100130.cs`, `CR100140.cs`, `SystemUserSearch.cs`, and `SystemCustList.cs`, not PBMIG compile failures.
 
@@ -185,7 +185,7 @@ This refinement addresses detail controls such as LabelControl, TextEdit, SpinEd
 
 2.9.109 tightens the detail-control and container naming contract after a full target-project naming audit.
 
-Observed target-project evidence from `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs`:
+Observed target-project evidence from `%USERPROFILE%\Desktop\Source\TY\C_KONE110_codex\Programs`:
 
 - `DateEdit`: standard screen prefix is `ymd`, for example `ymdORDDT`, `ymdFRDT`, and `ymdTODT`;
 - `Panel/u_Panel`: common container prefixes are `pn` and legacy `pan`, with packaged fallback set to `pn`, for example `pnMaster`, `pnDetail`, and `pnGridList`;
@@ -316,7 +316,7 @@ Runtime gates added:
 
 SA900100 local applied fix:
 
-- Target file: `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_1\Programs\20.영업(SA)\Konesystem.SA02\SA900100.cs`.
+- Target file: `%USERPROFILE%\Desktop\Source\TY\C_KONE110_1\Programs\20.영업(SA)\Konesystem.SA02\SA900100.cs`.
 - Removed generated helper wrappers and mojibake validation messages.
 - Reworked search/default/popup/detail flow into the existing C_KONE110 screen shape: direct `Load`, `SearchCommand`, `ClearCommand`, `CallSelectProcedure`, `FocusedRowChanged`, and explicit column visibility adjustment.
 - Kept Designer-level grid columns and monthly amount order; no runtime monthly `VisibleIndex` loop remains.

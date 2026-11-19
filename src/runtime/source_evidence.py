@@ -13,7 +13,6 @@ from src.common.files import read_file
 from src.runtime.skill_usage import DOMAINS, successful_tool_result
 from src.runtime.workflows import binding
 from src.runtime.check_context import companion
-from src.sql.procedure_authorship import author_key
 
 CONTROL_WORK = frozenset({'csharp-control', 'csharp-designer', 'csharp-grid'})
 
@@ -270,6 +269,7 @@ def reference_problem(state: dict, path: Path) -> str:
     item = binding(state, path)
     if item is None or set(item['work']) <= {'sql-format'}:
         return ''
+    from src.sql.procedure_authorship import author_key  # SQL parser loads only for bound development work.
     sp_work = path.suffix.casefold() == '.sql' and bool(set(item['work']) & {'sql-select', 'sql-save'})
     authors = item.get('sql_authorship', state.get('sql_authorship', {}))
     search_authors: set[str] = set()

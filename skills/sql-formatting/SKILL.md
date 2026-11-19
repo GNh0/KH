@@ -1,6 +1,6 @@
 ---
 name: sql-formatting
-description: Create, change, format or review SQL/T-SQL query and procedure artifacts using the user's style.
+description: Create, change, format or review SQL/T-SQL query and procedure artifacts using the user's style (SQL 정리·작성, 쿼리, SP·프로시저 조회/저장 수정).
 ---
 
 # SQL 작성·정리

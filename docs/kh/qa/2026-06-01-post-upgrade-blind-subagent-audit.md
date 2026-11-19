@@ -1,7 +1,7 @@
 # KH UAF Post-Upgrade Blind Subagent Audit
 
 Date: 2026-06-01
-Plugin cache tested: `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.27`
+Plugin cache tested: `%USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.27`
 Source branch: `codex-runtime`
 
 ## Scope
@@ -16,16 +16,16 @@ Passed:
   - Result: `39 valid / 0 invalid`
 - `python -B skills\automatic_intake_harness\scripts\smoke_check.py`
   - Result: support files and implementation targets resolved.
-- `python -B skills\automatic_intake_harness\scripts\demo.py --output-dir C:\Users\KONEIT\Documents\Codex\kh-installed-automatic-intake-demo`
+- `python -B skills\automatic_intake_harness\scripts\demo.py --output-dir %USERPROFILE%\Documents\Codex\kh-installed-automatic-intake-demo`
   - Result: success case and stale-cache blocked case produced valid JSON artifacts.
-- `python -B -m src.orchestration.kh_front_door --prompt "Build a small HTML todo tool and verify it." --project "C:\Users\KONEIT\Desktop\Jang\SKillsTest" --host codex --summary`
+- `python -B -m src.orchestration.kh_front_door --prompt "Build a small HTML todo tool and verify it." --project "%USERPROFILE%\Desktop\Jang\SKillsTest" --host codex --summary`
   - Result: `heavy`, `software`, `role_dag`
   - Runtime applied: `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, `skill-catalog`
   - Selected but not executed: role/lifecycle/review/QA/token/memory/subagent/verification harnesses.
-- `python -B -m src.orchestration.kh_front_door --prompt "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code." --project "C:\Users\KONEIT\Desktop\Jang\SKillsTest" --host codex --summary`
+- `python -B -m src.orchestration.kh_front_door --prompt "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code." --project "%USERPROFILE%\Desktop\Jang\SKillsTest" --host codex --summary`
   - Result: `medium`, `general`, `skill_read`
   - Selected but not executed: `command-output-harness`, `token-optimizer`, `workflow-usability-harness`, `context-state-harness`.
-- `python -B -m src.orchestration.kh_front_door --prompt "Explain what a plugin marketplace is." --project "C:\Users\KONEIT\Desktop\Jang\SKillsTest" --host codex --summary`
+- `python -B -m src.orchestration.kh_front_door --prompt "Explain what a plugin marketplace is." --project "%USERPROFILE%\Desktop\Jang\SKillsTest" --host codex --summary`
   - Result: `light`, `general`, `direct_answer`
   - This proves simple concept questions stay cheap.
 
@@ -45,7 +45,7 @@ Prompt: create a static HTML todo app with add, toggle, delete, localStorage, an
 
 Outcome:
 
-- Work artifact created: `C:\Users\KONEIT\Desktop\Jang\SKillsTest\post-upgrade-blind-app\index.html`
+- Work artifact created: `%USERPROFILE%\Desktop\Jang\SKillsTest\post-upgrade-blind-app\index.html`
 - Functional verification passed by the subagent.
 - Session audit result: `automatic-intake-harness` was required but absent.
 - Issue count: 24
@@ -69,8 +69,8 @@ Prompt: create user-facing requirements and screen/data/checklist documents for 
 Outcome:
 
 - Work artifacts created:
-  - `C:\Users\KONEIT\Desktop\Jang\SKillsTest\post-upgrade-inventory-spec\01_요구정의서.md`
-  - `C:\Users\KONEIT\Desktop\Jang\SKillsTest\post-upgrade-inventory-spec\02_화면_데이터_검증_체크리스트.md`
+  - `%USERPROFILE%\Desktop\Jang\SKillsTest\post-upgrade-inventory-spec\01_요구정의서.md`
+  - `%USERPROFILE%\Desktop\Jang\SKillsTest\post-upgrade-inventory-spec\02_화면_데이터_검증_체크리스트.md`
 - Session audit result: `automatic-intake-harness` was inspected but not runtime-applied; related lifecycle/design/state skills were missing.
 - Issue count: 18
 - Runtime applied KH skills: 0
@@ -104,11 +104,11 @@ Trigger: A new ordinary Codex session, `019e813d-c26b-7d82-82df-d6f052c83dc7`, w
 
 ### Local Marketplace Configuration Finding
 
-- Config file: `C:\Users\KONEIT\.codex\config.toml`
+- Config file: `%USERPROFILE%\.codex\config.toml`
 - Marketplace block: `[marketplaces.kh-uaf-marketplace]`
 - Expected local marketplace ref: `main`
 - Local marketplace revision observed: `078adea27a0f0e2db15fb511b97e69341a785dd6`
-- Installed cache present during the audit: `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.27`
+- Installed cache present during the audit: `%USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.27`
 - Marketplace descriptor checked: `.agents/plugins/marketplace.json`
 - Plugin source ref in marketplace descriptor: `codex-runtime`
 - Active source revision at the time of the audit: `c42892c6824d2aa4aa143665f7d40e49ec6d28f0`
@@ -121,7 +121,7 @@ Temporary local action and correction:
 - The marketplace ref was briefly changed from `main` to `codex-runtime` during the audit because the marketplace-ref layer was misread as the plugin-source layer.
 - This was incorrect for the user's intended marketplace setup.
 - The config was restored to `ref = "main"`.
-- A backup remains at `C:\Users\KONEIT\.codex\config.toml.kh-uaf-ref-backup`.
+- A backup remains at `%USERPROFILE%\.codex\config.toml.kh-uaf-ref-backup`.
 
 The remaining live issue is not that the marketplace ref was `main`. The remaining issue is that the active Codex session and installed cache still exposed plugin `2.9.27` during the test. A fresh marketplace upgrade/reload must be verified by checking the installed cache path and the active session skill list for `2.9.28`.
 
@@ -132,7 +132,7 @@ Plain prompt category: simple web dashboard build.
 Audit command:
 
 ```bash
-python -B -m src.orchestration.session_skill_audit --summary "C:\Users\KONEIT\.codex\sessions\2026\06\01\rollout-2026-06-01T12-32-48-019e813d-c26b-7d82-82df-d6f052c83dc7.jsonl"
+python -B -m src.orchestration.session_skill_audit --summary "%USERPROFILE%\.codex\sessions\2026\06\01\rollout-2026-06-01T12-32-48-019e813d-c26b-7d82-82df-d6f052c83dc7.jsonl"
 ```
 
 Result:
@@ -156,7 +156,7 @@ Plain prompt category: static calculator app, no KH/UAF/skill/harness wording.
 
 Result:
 
-- Created: `C:\Users\KONEIT\Desktop\Jang\SKillsTest\post-upgrade-blind-calc\index.html`
+- Created: `%USERPROFILE%\Desktop\Jang\SKillsTest\post-upgrade-blind-calc\index.html`
 - `runtime_applied_skills`: 4
 - Runtime applied: `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, `skill-catalog`
 - Required skills: 25
@@ -172,7 +172,7 @@ Plain prompt category: user-facing customer inquiry requirements/checklist docum
 
 Result:
 
-- Created two user-facing Markdown documents under `C:\Users\KONEIT\Desktop\Jang\SKillsTest\post-upgrade-blind-docs`.
+- Created two user-facing Markdown documents under `%USERPROFILE%\Desktop\Jang\SKillsTest\post-upgrade-blind-docs`.
 - `runtime_applied_skills`: 0
 - Required skills: 14
 - Required applied: 0
@@ -217,7 +217,7 @@ python -m src.orchestration.plugin_install_audit --summary
 Purpose:
 
 - Distinguish the Codex marketplace descriptor ref from the plugin source ref.
-- Report that `ref = "main"` in `C:\Users\KONEIT\.codex\config.toml` is expected for this repository when `.agents/plugins/marketplace.json` points `kh-uaf` at `codex-runtime`.
+- Report that `ref = "main"` in `%USERPROFILE%\.codex\config.toml` is expected for this repository when `.agents/plugins/marketplace.json` points `kh-uaf` at `codex-runtime`.
 - Compare the source manifest version with installed cache versions.
 - Produce an `attention_required` status when the installed cache is behind source, without blaming the marketplace descriptor ref.
 

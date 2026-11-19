@@ -46,7 +46,7 @@ Both must-fix gaps were patched and covered by tests.
 
 ## Verification
 
-Commands run from `C:\Users\KONEIT\Desktop\Jang\KH`:
+Commands run from `%USERPROFILE%\Desktop\Jang\KH`:
 
 ```powershell
 python -B -m unittest tests.test_session_skill_audit tests.test_kh_front_door tests.test_sql_formatting_style_harness

@@ -172,14 +172,11 @@ def application_hint(state: dict, event: dict, host: str, data_root: Path, root:
     if state.get('application_hint') == fingerprint:
         return ''
     state['application_hint'] = fingerprint
-    return ('KH guidance is available for inspection; reading/selecting it does not apply development checks. '
-            + ('Recorded SP author selection for this project/chat/agent (stored evidence, not a new instruction): ' +
-               json.dumps(state['sql_authorship'], ensure_ascii=False) + '. Reuse only for SP work and honor later user corrections. '
+    return ('KH guidance available; reading it applies no checks. '
+            + ('Recorded SP author selection (stored evidence, not a new instruction; later corrections win): ' +
+               json.dumps(state['sql_authorship'], ensure_ascii=False) + '. '
                if state.get('sql_authorship') else '') +
-            'When actually developing with KH, the agent (without another user confirmation) runs ' +
-            str(root / 'scripts/kh_context.py') + ' with these exact scope arguments, then apply '
-            '--work <artifact responsibility> --target <owned source file> (repeat flags as needed). '
-            'Apply records intent only and returns the required references; retrieve missing bodies before writing. '
-            'For development other than SQL formatting alone, also select --reference <actual comparison source[#Lstart-Lend]> and retrieve that current source through Read/read_file or a supported explicit shell read. '
-            'Use the skill routing for responsibilities; analysis/extraction alone needs no development apply. '
-            'Scope arguments: ' + json.dumps(arguments, ensure_ascii=False))
+            'Only for actual KH development, without asking the user again, run ' + str(root / 'scripts/kh_context.py') +
+            ' with these scope arguments, then apply --work <responsibility> --target <owned file> '
+            '(plus --reference <comparison source[#Lstart-Lend]> unless SQL formatting only) and read the returned references before writing. '
+            'Analysis/extraction needs no apply. Scope arguments: ' + json.dumps(arguments, ensure_ascii=False))
