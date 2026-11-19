@@ -5,7 +5,7 @@
 Blind subagent usage showed that a plain request such as:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260601_B folder needs an operations support product built.
+%USERPROFILE%\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260601_B folder needs an operations support product built.
 ```
 
 ran KH front-door only after an initial cwd import failure, then classified the request as `ambiguous/software` with route `clarify`. The result did not select `brainstorming-harness`, did not build a `BrainstormSession`, and did not produce `brainstorm_handoff` evidence.
@@ -56,7 +56,7 @@ Expected result:
 Wrapper check from a non-repo cwd:
 
 ```text
-python -B C:\Users\KONEIT\Desktop\Jang\KH\skills\always_on_front_door\scripts\front_door.py --prompt "C:\work\BrainstormEntryOnly folder needs an operations support product built." --project "C:\work\BrainstormEntryOnly" --host codex --summary
+python -B %USERPROFILE%\Desktop\Jang\KH\skills\always_on_front_door\scripts\front_door.py --prompt "C:\work\BrainstormEntryOnly folder needs an operations support product built." --project "C:\work\BrainstormEntryOnly" --host codex --summary
 ```
 
 Expected result: same front-door summary without import failure.
@@ -74,7 +74,7 @@ Expected result: same front-door summary without import failure.
 After installing or upgrading to `2.9.38`, run a fresh blind subagent test with a plain prompt that does not mention KH or brainstorming:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260602_A folder needs an operations support product built.
+%USERPROFILE%\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260602_A folder needs an operations support product built.
 ```
 
 Passing requires front-door before target-folder inspection, `brainstorming-harness` selection, and a visible brainstorming question/options/handoff path before implementation.
@@ -84,13 +84,13 @@ Passing requires front-door before target-folder inspection, `brainstorming-harn
 Session:
 
 ```text
-C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T09-21-36-019e85b5-0fa5-7793-a9e2-47d1b761050d.jsonl
+%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T09-21-36-019e85b5-0fa5-7793-a9e2-47d1b761050d.jsonl
 ```
 
 Prompt:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260602_C 폴더에 운영지원 제품 개발해줘.
+%USERPROFILE%\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260602_C 폴더에 운영지원 제품 개발해줘.
 ```
 
 Positive evidence:
@@ -122,13 +122,13 @@ Next install target: `2.9.38`.
 Session:
 
 ```text
-C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T09-51-32-019e85d0-79bf-7ba2-bd8c-693a04edaf55.jsonl
+%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T09-51-32-019e85d0-79bf-7ba2-bd8c-693a04edaf55.jsonl
 ```
 
 Prompt:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_D 폴더에 운영지원 제품 개발해줘.
+%USERPROFILE%\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_D 폴더에 운영지원 제품 개발해줘.
 ```
 
 Install evidence before the run:
@@ -161,13 +161,13 @@ The 2.9.38 failure was a plugin injection/session freshness problem, not a reaso
 Session:
 
 ```text
-C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T10-20-11-019e85ea-b271-74d2-abc5-6cfc3a9dfd33.jsonl
+%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T10-20-11-019e85ea-b271-74d2-abc5-6cfc3a9dfd33.jsonl
 ```
 
 Prompt:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_H 폴더에 운영지원 제품 개발해줘.
+%USERPROFILE%\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_H 폴더에 운영지원 제품 개발해줘.
 ```
 
 Positive evidence:
@@ -177,7 +177,7 @@ Positive evidence:
 - The subagent ran the installed cache wrapper `skills\always_on_front_door\scripts\front_door.py`.
 - Front-door returned `front_door_status: ok`, `complexity: medium`, `domain: product`, `route: kh single`.
 - The subagent read `brainstorming-harness`, presented three directions, and stopped for user approval.
-- `C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_H` was not created.
+- `%USERPROFILE%\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_H` was not created.
 
 Remaining failure:
 
@@ -201,13 +201,13 @@ Passing requires a fresh subagent whose first work-bearing sequence is: installe
 Session:
 
 ```text
-C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T10-51-37-019e8607-7984-79a0-853a-a9158c1030cb.jsonl
+%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T10-51-37-019e8607-7984-79a0-853a-a9158c1030cb.jsonl
 ```
 
 Prompt:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_I 폴더에 운영지원 제품 개발해줘.
+%USERPROFILE%\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_I 폴더에 운영지원 제품 개발해줘.
 ```
 
 Install/cache evidence:
@@ -216,19 +216,19 @@ Install/cache evidence:
 - Expected source version: `2.9.40`.
 - Latest installed cache version: `2.9.40`.
 - Installed cache versions: `["2.9.40"]`.
-- No user-level KH bootstrap existed: `C:\Users\KONEIT\.codex\skills\kh-uaf-front-door\SKILL.md` returned `False`.
+- No user-level KH bootstrap existed: `%USERPROFILE%\.codex\skills\kh-uaf-front-door\SKILL.md` returned `False`.
 
 Passing order evidence:
 
 - First tool call read the installed plugin cache skill:
-  `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.40\skills\always_on_front_door\SKILL.md`.
+  `%USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.40\skills\always_on_front_door\SKILL.md`.
 - The next work-bearing tool call ran:
-  `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.40\skills\always_on_front_door\scripts\front_door.py`.
+  `%USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.40\skills\always_on_front_door\scripts\front_door.py`.
 - No `MEMORY.md` lookup, target-folder check, sibling scan, or implementation happened before front-door runtime.
 - Front-door returned `front_door_status: ok`, `complexity: medium`, `domain: product`, `route: kh single`.
 - `recommended_skills` included `brainstorming-harness`.
 - The subagent then read `brainstorming-harness` from the same `2.9.40` plugin cache.
-- The target folder `C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_I` was not created.
+- The target folder `%USERPROFILE%\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_I` was not created.
 - The final answer offered three product directions and stopped for user approval before scaffolding or product code.
 
 Session audit evidence:
@@ -247,19 +247,19 @@ The requested plugin-only behavior is verified for the blind product-development
 Session:
 
 ```text
-C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T11-04-34-019e8613-56f3-7cd3-830d-b977ea716f33.jsonl
+%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T11-04-34-019e8613-56f3-7cd3-830d-b977ea716f33.jsonl
 ```
 
 Prompt:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_J 폴더에 운영지원 제품 개발해줘.
+%USERPROFILE%\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_J 폴더에 운영지원 제품 개발해줘.
 ```
 
 Follow-up approval:
 
 ```text
-1번 지원 티켓 MVP로 진행해. C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_J 폴더에 실제 제품을 구현하고, 실행/검증 결과까지 최종 보고해줘.
+1번 지원 티켓 MVP로 진행해. %USERPROFILE%\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_J 폴더에 실제 제품을 구현하고, 실행/검증 결과까지 최종 보고해줘.
 ```
 
 What passed:

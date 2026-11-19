@@ -1,6 +1,6 @@
 ---
 name: pb-to-csharp-migration-harness
-description: Analyze PowerBuilder/PBL/DataWindow artifacts or migrate them to WinForms and SQL Server with source-grounded mapping.
+description: Analyze PowerBuilder/PBL/DataWindow artifacts or migrate them to WinForms and SQL Server with source-grounded mapping (PB·PBL·데이터윈도우 분석, C# 이관·전환).
 ---
 
 # PB to C# migration

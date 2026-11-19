@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
-import tempfile
 
 
 @dataclass(frozen=True)
@@ -57,6 +56,7 @@ def write_output(path: str | Path, data: bytes, *, expected_sha256: str | None =
     elif expected_sha256 is not None:
         raise FileNotFoundError("expected output no longer exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    import tempfile  # Only output writes need it; hook events import this module.
     handle, temporary = tempfile.mkstemp(prefix=".kh-output-", dir=destination.parent)
     try:
         with os.fdopen(handle, "wb") as stream:

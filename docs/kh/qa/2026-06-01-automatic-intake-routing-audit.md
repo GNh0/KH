@@ -16,7 +16,7 @@ Blind subagent tests in the same Codex session do not automatically prove newly 
 
 The current Codex session and subagents inherit the already installed plugin cache. During this audit, the installed cache was:
 
-- `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.26`
+- `%USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.26`
 
 The local repository was being edited as `2.9.27`. The installed `2.9.26` cache did not contain the new `automatic_intake_harness` skill folder, so subagents launched before a marketplace upgrade could not be treated as proof that the new automatic intake contract was active.
 
@@ -98,7 +98,7 @@ Result:
 - implementation targets resolved
 
 ```powershell
-python -B skills\automatic_intake_harness\scripts\demo.py --output-dir C:\Users\KONEIT\Documents\Codex\kh-automatic-intake-demo
+python -B skills\automatic_intake_harness\scripts\demo.py --output-dir %USERPROFILE%\Documents\Codex\kh-automatic-intake-demo
 ```
 
 Result:
@@ -107,7 +107,7 @@ Result:
 - runtime-applied skills included `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`
 
 ```powershell
-python -B -m src.orchestration.kh_front_door --prompt "Build a small HTML todo tool and verify it" --project C:\Users\KONEIT\Desktop\Jang\SKillsTest --host codex --summary
+python -B -m src.orchestration.kh_front_door --prompt "Build a small HTML todo tool and verify it" --project %USERPROFILE%\Desktop\Jang\SKillsTest --host codex --summary
 ```
 
 Result:
@@ -118,7 +118,7 @@ Result:
 - implementation, review, QA, role audit, and branch finishing skills were selected but not falsely reported as executed
 
 ```powershell
-python -B -m src.orchestration.kh_front_door --prompt "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code" --project C:\Users\KONEIT\Desktop\Jang\SKillsTest --host codex --summary
+python -B -m src.orchestration.kh_front_door --prompt "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code" --project %USERPROFILE%\Desktop\Jang\SKillsTest --host codex --summary
 ```
 
 Result:
@@ -130,7 +130,7 @@ Result:
 During this audit, the pytest-log prompt initially fell through to ambiguous/clarify before `command-output-harness` selection. The classifier was fixed so command-output requests are detected before context-free ambiguity handling.
 
 ```powershell
-python -B -m src.orchestration.kh_front_door --prompt "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code" --project C:\Users\KONEIT\Desktop\Jang\SKillsTest --host codex --summary --host-skill-path C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.25\skills\parallel_orchestration_harness\SKILL.md
+python -B -m src.orchestration.kh_front_door --prompt "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code" --project %USERPROFILE%\Desktop\Jang\SKillsTest --host codex --summary --host-skill-path %USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.25\skills\parallel_orchestration_harness\SKILL.md
 ```
 
 Result:
@@ -140,7 +140,7 @@ Result:
 - warning told the host to resolve repo-local skills or the latest `kh-uaf` cache before continuing
 
 ```powershell
-python -B -m src.orchestration.session_skill_audit --summary C:\Users\KONEIT\.codex\sessions\2026\06\01\rollout-2026-06-01T08-57-07-019e8078-4bde-7813-a1db-5025a3881511.jsonl
+python -B -m src.orchestration.session_skill_audit --summary %USERPROFILE%\.codex\sessions\2026\06\01\rollout-2026-06-01T08-57-07-019e8078-4bde-7813-a1db-5025a3881511.jsonl
 ```
 
 Result:

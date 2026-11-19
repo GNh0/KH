@@ -4,7 +4,7 @@
 
 Blind subagent retest `019e90d8-6f92-7d42-a559-9238ad9e4179` used installed KH UAF `2.9.54` and received an ordinary request without KH/UAF/skill wording:
 
-`C:\Users\KONEIT\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_G folder: build an inventory inbound/outbound dashboard.`
+`%USERPROFILE%\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_G folder: build an inventory inbound/outbound dashboard.`
 
 The subagent correctly avoided writing files before approval, but the visible brainstorm still made too many decisions on behalf of the user.
 

@@ -7,7 +7,7 @@ Date: 2026-06-02
 A blind subagent test was launched without naming KH UAF:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\RetestAutoRoute_20260602_K 폴더에서 재고 입출고 관리 대시보드 개발해줘.
+%USERPROFILE%\Desktop\Jang\SKillsTest\RetestAutoRoute_20260602_K 폴더에서 재고 입출고 관리 대시보드 개발해줘.
 ```
 
 The expected behavior was automatic KH front-door intake followed by a brainstorming stop, because the request was an underspecified new operations dashboard direction.
@@ -57,7 +57,7 @@ Commands run:
 
 ```bash
 python -B -m unittest tests.test_session_skill_audit tests.test_kh_front_door
-python -B -m src.orchestration.session_skill_audit --summary "C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T17-44-35-019e8781-8e0d-7fc0-883e-ee97bd88ab8a.jsonl"
+python -B -m src.orchestration.session_skill_audit --summary "%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T17-44-35-019e8781-8e0d-7fc0-883e-ee97bd88ab8a.jsonl"
 python -B -m unittest discover -s tests
 python -B -m src.skills.uaf_skill_catalog --check
 python -B -m src.skills.uaf_skill_quality --summary

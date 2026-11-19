@@ -6,8 +6,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from src.common.files import read_file
-from src.csharp.control_defaults import read_control_defaults
-from src.csharp.designer_model import parse_designer_source
+# C# parsers load only when a C# dependency scan runs; every hook event imports this module.
 
 
 SOURCE_LIMIT = 1024 * 1024
@@ -137,6 +136,8 @@ def literal_project_sources(path: Path, texts: list[str]) -> tuple[list[str], di
     This is source evidence, not evaluated MSBuild membership or runtime compatibility.
     Dynamic imports, ambiguous projects/types and unmatched file names remain unverified.
     """
+    from src.csharp.control_defaults import read_control_defaults
+    from src.csharp.designer_model import parse_designer_source
     types = {control.type_name.removeprefix('global::')
              for text in texts for control in parse_designer_source(text).controls.values()
              if control.type_name}

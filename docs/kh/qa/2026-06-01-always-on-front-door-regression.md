@@ -91,13 +91,13 @@ Verification after this rework:
 
 ## Blind Subagent Verification
 
-Blind prompt sent to subagent `019e81b8-e19c-7b01-add2-ee6957be73c9` did not mention KH, UAF, skill, harness, or front-door. It only asked for a small static KPI dashboard under `C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindAutoRoute_20260601_A`.
+Blind prompt sent to subagent `019e81b8-e19c-7b01-add2-ee6957be73c9` did not mention KH, UAF, skill, harness, or front-door. It only asked for a small static KPI dashboard under `%USERPROFILE%\Desktop\Jang\SKillsTest\BlindAutoRoute_20260601_A`.
 
 Evidence:
 
 - Active session skill list used installed cache paths under `kh-uaf/2.9.30`.
 - The subagent inspected `always-on-front-door` and `automatic-intake-harness` without being told to do so.
-- The subagent ran `python -m src.orchestration.kh_front_door ...` from `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.30`.
+- The subagent ran `python -m src.orchestration.kh_front_door ...` from `%USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.30`.
 - The front-door output reported `front_door_status: ok`.
 - Runtime-applied front-door skills were `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
 - Generated deliverable files were created only in the requested target folder.

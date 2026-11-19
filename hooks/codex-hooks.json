@@ -34,7 +34,7 @@
             "timeout": 10
           }
         ],
-        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|Read|read_file"
+        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit"
       }
     ],
     "PostToolUse": [

@@ -4,7 +4,7 @@
 
 Blind subagent retest `019e90a2-6b6a-7f20-b6f6-f6ba38f1937e` used installed KH UAF `2.9.53` and received an ordinary request without KH/UAF/skill wording:
 
-`C:\Users\KONEIT\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_F folder: build an inventory inbound/outbound dashboard.`
+`%USERPROFILE%\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_F folder: build an inventory inbound/outbound dashboard.`
 
 The first brainstorming response passed the visible brainstorm audit. After the user approved the recommended basic stock ledger model, the implementation phase still failed multiple KH behavior gates.
 
