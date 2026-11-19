@@ -1054,7 +1054,7 @@ def handle(event: dict, host: str) -> dict:
                 state['completion_status'] = 'requires_repair_or_evidence'
                 state['semantic_audit_verified'] = False
                 reason = ('KH cannot verify completion for these saved files: ' + ', '.join(pending) + '. '
-                          'Read back current bodies, inspect actual project/reference contracts, resolve new review findings and repair confirmed violations only, re-audit and check introduced regressions. '
+                          'Read back current bodies, inspect actual project/reference contracts, resolve new review findings and repair confirmed violations only, re-audit and check introduced regressions, and verify both included and excluded/boundary scenarios for each changed mode or save path. '
                           'Report unsupported/unresolved evidence accurately; do not claim a checker proves full compliance. ' +
                           ('Missing required KH references: ' + ', '.join(missing_references) + '. ' if missing_references else '') +
                           ('Unverified application originals: ' + '; '.join(application_errors.values()) + '. ' if application_errors else '') +
