@@ -10,6 +10,7 @@ Read the sections matching the changed responsibilities, not every example. Each
 | One header row with detail totals | [SELECT: grouped detail JOIN](select-patterns.md#grouped-detail-join) |
 | Exclude rows already processed | [SELECT: exclusion JOIN](select-patterns.md#exclusion-join) |
 | Multiple ordered results for one mode | [SELECT: one branch with multiple results](select-patterns.md#one-branch-with-multiple-results) |
+| WORKTYPE skeleton, single COMMIT, no locking hints/count variables | [SAVE: fixed rules](save-patterns.md#save-고정-규칙) |
 | XML parsing and NEW INSERT SELECT | [SAVE: parsed rows and NEW](save-patterns.md#parsed-rows-and-new) |
 | Keep mode-owned preparation and writes together while preserving real shared phases | [SAVE: operation ownership](save-patterns.md#operation-ownership) |
 | Modify/delete selected input rows | [SAVE: MOD and DEL](save-patterns.md#mod-and-del) |
@@ -19,6 +20,6 @@ Read the sections matching the changed responsibilities, not every example. Each
 
 For nested FROM/UNION blocks and grouped INSERT/SELECT text-column alignment, use the existing [SQL layout examples](style.md); keep the query's actual keys and row grain separate from its whitespace layout.
 
-Necessary numbering/output variables and staging updates that record generated keys remain valid when the real flow needs them. Do not judge necessity from variable count or ban every staging UPDATE.
+Header numbering from the key procedure (`EXEC ... @NEWSEQ OUTPUT`), the document number it builds and `@OUTPUT` remain valid. Do not write sequence numbers into a staging table before the INSERT; assign them in the INSERT, and let a later step JOIN the written target rows by their business key. Do not store an intermediate query result (stock allocation, lookups) in a table variable or temp table; only parsed XML is staged. Do not keep row-count variables (`@NEWCOUNT`, `@@ROWCOUNT <> @variable`), `IF @CNT > 0` checks or a scalar MAX base such as `@LASTSEQ + RN`; see the [SAVE fixed rules](save-patterns.md#save-고정-규칙). Do not ban every scalar variable.
 
 Before applying a draft and after the final edit, compare the exact affected bodies with the matching examples and complete references. Include existing code the user asked to correct. A final edit reopens the affected comparison and audit.

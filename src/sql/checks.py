@@ -182,6 +182,9 @@ def _value_fallbacks(source: str) -> list[tuple[tuple[str, ...], str, int]]:
             close, absent = _case_substitutes(tokens, index)
             if not absent:
                 close = None
+        if (close is not None and form in {'ISNULL', 'COALESCE'} and close + 2 < len(tokens)
+                and tokens[close + 1].text == '+' and tokens[close + 2].normalized == 'ROW_NUMBER'):
+            close = None  # ISNULL(MAX..., 0) + ROW_NUMBER() is a numbering base, not a value substitution.
         if close is not None:
             found.append((tuple(t.normalized for t in tokens[index:close + 1]), form, token.start))
             index = close + 1  # One finding for a nested fallback chain.
@@ -438,8 +441,8 @@ def _procedure_name(tokens, index: int) -> tuple[str, str] | None:
 
 
 def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]]]:
-    """Observe explicit hints, backup-procedure calls, directly nested same-type
-    numeric conversions and aliased empty CAST results, not their necessity."""
+    """Observe backup-procedure calls, directly nested same-type numeric
+    conversions and aliased empty CAST results, not their necessity."""
     tokens = [token for token in _scan_sql_tokens(source)[0]
               if token.kind not in {'line_comment', 'block_comment'}]
     findings: list[tuple[str, str, int, dict[str, str]]] = []
@@ -471,11 +474,7 @@ def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]
             closing += 1
         if closing >= len(tokens):
             continue
-        if token.normalized == 'WITH':
-            for hint in tokens[index + 2:closing]:
-                if hint.kind == 'word' and hint.normalized in {'UPDLOCK', 'HOLDLOCK'}:
-                    findings.append(('locking_hint_review', hint.normalized, hint.start, {'hint': hint.normalized}))
-        elif (token.normalized == 'CAST' and index + 4 < closing and
+        if (token.normalized == 'CAST' and index + 4 < closing and
               tokens[index + 2].normalized in {"''", "N''", 'NULL'} and
               tokens[index + 3].normalized == 'AS' and closing + 2 < len(tokens) and
               tokens[closing + 1].normalized == 'AS' and
@@ -489,7 +488,6 @@ def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]
 def _review_generation_choices(candidate: str, original: str | None) -> list[Issue]:
     previous = Counter((code, identity) for code, identity, _, _ in _generation_choices(original or ''))
     messages = {
-        'locking_hint_review': 'Review this added locking hint against the actual target concurrency and transaction contract. Do not add UPDLOCK/HOLDLOCK routinely; retain them when the requested behavior or verified necessity requires them.',
         'synthetic_result_field_review': 'This output field is a typed empty or NULL placeholder. Check the requested target result/binding contract; remove excluded source-only fields instead of carrying them as placeholders, and keep a placeholder only when the actual output type contract requires it.',
         'backup_procedure_call': 'This new call executes a backup (_BAK) procedure. Call the active procedure, or confirm that the user explicitly requested the backup copy.',
         'redundant_numeric_convert_review': 'This conversion directly wraps another conversion to the same NUMERIC/DECIMAL type. Remove the redundant wrapper unless the actual type contract differs.',
@@ -509,7 +507,7 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
               check_style: bool = True, check_delta: bool = False, check_preferences: bool = True,
               compare_original: bool = True, require_procedure_header: bool = False,
               procedure_author: str | None = None, procedure_changes_only: bool = False,
-              review_sp_changes: bool = False) -> CheckResult:
+              review_sp_changes: bool = False, allow_locking_hints: bool = False) -> CheckResult:
     comparing = original is not None and compare_original
     result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None and compare_original else CheckResult(
         checked=["SQL lexical integrity"], not_checked=["SQL Server execution", "complete T-SQL grammar and type semantics", "business equivalence to an unsupplied source"])
@@ -590,15 +588,20 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
         result.checked.append('recognizable statement-level CTE declarations, SELECT-list/scalar-WHERE queries and WHERE EXISTS/NOT EXISTS/IN query counts')
         result.not_checked.append('CTE and subquery necessity, general clause grammar and JOIN-rewrite equivalence')
     result.issues.extend(_review_generation_choices(candidate, original))
+    from .save_rules import review_save_rules
+    result.issues.extend(review_save_rules(candidate, original, enforce=not comparing,
+                                           allow_locking_hints=allow_locking_hints, personal_rules=check_preferences))
+    result.checked.append('locking hints including ones kept from the original, WORKTYPE blocks that write/commit then RETURN before unguarded code, '
+                          'multiple COMMITs, count variables compared with @@ROWCOUNT or in conditions, and scalar MAX sequence bases')
     result.issues.extend(review_dispatch(candidate, original))
     result.issues.extend(_review_xml_boundary(candidate, original))
     result.issues.extend(_review_value_fallbacks(candidate, original))
     result.checked.append('added or changed ISNULL/COALESCE and supported NULL/blank-guard CASE/IIF substitutions')
     result.not_checked.append('user authorization for value substitution and equivalent fallbacks outside supported syntax')
     result.checked.append('recognizable new direct XML writes beside an established parsed-staging boundary')
-    result.checked.append('explicit added locking hints, backup (_BAK) procedure calls, directly nested same-type NUMERIC conversions and aliased typed-empty output fields')
+    result.checked.append('backup (_BAK) procedure calls, directly nested same-type NUMERIC conversions and aliased typed-empty output fields')
     result.checked.append('supported repeated enclosing/sibling scalar-mode guards with no observed mode assignment')
-    result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')
+    result.not_checked.append('user requests for a locking hint, necessity of placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')
     result.not_checked.append('necessity/ownership of repeated sibling phases, jumps/loop re-entry, complex or unbraced predicates, case-sensitive parameter binding and complete mode-to-result-set behavior')
     result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
     return result
