@@ -10,6 +10,8 @@
   and staging-table UPDATEs that assign sequence numbers.
 - Variables beyond the necessary ones: never read, or assigned once and read once
   outside an EXEC/RAISERROR argument.
+- Row-by-row loops that write a table with a nested loop, TOP 1 variable fetching or
+  several loop variables, and shared steps copied into two mode branches.
 
 These are lexical observations, not a T-SQL control-flow parser. They do not decide
 which validation replaces a removed count check.
@@ -56,6 +58,14 @@ _MESSAGES = {
         'Do not number rows by updating a staging table first. Assign the sequence in the INSERT itself '
         '(ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (...) with a derived MAX JOIN); later steps read the generated key '
         'from the written target rows by their business key.'),
+    'row_by_row_loop': (
+        'This loop writes a table one row at a time (nested loop, SELECT TOP 1 @variable fetching or several loop '
+        'variables). Write the rows with one set-based statement: JOIN the requested rows to derived running totals '
+        'and INSERT the overlaps (see the SAVE allocation example). Use a loop only when the work cannot be '
+        'expressed as a set, and say why.'),
+    'duplicated_mode_code': (
+        'The same statements appear in two mode branches. Put the shared NEW/EDIT steps once after the mode-specific '
+        'parts, inside ELSE IF @WORKTYPE IN (\'NEW\', \'EDIT\').'),
     'unused_variable': (
         'This variable is declared or assigned but never read. Remove it.'),
     'single_use_variable': (
@@ -220,6 +230,11 @@ def _staging(code: list[_SqlToken]) -> list[tuple[str, int, dict]]:
             body = {t.normalized for t in code[index:end] if t.kind == 'word'}
             if 'FROM' in body and 'OPENXML' not in body:
                 found.append(('intermediate_table', token.start, {'table': code[target].text.upper()}))
+        elif word == 'OUTPUT' and index + 1 < len(code) and code[index + 1].normalized in {'INSERTED', 'DELETED', '$ACTION'}:
+            into = next((j for j in range(index + 1, len(code)) if code[j].depth == token.depth and (
+                code[j].normalized == 'INTO' or code[j].normalized in _STATEMENT_STARTS)), None)
+            if into is not None and code[into].normalized == 'INTO' and into + 1 < len(code) and _local_table(code[into + 1].text):
+                found.append(('intermediate_table', token.start, {'table': code[into + 1].text.upper(), 'form': 'OUTPUT INTO'}))
         elif word == 'INTO' and index + 1 < len(code) and code[index + 1].text.startswith('#'):
             command = next((c.normalized for c in reversed(code[:index]) if c.depth == token.depth and c.normalized in
                             {'SELECT', 'INSERT', 'MERGE', 'UPDATE', 'DELETE', 'OUTPUT', 'FETCH', 'EXEC', ';'}), '')
@@ -317,6 +332,99 @@ def _minimal_variables(code: list[_SqlToken], reported: set[str]) -> list[tuple[
     return found
 
 
+def _block_end(code: list[_SqlToken], begin: int) -> int:
+    """Index of the END that closes the BEGIN at code[begin] (len(code) when unclosed)."""
+    blocks = 0
+    for index in range(begin, len(code)):
+        word = code[index].normalized if code[index].kind == 'word' else ''
+        following = code[index + 1].normalized if index + 1 < len(code) else ''
+        if word == 'CASE' or (word == 'BEGIN' and following not in _NON_BLOCK_BEGIN):
+            blocks += 1
+        elif word == 'END' and following != 'CONVERSATION':
+            blocks -= 1
+            if not blocks:
+                return index
+    return len(code)
+
+
+def _loop_bodies(code: list[_SqlToken]) -> list[tuple[int, int, int]]:
+    """(WHILE index, body start, body end) for WHILE ... BEGIN ... END loops."""
+    loops = []
+    for index, token in enumerate(code):
+        if token.kind != 'word' or token.normalized != 'WHILE':
+            continue
+        begin = next((j for j in range(index + 1, len(code)) if code[j].depth == token.depth
+                      and code[j].normalized in {'BEGIN'} | _STATEMENT_STARTS - {'SELECT'}), None)
+        if begin is not None and code[begin].normalized == 'BEGIN':
+            loops.append((index, begin, _block_end(code, begin)))
+    return loops
+
+
+def _row_loops(code: list[_SqlToken], real_writes: set[int]) -> list[tuple[str, int, dict]]:
+    """A WHILE/cursor loop that writes a real table one row at a time with a nested loop,
+    SELECT TOP 1 @variable fetching or several loop variables. A plain retry or batch loop is not reported."""
+    found: list[tuple[str, int, dict]] = []
+    covered = -1
+    for start, begin, end in _loop_bodies(code):
+        if start < covered:
+            continue  # Inside a loop already reported.
+        body = code[begin:end]
+        writes = sum(t.start in real_writes for t in body)
+        nested = sum(t.kind == 'word' and t.normalized == 'WHILE' for t in body)
+        top_one = 0
+        assigned: set[str] = set()
+        fetching = False
+        for j, t in enumerate(body):
+            if t.kind == 'word' and t.normalized in _STATEMENT_STARTS | {'FETCH'}:
+                fetching = t.normalized == 'FETCH'
+            if fetching and t.text.startswith('@') and j and body[j - 1].normalized in {'INTO', ','}:
+                assigned.add(t.text.upper())  # FETCH ... INTO @A, @B
+            if t.kind == 'word' and t.normalized == 'TOP':
+                k = j + 1
+                wrapped = k < len(body) and body[k].text == '('
+                k += wrapped
+                if k < len(body) and body[k].text == '1':
+                    k += 1 + wrapped
+                    if k + 1 < len(body) and body[k].text.startswith('@') and body[k + 1].text == '=':
+                        top_one += 1
+                        assigned.add(body[k].text.upper())
+            if t.kind == 'word' and t.text.startswith('@') and not t.text.startswith('@@') and j + 1 < len(body):
+                previous = body[j - 1].normalized if j else ''
+                if body[j + 1].text in {'=', '+=', '-='} and previous in {'SET', 'SELECT', ','} or previous == 'INTO':
+                    assigned.add(t.text.upper())
+        if writes and (nested or top_one or len(assigned) >= 3):
+            found.append(('row_by_row_loop', code[start].start,
+                          {'nested_loops': nested, 'top_1_assignments': top_one, 'loop_variables': sorted(assigned)}))
+            covered = end
+    return found
+
+
+def _duplicated_branches(code: list[_SqlToken], size: int = 200) -> list[tuple[str, int, dict]]:
+    """The same run of `size` tokens in two sibling branches of one mode parameter.
+
+    Author-written SAVE SPs share at most about 110 consecutive tokens between NEW and EDIT
+    (similar INSERT column lists); a copied block of shared steps is far longer."""
+    blocks = []
+    for index, token in enumerate(code):
+        if token.kind == 'word' and token.normalized == 'IF' and (parsed := _guard(code, index)):
+            parameter, _operator, values = parsed[1].signature
+            if code[parsed[0]].normalized == 'BEGIN':
+                blocks.append((parameter.upper(), frozenset(v for _, v in values), parsed[0], _block_end(code, parsed[0])))
+    found: list[tuple[str, int, dict]] = []
+    keys = [t.normalized for t in code]
+    for i, (parameter, values, begin, end) in enumerate(blocks):
+        windows = {tuple(keys[k:k + size]): k for k in range(begin + 1, end - size + 1)}
+        for other, other_values, other_begin, other_end in blocks[i + 1:]:
+            if other != parameter or values & other_values or other_begin < end:
+                continue  # Same parameter, other modes, not nested.
+            match = next(((k, windows[tuple(keys[k:k + size])]) for k in range(other_begin + 1, other_end - size + 1)
+                          if tuple(keys[k:k + size]) in windows), None)
+            if match:
+                found.append(('duplicated_mode_code', code[match[0]].start,
+                              {'parameter': parameter, 'first_offset': code[match[1]].start}))
+    return found
+
+
 def review_save_rules(candidate: str, original: str | None = None, *, enforce: bool = True,
                       allow_locking_hints: bool = False, personal_rules: bool = True) -> list[Issue]:
     """Report every occurrence in the candidate, including ones carried over from the original.
@@ -345,10 +453,14 @@ def review_save_rules(candidate: str, original: str | None = None, *, enforce: b
     severity = 'error' if enforce else 'info'
     variables = _variables(code)
     reported = {details['variable'] for _, _, details in variables if 'variable' in details}
-    for code_name, offset, details in sorted(_mode_flow(code) + variables + _staging(code) + _minimal_variables(code, reported),
+    from .procedure_authorship import table_writes
+    real_writes = {token.start for token, _table in table_writes(_scan_sql_tokens(candidate)[0])}
+    for code_name, offset, details in sorted(_mode_flow(code) + variables + _staging(code) + _minimal_variables(code, reported)
+                                             + _row_loops(code, real_writes) + _duplicated_branches(code),
                                              key=lambda item: item[1]):
-        if 'use_offset' in details:
-            details = {key: value for key, value in details.items() if key != 'use_offset'} | {
-                'use_line': _line(candidate, details['use_offset'])}
+        for key in ('use_offset', 'first_offset'):
+            if key in details:
+                details = {name: value for name, value in details.items() if name != key} | {
+                    key.replace('_offset', '_line'): _line(candidate, details[key])}
         issues.append(Issue(code_name, severity, _MESSAGES[code_name], line=_line(candidate, offset), details=details))
     return issues
