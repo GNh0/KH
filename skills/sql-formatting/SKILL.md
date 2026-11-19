@@ -7,7 +7,7 @@ description: Create, change, format or review SQL/T-SQL query and procedure arti
 
 | 요청 | 적용 |
 | --- | --- |
-| 정렬·정리 | [SQL 서식](references/style.md). “별칭 그대로/정렬만”이면 별칭 유지, 일반 “정리”면 업무 역할별로 정돈한다. 완성 SQL 또는 요청한 교체 블록을 반환한다. |
+| 정렬·정리 | [SQL 서식](references/style.md). “별칭 그대로/정렬만”이면 별칭 유지, 일반 “정리”면 [별칭 역할표](references/style.md#별칭-역할)를 먼저 만든다. 주 대상은 A, 이미 글자를 받은 테이블과 같은 업무면 그 글자에 번호(A1·B1·C1…), 새 업무면 다음 글자를 쓴다. 완성 SQL 또는 요청한 교체 블록을 반환한다. |
 | SELECT 작성 | 결과 한 행의 단위, 포함·제외 조건, 표시용 JOIN과 필수 JOIN을 확인한다. [조회 예시](references/select-patterns.md) |
 | SELECT/SAVE 프로시저 | [작성자와 참고 SP](references/procedure-authorship.md)를 정하고 실제 호출부·같은 역할 참고 SP 전체와 [프로시저 계약](references/procedure-contracts.md)을 대조한다. |
 | SAVE 작성 | 호출 모드와 선택 키·XML 행 상태를 맞춘다. [저장 예시](references/save-patterns.md), 업무 검증 변경 시 [검증 예시](references/validation-patterns.md) |
