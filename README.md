@@ -65,7 +65,7 @@ KH does not provide a model, an agent runtime, or API credits. Your Claude or Co
 | [rule-audit](skills/rule-audit/SKILL.md) | Applicable-rule compliance, omitted prerequisites, focused repairs and rechecks |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | Reproducing a failure and tracing its actual cause |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | Deliverable content, file structure and rendered output |
-| [context-handoff](skills/context-handoff/SKILL.md) | Task recovery and explicit durable project memory |
+| [context-handoff](skills/context-handoff/SKILL.md) | Task recovery, explicit durable project memory and evidence-backed project lessons (compound) |
 | [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH's package, checkers, profiles and requested source-log audits |
 
 ## How KH works
