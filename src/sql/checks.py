@@ -365,12 +365,97 @@ def _cte_declarations(tokens: list[_SqlToken]) -> list[_SqlToken]:
     return declarations
 
 
+def _close_paren(tokens, opening: int) -> int | None:
+    depth = 0
+    for position in range(opening, len(tokens)):
+        if tokens[position].text == '(':
+            depth += 1
+        elif tokens[position].text == ')':
+            depth -= 1
+            if depth == 0:
+                return position
+    return None
+
+
+def _numeric_type(tokens, start: int, stop: int) -> tuple[str, int] | None:
+    """Return a NUMERIC/DECIMAL(p[,s]) type key and the index after it."""
+    if start >= stop or tokens[start].normalized not in {'NUMERIC', 'DECIMAL', 'DEC'}:
+        return None
+    if start + 1 < stop and tokens[start + 1].text == '(':
+        close = _close_paren(tokens, start + 1)
+        if close is None or close >= stop:
+            return None
+        sizes = [t.normalized for t in tokens[start + 2:close] if t.text != ',']
+        return 'NUMERIC(' + ','.join(sizes) + ')', close + 1
+    return 'NUMERIC', start + 1
+
+
+def _conversion(tokens, index: int) -> tuple[str, int, int, int] | None:
+    """For CONVERT(type, expr[, style]) or CAST(expr AS type): (type, expr start, expr end, close)."""
+    if tokens[index].normalized not in {'CONVERT', 'CAST', 'TRY_CONVERT', 'TRY_CAST'} or index + 1 >= len(tokens) or tokens[index + 1].text != '(':
+        return None
+    close = _close_paren(tokens, index + 1)
+    if close is None:
+        return None
+    if tokens[index].normalized.endswith('CONVERT'):
+        typed = _numeric_type(tokens, index + 2, close)
+        if typed is None or typed[1] >= close or tokens[typed[1]].text != ',':
+            return None
+        end, depth = typed[1] + 1, 0
+        while end < close and not (depth == 0 and tokens[end].text == ','):
+            depth += tokens[end].text == '('
+            depth -= tokens[end].text == ')'
+            end += 1
+        return typed[0], typed[1] + 1, end, close
+    depth = 0
+    for position in range(index + 2, close):
+        depth += tokens[position].text == '('
+        depth -= tokens[position].text == ')'
+        if depth == 0 and tokens[position].normalized == 'AS':
+            typed = _numeric_type(tokens, position + 1, close)
+            if typed is not None and typed[1] == close:
+                return typed[0], index + 2, position, close
+    return None
+
+
+def _procedure_name(tokens, index: int) -> tuple[str, str] | None:
+    """Name executed by EXEC/EXECUTE [@status =] proc, ignoring dynamic EXEC(...)."""
+    cursor = index + 1
+    if cursor + 1 < len(tokens) and tokens[cursor].text.startswith('@') and tokens[cursor + 1].text == '=':
+        cursor += 2
+    parts: list[str] = []
+    while cursor < len(tokens):
+        token = tokens[cursor]
+        if token.kind in {'word', 'bracket_identifier', 'quoted_identifier'} and not token.text.startswith('@') and (not parts or parts[-1] == '.'):
+            parts.append(token.text)
+        elif token.text == '.' and parts and parts[-1] != '.':
+            parts.append('.')
+        else:
+            break
+        cursor += 1
+    names = [part.strip('[]"').upper() for part in parts if part != '.']
+    return (''.join(parts), names[-1]) if names else None
+
+
 def _generation_choices(source: str) -> list[tuple[str, str, int, dict[str, str]]]:
-    """Observe explicit hints and aliased empty CAST results, not their necessity."""
+    """Observe explicit hints, backup-procedure calls, directly nested same-type
+    numeric conversions and aliased empty CAST results, not their necessity."""
     tokens = [token for token in _scan_sql_tokens(source)[0]
               if token.kind not in {'line_comment', 'block_comment'}]
     findings: list[tuple[str, str, int, dict[str, str]]] = []
     for index, token in enumerate(tokens):
+        if token.kind == 'word' and token.normalized in {'EXEC', 'EXECUTE'} and (called := _procedure_name(tokens, index)):
+            display, last = called
+            if re.search(r'_BAK(?:_|\d|$)', last):
+                findings.append(('backup_procedure_call', last, token.start, {'procedure': display}))
+        if token.kind == 'word' and (outer := _conversion(tokens, index)):
+            target, start, end, _ = outer
+            inner = _conversion(tokens, start) if start < end else None
+            # Only a conversion that is the whole argument is redundant; an
+            # aggregate or arithmetic over a converted value can change type.
+            if inner is not None and inner[0] == target and inner[3] == end - 1:
+                identity = repr([t.normalized for t in tokens[index:outer[3] + 1]])
+                findings.append(('redundant_numeric_convert_review', identity, token.start, {'target_type': target}))
         if token.kind != 'word' or index + 1 >= len(tokens) or tokens[index + 1].text != '(':
             continue
         closing = index + 2
@@ -406,13 +491,16 @@ def _review_generation_choices(candidate: str, original: str | None) -> list[Iss
     messages = {
         'locking_hint_review': 'Review this added locking hint against the actual target concurrency and transaction contract. Do not add UPDLOCK/HOLDLOCK routinely; retain them when the requested behavior or verified necessity requires them.',
         'synthetic_result_field_review': 'This output field is a typed empty or NULL placeholder. Check the requested target result/binding contract; remove excluded source-only fields instead of carrying them as placeholders, and keep a placeholder only when the actual output type contract requires it.',
+        'backup_procedure_call': 'This new call executes a backup (_BAK) procedure. Call the active procedure, or confirm that the user explicitly requested the backup copy.',
+        'redundant_numeric_convert_review': 'This conversion directly wraps another conversion to the same NUMERIC/DECIMAL type. Remove the redundant wrapper unless the actual type contract differs.',
     }
+    severities = {'backup_procedure_call': 'error'}
     issues: list[Issue] = []
     for code, identity, offset, details in _generation_choices(candidate):
         if previous[(code, identity)]:
             previous[(code, identity)] -= 1
             continue
-        issues.append(Issue(code, 'warning', messages[code],
+        issues.append(Issue(code, severities.get(code, 'warning'), messages[code],
                             line=_review_line_number(candidate, offset), details=details))
     return issues
 
@@ -508,7 +596,7 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
     result.checked.append('added or changed ISNULL/COALESCE and supported NULL/blank-guard CASE/IIF substitutions')
     result.not_checked.append('user authorization for value substitution and equivalent fallbacks outside supported syntax')
     result.checked.append('recognizable new direct XML writes beside an established parsed-staging boundary')
-    result.checked.append('explicit added locking hints and aliased typed-empty output fields')
+    result.checked.append('explicit added locking hints, backup (_BAK) procedure calls, directly nested same-type NUMERIC conversions and aliased typed-empty output fields')
     result.checked.append('supported repeated enclosing/sibling scalar-mode guards with no observed mode assignment')
     result.not_checked.append('necessity of locking hints/placeholders, persisted numbering scope, save-state branches and target parameter/result contracts')
     result.not_checked.append('necessity/ownership of repeated sibling phases, jumps/loop re-entry, complex or unbraced predicates, case-sensitive parameter binding and complete mode-to-result-set behavior')
