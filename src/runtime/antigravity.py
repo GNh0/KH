@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import re
+import sqlite3
 from uuid import UUID
 
 from src.context.store import Store, data_root, digest
@@ -82,6 +83,24 @@ def _release_originals(directory: Path, state: dict, keys=None) -> None:
             raise ValueError('Invalid Antigravity snapshot directory')
         SourceBaselines(directory / key, originals[key]).cleanup()
         del originals[key]
+
+
+def _lessons(storage: Path | None, workspace: Path, skill: str) -> str:
+    """Name recorded project lessons for this skill's domain; read-only, never creates a store."""
+    domain = {'sql-formatting': 'sql', 'csharp-designer-style-harness': 'csharp',
+              'pb-to-csharp-migration-harness': 'pb'}.get(skill)
+    if domain is None:
+        return ''
+    project = Store(storage or data_root(), str(workspace))
+    try:
+        with project.connect() as connection:
+            entries = project.compounds(connection, {domain, 'general'}) if connection is not None else []
+    except (OSError, ValueError, sqlite3.Error):
+        return ''
+    if not entries:
+        return ''
+    return (' Recorded project lessons for this domain (check against the current request): ' +
+            ', '.join(item['id'] for item in entries[:12]) + ('…' if len(entries) > 12 else '') + '.')
 
 
 def _handle(name: str, event: dict, storage: Path | None) -> dict:
@@ -190,6 +209,7 @@ def _handle(name: str, event: dict, storage: Path | None) -> dict:
                       json.dumps(reports, ensure_ascii=False))
             if state.pop('overflow', False):
                 notice += ' Other changed files exceed the report limit; inspect them directly.'
+            notice += _lessons(storage, workspaces[0], skill)
             store.save(connection, scope, state)
             return ({'decision': 'continue', 'reason': notice} if name == 'Stop'
                     else {'injectSteps': [{'ephemeralMessage': notice}]})
