@@ -39,6 +39,12 @@ def agent_definitions(root: Path) -> dict[str, str]:
                         'Inspect the linked current skill and source bodies before acting.\n\n' +
                         re.sub(r'\[([^\]]+)\]\(([^)]+)\)', absolute_link, text[header.end():].strip()))
         data = {'name': name, 'description': description, 'developer_instructions': instructions}
+        sandbox = fields.get('codex-sandbox-mode', '').strip()
+        if sandbox:
+            if sandbox not in {'read-only', 'workspace-write'}:
+                raise ValueError('Unsupported Codex sandbox mode for role: ' + name)
+            # Claude reads disallowedTools from the same frontmatter; Codex receives the sandbox.
+            data['sandbox_mode'] = sandbox
         body = '\n'.join(key + ' = ' + json.dumps(value, ensure_ascii=False) for key, value in data.items()) + '\n'
         if tomllib.loads(body) != data:
             raise ValueError('Generated agent TOML did not preserve the definition.')

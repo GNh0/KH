@@ -111,10 +111,16 @@ def read_procedure(source: str, path: str) -> Procedure:
     unknown_guards: set[str] = set()
     xml: dict[str, list[tuple[str, int]]] = {}
     unknown_xml = []
-    handles: dict[str, str] = {}
+    # XML document handles are scoped by statement blocks: a handle prepared
+    # before a BEGIN...END block stays valid inside it, while one prepared
+    # inside a block is unverified after the block ends. Removal or
+    # reassignment anywhere invalidates every enclosing view of that handle.
+    scopes: list[dict[str, str]] = [{}]
+    cases = 0
     newlines = [m.start() for m in re.finditer('\n', source)]
     for i, token in enumerate(body):
         word = token.normalized
+        handles = scopes[-1]
         line = bisect_right(newlines, token.start) + 1
         if word == 'IF':
             guard = _guard(body, i, allow_statement=True)
@@ -138,17 +144,35 @@ def read_procedure(source: str, path: str) -> Procedure:
             for j, (_, finish) in enumerate(spans):
                 if finish == i:
                     unknown_guards.add(branches[j].parameter)
-        if word in {'BEGIN', 'END', 'ELSE', 'IF', 'GOTO'}:
-            handles.clear()
+        following = body[i + 1].normalized if i + 1 < len(body) else ''
+        if word == 'CASE':
+            cases += 1
+        elif word == 'BEGIN' and following not in {'TRAN', 'TRANSACTION', 'DISTRIBUTED', 'DIALOG', 'CONVERSATION'}:
+            scopes.append(dict(handles))
+        elif word == 'END' and cases:
+            cases -= 1
+        elif word == 'END' and following != 'CONVERSATION':
+            if len(scopes) > 1:
+                scopes.pop()
+            else:
+                scopes[-1] = {}
+        elif word == 'GOTO':
+            scopes = [{} for _ in scopes]
+        handles = scopes[-1]
+
+        def invalidate(name: str) -> None:
+            for scope in scopes:
+                scope.pop(name, None)
+
         if word == 'SP_XML_PREPAREDOCUMENT' and i + 4 < len(body):
             handle, output, comma, arg = body[i + 1:i + 5]
-            handles.pop(handle.normalized, None)
+            invalidate(handle.normalized)
             if output.normalized in {'OUT', 'OUTPUT'} and comma.text == ',' and arg.normalized in parameters:
                 handles[handle.normalized] = arg.normalized
         elif word == 'SP_XML_REMOVEDOCUMENT' and i + 1 < len(body):
-            handles.pop(body[i + 1].normalized, None)
+            invalidate(body[i + 1].normalized)
         elif word in handles and i + 1 < len(body) and body[i + 1].text == '=':
-            handles.pop(word)
+            invalidate(word)
         elif word == 'OPENXML':
             args = body[i + 1:i + 6]
             if len(args) >= 5 and args[0].text == '(' and args[2].text == ',' and args[4].text in {',', ')'}:

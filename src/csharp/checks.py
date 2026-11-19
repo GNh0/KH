@@ -20,6 +20,7 @@ from .control_defaults import read_control_defaults, check_control_defaults, wit
 from .label_style import check_label_style
 from .syntax import linq_candidates, static_ui_sites
 from .source_preservation import remap_members
+from .subscriptions import check_duplicate_subscriptions
 
 
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
@@ -103,6 +104,15 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     for call in ("PostEditor", "UpdateCurrentRow"):
         if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
             result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))
+    if original is not None:
+        for call in ("PostEditor", "CloseEditor", "UpdateCurrentRow"):
+            if _call_count(code, call) < _call_count(before, call) and call not in allowed.get("removed_calls", []):
+                result.issues.append(Issue("edit_commit_call_removed", "warning", "An existing grid edit-commit call was removed. Without it the value still being edited can be lost on save; confirm the actual save path commits edits another way.", details={"call": call, "before": _call_count(before, call), "after": _call_count(code, call)}))
+        result.checked.append('removed PostEditor/CloseEditor/UpdateCurrentRow calls against the original')
+    partials = [candidate] + ([designer] if designer is not None else [])
+    prior = ([original] if original is not None else []) + ([original_designer if original_designer is not None else designer] if designer is not None else [])
+    result.issues.extend(check_duplicate_subscriptions(partials, prior if original is not None else None))
+    result.checked.append('repeated named-handler subscriptions to one event across the supplied partials')
     result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, reference=layout, defaults=defaults,
                          allowed_property_changes=allowed_property_changes, check_declarations=designer is None, check_style=check_style))
     if check_style:

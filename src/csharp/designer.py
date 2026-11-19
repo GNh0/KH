@@ -173,6 +173,10 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         result.not_checked.extend(preserved.not_checked)
         result.incomplete |= preserved.incomplete
         result.metadata.update(preserved.metadata)
+    from .subscriptions import check_duplicate_subscriptions
+    result.issues.extend(check_duplicate_subscriptions([designer, code_behind],
+                                                       [original, code_behind] if original is not None else None))
+    result.checked.append('repeated named-handler subscriptions to one event in this Designer and supplied code-behind')
     for match in re.finditer(r"\bthis\.(\w+)\s*=\s*(?:this\.)?(Create\w*|Build\w*)\s*\(", masked):
         result.issues.append(Issue("designer_factory_assignment", "warning",
                                   "Check Designer support for this factory assignment; static controls normally use explicit initialization.",

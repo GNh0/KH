@@ -15,6 +15,7 @@ Apply the current skill-creator guidance to skill changes. For a reported bad ad
 - Profile maintenance: [PB/C# profiles](references/pb-profile-maintenance.md).
 - Explicit conversation audits: [source-log audits](references/session-audit.md).
 - Realistic behavior evaluation: [scenario evaluation](references/scenario-evaluation.md). Implementation/audit workflow changes need actual tool-order and returned-source evidence as well as a correct final artifact.
+- Recorded project lessons (`kh_context.py compound-list`): when a lesson describes an observable, statically decidable pattern, propose a checker rule with false-positive cases and a regression test that fails before the fix; keep judgment-dependent lessons as lessons.
 - Keep audit and validation scratch outside source trees using [workspace files](../work-execution/references/workspace-files.md).
 
 Check the skills and paths actually discovered. Reproduce reported checker failures against the supplied/current project source and compare the repaired result with its actual contract; use regression tests to preserve those confirmed cases. Test/CI counts, self-ratings and simulations do not establish overall correctness, independent validation or actual agent execution. Distinguish source, branch, manifest, and installed cache; keep installation and publication within the actual request.

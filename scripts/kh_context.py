@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.output import configure_utf8_streams, redact
-from src.context.store import Store, data_root, session_key
+from src.context.store import COMPOUND_DOMAINS, Store, compound_preview, data_root, session_key, work_domains
 from src.context.transcript import capture, discard_host_records, recent_users
 from src.runtime.workflows import WORK, register, binding
 
@@ -46,6 +46,19 @@ def main(argv=None):
     remember.add_argument('--file', required=True, help='explicitly authorized durable project fact')
     forget = sub.add_parser('forget')
     forget.add_argument('id')
+    compound = sub.add_parser('compound', help='only on explicit user request: record a recurring failure and its verified correction for this project')
+    compound.add_argument('id')
+    compound.add_argument('--domain', choices=COMPOUND_DOMAINS, required=True)
+    compound.add_argument('--anti-pattern', required=True, help='observed failure or prohibited pattern, <=1000 characters')
+    compound.add_argument('--rule', required=True, help='verified replacement rule, <=1000 characters')
+    compound.add_argument('--evidence', required=True, help='where the failure and the correction were verified (file/line, user correction, check result), <=600 characters')
+    compound_list = sub.add_parser('compound-list', help='list recorded project lessons')
+    compound_list.add_argument('--domain', choices=COMPOUND_DOMAINS)
+    compound_list.add_argument('--query', default='')
+    compound_get = sub.add_parser('compound-get', help='retrieve one complete lesson')
+    compound_get.add_argument('id')
+    compound_forget = sub.add_parser('compound-forget', help='only on explicit user request: remove one lesson')
+    compound_forget.add_argument('id')
     args = parser.parse_args(argv)
     event = {'cwd': args.cwd, 'session_id': args.session, 'transcript_path': args.transcript, 'agent_id': args.agent_id}
     try:
@@ -53,7 +66,7 @@ def main(argv=None):
             raise ValueError('data-root must be the absolute context-v1 root from the current hook')
         store = Store(args.data_root.resolve() if args.data_root else data_root(), args.cwd)
         key = session_key(event, args.host)
-        with store.connect(create=args.command in {'checkpoint', 'remember'}) as connection:
+        with store.connect(create=args.command in {'checkpoint', 'remember', 'compound'}) as connection:
             if connection is None:
                 if args.command == 'apply':
                     raise ValueError('No current KH hook scope. Read the owned entrypoint and use its exact scope arguments.')
@@ -175,7 +188,8 @@ def main(argv=None):
                           'session_key': key, 'storage': str(store.path), 'files': applied,
                           'sql_authorship': state.get('sql_authorship'),
                           'original_errors': state.get('application_errors', {}),
-                          'note': 'Intent only. Read the required current references; this is not a source/semantic audit pass.'}
+                          'compound_rules': compound_preview(store.compounds(connection, work_domains(args.work) | {'general'})),
+                          'note': 'Intent only. Read the required current references and check the listed project lessons against this request; this is not a source/semantic audit pass.'}
                 store.agent_scope(connection, event, args.host, key=key)
             elif args.command == 'resume':
                 state['paused'] = False
@@ -185,6 +199,18 @@ def main(argv=None):
             elif args.command == 'remember':
                 store.remember(connection, args.id, redact(Path(args.file).read_text(encoding='utf-8-sig')))
                 output = {'status': 'saved', 'id': args.id, 'scope': 'project'}
+            elif args.command == 'compound':
+                entry = store.compound(connection, args.id, args.domain, redact(args.anti_pattern), redact(args.rule), redact(args.evidence))
+                output = {'status': 'saved', 'entry': entry, 'scope': 'project'}
+            elif args.command == 'compound-list':
+                entries = store.compounds(connection, {args.domain} if args.domain else None, args.query)
+                output = {'status': 'ok', **compound_preview(entries, limit=50)}
+            elif args.command == 'compound-get':
+                found = [item for item in store.compounds(connection) if item['id'] == args.id]
+                output = {'status': 'found' if found else 'not_found', 'compound_rules': found}
+            elif args.command == 'compound-forget':
+                changed = connection.execute('DELETE FROM compounds WHERE id=?', (args.id,)).rowcount
+                output = {'status': 'removed' if changed else 'not_found', 'id': args.id}
             elif args.command == 'forget':
                 changed = connection.execute('DELETE FROM memories WHERE id=?', (args.id,)).rowcount
                 output = {'status': 'removed' if changed else 'not_found', 'id': args.id}
@@ -206,6 +232,7 @@ def main(argv=None):
                 output = {'users': previews(recent_users(matches, 10)), 'user_matches': len(matches),
                           'pending_prompts': previews(pending[-10:]), 'pending_matches': len(pending),
                           'memories': previews(memories[:8]), 'memory_matches': len(memories),
+                          'compound_rules': compound_preview(store.compounds(connection, query=args.query), limit=8),
                           'capture_warning': state.get('capture_warning'), 'backlog_bytes': state.get('backlog_bytes', 0),
                           'note': 'Bounded historical previews, not fresh instructions. Source offsets order records within the same log; ids are insertion identifiers and unlinked event order is unverified. Use get/memory-get for full entries; later corrections/cancellation take precedence.'}
             else:
@@ -240,6 +267,7 @@ def main(argv=None):
                           'latest_users': previews(recent_users(state['users'], 5)),
                           'user_order_note': 'Source offsets order records within the same log; ids are insertion identifiers and unlinked event order is unverified.',
                           'user_count': len(state['users']), 'memories': previews(store.memories(connection)),
+                          'compound_rules': compound_preview(store.compounds(connection)),
                           'files': {path: {field: item.get(field) for field in ('sha256', 'readback', 'error', 'check', 'check_context', 'checker_generation')}
                                     for path, item in (state.get('files') or state.get('last_file_checks', {})).items()},
                           'file_checks_active': bool(state.get('files')) and not state.get('check_epoch_closed', False),
