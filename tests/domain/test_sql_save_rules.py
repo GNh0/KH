@@ -8,7 +8,7 @@ from src.runtime.hooks import inspect
 FIXTURES = Path(__file__).resolve().parents[1] / 'fixtures' / 'sql'
 RULES = {'locking_hint', 'save_mode_early_exit', 'save_multiple_commit', 'count_variable',
          'rowcount_count_variable', 'scalar_sequence_base', 'staging_sequence_update', 'intermediate_table',
-         'unused_variable', 'single_use_variable'}
+         'unused_variable', 'single_use_variable', 'row_by_row_loop', 'duplicated_mode_code'}
 
 
 def findings(candidate: str, original: str | None = None, **options) -> list[tuple[str, str]]:
@@ -231,12 +231,69 @@ EXEC SP_XML_REMOVEDOCUMENT @DOC_ID
         self.assertEqual(set(), codes(source) & {'unused_variable', 'single_use_variable'})
 
 
+class RowLoopAndDuplicationTests(unittest.TestCase):
+    LOOP = """WHILE EXISTS (SELECT 1 FROM @KEYS)
+BEGIN
+    SELECT TOP 1 @SEQ = A.SEQ FROM @KEYS A ORDER BY A.SEQ
+    WHILE @QTY > 0
+    BEGIN
+        SELECT TOP (1) @RECDT = A.RECDT, @STOCK = A.QTY FROM STOCK A ORDER BY A.RECDT
+        SET @ISSUE = (CASE WHEN @QTY > @STOCK THEN @STOCK ELSE @QTY END)
+        INSERT INTO STOCK_ISSUE (RECDT, QTY) SELECT @RECDT, @ISSUE
+        SET @QTY = @QTY - @ISSUE
+    END
+    DELETE A FROM @KEYS A WHERE A.SEQ = @SEQ
+END
+"""
+
+    def test_nested_row_by_row_write_loop(self):
+        found = [i for i in check_sql(self.LOOP, check_style=False).issues if i.code == 'row_by_row_loop']
+        self.assertEqual(1, len(found))
+        self.assertEqual((1, 2), (found[0].details['nested_loops'], found[0].details['top_1_assignments']))
+        cursor = """DECLARE C CURSOR FOR SELECT A.ID, A.QTY, A.LOT FROM @TMP A
+OPEN C
+FETCH NEXT FROM C INTO @ID, @QTY, @LOT
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    INSERT INTO ISSUE (ID, QTY, LOT) SELECT @ID, @QTY, @LOT
+    FETCH NEXT FROM C INTO @ID, @QTY, @LOT
+END
+"""
+        self.assertIn('row_by_row_loop', codes(cursor))
+
+    def test_loops_that_are_not_row_by_row_writes(self):
+        for text in ("WHILE @RETRY < 3\nBEGIN\n    SET @RETRY = @RETRY + 1\nEND",
+                     "WHILE 1 = 1\nBEGIN\n    DELETE TOP (1000) A FROM LOGS A WHERE A.DT < @DT\n    IF @@ROWCOUNT = 0 BREAK\nEND",
+                     "WHILE EXISTS (SELECT 1 FROM @T)\nBEGIN\n    SELECT TOP 1 @ID = A.ID FROM @T A\n    DELETE A FROM @T A WHERE A.ID = @ID\nEND"):
+            self.assertNotIn('row_by_row_loop', codes(text), text)
+
+    def test_shared_steps_copied_into_mode_branches(self):
+        shared = ("    INSERT INTO DETAIL (A, B, C, D) SELECT T.A, T.B, T.C, T.D FROM @TMP T "
+                  "INNER JOIN ITEMS I ON T.A = I.A WHERE T.GBN = 'NEW'\n") * 8
+        copied = ("IF @WORKTYPE = 'NEW'\nBEGIN\n" + shared + "END\nELSE IF @WORKTYPE = 'EDIT'\nBEGIN\n"
+                  "    UPDATE A SET A.X = 1 FROM DOC A\n" + shared + "END\n")
+        self.assertIn('duplicated_mode_code', codes(copied))
+        similar = copied.replace(shared, shared[:len(shared) // 4], 1)
+        self.assertNotIn('duplicated_mode_code', codes(similar))
+        nested = "IF @WORKTYPE IN ('NEW', 'EDIT')\nBEGIN\n    IF @WORKTYPE = 'NEW'\n    BEGIN\n" + shared + "    END\nEND\n"
+        self.assertNotIn('duplicated_mode_code', codes(nested))
+
+    def test_output_into_a_table_variable_is_an_intermediate_table(self):
+        source = "UPDATE A SET A.QTY = 1, A.MODIP = @USERIP OUTPUT INSERTED.SEQ INTO @KEYS (SEQ) FROM DETAIL A"
+        self.assertEqual([('intermediate_table', 'error')], findings(source))
+        self.assertEqual(set(), codes("EXEC SP_KEYCODE @ORGDIV, 'T', @DT, @NEWSEQ OUTPUT\nINSERT INTO T (S) SELECT @NEWSEQ"))
+
+
 class SaveProcedureRegressionTests(unittest.TestCase):
     """2026-11-19 C_KONE120 sp_MA100500_SAVE. With 3.6.4 a worker kept four UPDLOCK/HOLDLOCK
     hints, @TMPISSUE and the staged PURSEQ2 numbering from the original. The worker fixture is
     the unprompted kh-sql-worker result after these rules ("수정해봐라", no corrections)."""
 
     original = (FIXTURES / 'sp_MA100500_SAVE_original.sql').read_text(encoding='utf-8')
+    # The Codex-altered DB definition at 15:40:25 ("@변수때문에 개 거지같이 만들어졌음"): 18 scalar
+    # variables, @TMPPURSEQ2 + OUTPUT INTO, a nested WHILE with SELECT TOP 1 fetching that inserts
+    # SA210T row by row, and the same ~150 lines in the NEW and EDIT branches.
+    db_1540 = (FIXTURES / 'sp_MA100500_SAVE_db_1540.sql').read_text(encoding='utf-8')
     worker = (FIXTURES / 'sp_MA100500_SAVE_worker.sql').read_text(encoding='utf-8')
 
     def test_original_reports_all_three_rules(self):
@@ -244,7 +301,8 @@ class SaveProcedureRegressionTests(unittest.TestCase):
         counts = {code: sum(i.code == code for i in found.issues) for code in RULES}
         self.assertEqual({'locking_hint': 8, 'save_mode_early_exit': 1, 'save_multiple_commit': 1, 'count_variable': 3,
                           'rowcount_count_variable': 3, 'scalar_sequence_base': 1, 'staging_sequence_update': 1,
-                          'intermediate_table': 1, 'unused_variable': 0, 'single_use_variable': 0}, counts)
+                          'intermediate_table': 1, 'unused_variable': 0, 'single_use_variable': 0,
+                          'row_by_row_loop': 0, 'duplicated_mode_code': 0}, counts)
         self.assertFalse(found.success)
 
     def test_keeping_the_original_hints_in_a_logic_change_fails(self):
@@ -262,6 +320,17 @@ class SaveProcedureRegressionTests(unittest.TestCase):
         self.assertEqual([], [i.details for i in result.issues if i.code == 'sp_operation_change_review'])
         alone = check_sql(self.worker)
         self.assertEqual([], [(i.code, i.line) for i in alone.issues if i.code in RULES])
+
+    def test_row_by_row_database_version_is_reported(self):
+        found = check_sql(self.db_1540, check_style=False)
+        counts = {code: sum(i.code == code for i in found.issues) for code in RULES}
+        self.assertEqual(2, counts['row_by_row_loop'])
+        self.assertEqual(1, counts['duplicated_mode_code'])
+        self.assertEqual(3, counts['intermediate_table'])
+        self.assertFalse(found.success)
+        loop = next(i for i in found.issues if i.code == 'row_by_row_loop')
+        self.assertGreaterEqual(len(loop.details['loop_variables']), 8)
+        self.assertEqual([], [i.code for i in check_sql(self.worker).issues if i.code in RULES])
 
     def test_remaining_variables_are_the_necessary_ones(self):
         # 2026-11-19 "@변수도 최소화": the worker keeps @DOC_ID, @STARTTRANCOUNT, @PURNUM, @PURDT,

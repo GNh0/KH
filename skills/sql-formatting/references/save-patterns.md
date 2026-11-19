@@ -12,6 +12,9 @@
 | `IF @WORKTYPE = 'DELETE' BEGIN … COMMIT … RETURN END` 뒤에 나머지 모드를 조건 없이 이어 쓰기, 여러 곳의 COMMIT | 아래 골격의 IF/ELSE IF 분기, 끝에서 COMMIT 한 번 |
 | `@NEWCOUNT`·`@MODCOUNT`·`@DELCOUNT` 같은 건수 변수, `IF @@ROWCOUNT <> @변수`, `IF @CNT > 0` | 쓰기 전 `IF EXISTS` / `IF NOT EXISTS` 검증(전체 키, LEFT OUTER JOIN … IS NULL, 중복 키 GROUP BY HAVING) |
 | `SELECT @LASTSEQ = ISNULL(MAX(…), 0)` 뒤 `@LASTSEQ + RN`, 스테이징에 순번을 먼저 `UPDATE` | INSERT 안에서 `ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (ORDER BY …)`와 파생 MAX JOIN. 뒤 단계는 쓴 대상 행을 업무 키로 JOIN한다. |
+| 쓰기 문장을 감싼 WHILE·커서 루프에서 중첩 루프·`SELECT TOP 1 @변수`·루프 변수 여러 개로 한 행씩 처리 | [배분 INSERT](#배분-insert)처럼 한 문장 안의 JOIN·파생(누적 비교)으로 쓴다. 루프는 집합으로 풀 수 없을 때만 쓰고 이유를 밝힌다. |
+| NEW·EDIT 분기에 같은 상세 INSERT·배분·사후 검증을 복사 | `ELSE IF @WORKTYPE IN ('NEW', 'EDIT')` 안의 모드별 부분 뒤에 한 번만 둔다. |
+| `OUTPUT INSERTED.… INTO @테이블`로 쓴 키를 모아 다시 읽기 | 뒤 단계가 쓴 대상 행을 업무 키로 JOIN한다. |
 | 한 번 대입하고 한 번 읽는 변수, 선언만 하거나 대입만 하고 읽지 않는 변수, 헤더 테이블 변수 값을 복사한 변수 | 그 자리에서 식을 쓰거나 테이블 변수·대상 행을 JOIN해 읽는다. |
 | `INSERT INTO @TMPISSUE … SELECT … FROM 실제 테이블`처럼 중간 결과를 테이블 변수·임시 테이블에 담았다가 다시 읽기 | 최종 INSERT/UPDATE/DELETE 안의 JOIN·파생 테이블로 바로 계산한다. 테이블 변수는 XML 파싱(`FROM OPENXML`)에만 쓴다. |
 
@@ -122,7 +125,87 @@ BEGIN
 END
 ```
 
-검증 실패는 분기 안에서 `RAISERROR … RETURN`으로 끝내고 CATCH가 롤백한다. 쓰기 뒤에 건수를 다시 세지 않는다. 같은 업무의 모드 조건을 준비·검증·쓰기마다 반복하지 않는다. 검사기는 잠금 힌트(`locking_hint`), 쓰기 후 RETURN하는 모드 블록(`save_mode_early_exit`), 여러 COMMIT(`save_multiple_commit`), 건수 변수(`count_variable`, `rowcount_count_variable`), MAX 순번 변수(`scalar_sequence_base`), 순번 스테이징 UPDATE(`staging_sequence_update`), 중간 결과 테이블(`intermediate_table`), 읽지 않는 변수(`unused_variable`), 한 번만 쓰는 변수(`single_use_variable`)를 원본에 있던 것까지 오류로 보고한다. 참고 SP에 같은 형태가 있어도 근거가 아니다.
+검증 실패는 분기 안에서 `RAISERROR … RETURN`으로 끝내고 CATCH가 롤백한다. 쓰기 뒤에 건수를 다시 세지 않는다. 같은 업무의 모드 조건을 준비·검증·쓰기마다 반복하지 않는다. 검사기는 잠금 힌트(`locking_hint`), 쓰기 후 RETURN하는 모드 블록(`save_mode_early_exit`), 여러 COMMIT(`save_multiple_commit`), 건수 변수(`count_variable`, `rowcount_count_variable`), MAX 순번 변수(`scalar_sequence_base`), 순번 스테이징 UPDATE(`staging_sequence_update`), 중간 결과 테이블(`intermediate_table`), 읽지 않는 변수(`unused_variable`), 한 번만 쓰는 변수(`single_use_variable`), 행 단위 루프 남발(`row_by_row_loop`), 분기 복사(`duplicated_mode_code`)를 원본에 있던 것까지 오류로 보고한다. 참고 SP에 같은 형태가 있어도 근거가 아니다.
+
+## 배분 INSERT
+
+재고·선행 입고를 요청 행에 먼저 들어온 순서대로 나눠 쓰는 경우다. 한 행씩 꺼내는 루프나 중간 테이블 없이 INSERT 한 문장으로 쓴다. 요청 행(A)과 잔량이 있는 재고(B)에 각각 같은 묶음 키별 누적 시작·끝 수량을 파생으로 만들고, 두 구간이 겹치는 행을 JOIN한다. 배분량은 `작은 끝 - 큰 시작`이다. 가상 스키마이며 STOCK_RECEIPT는 COMPANY_ID/RECEIPT_NO/RECEIPT_LINE이 유일하다.
+
+```sql
+INSERT INTO STOCK_ISSUE
+(
+       COMPANY_ID  , ISSUE_NO  , ISSUE_LINE
+     , RECEIPT_NO  , RECEIPT_LINE , DOCUMENT_NO
+     , LINE_NO     , QTY
+)
+SELECT @COMPANY_ID , @ISSUE_NO , ROW_NUMBER() OVER (ORDER BY A.LINE_NO, B.RECEIPT_DT, B.RECEIPT_NO, B.RECEIPT_LINE)
+     , B.RECEIPT_NO , B.RECEIPT_LINE , @DOCUMENT_NO
+     , A.LINE_NO    , (CASE WHEN A.END_QTY < B.END_QTY THEN A.END_QTY ELSE B.END_QTY END)
+                      - (CASE WHEN A.START_QTY > B.START_QTY THEN A.START_QTY ELSE B.START_QTY END)
+FROM (
+      SELECT T.LINE_NO
+           , T.ITEM_CODE
+           , T.LOT_NO
+           , SUM(T.QTY) OVER (PARTITION BY T.ITEM_CODE, T.LOT_NO ORDER BY T.LINE_NO ROWS UNBOUNDED PRECEDING) - T.QTY AS START_QTY
+           , SUM(T.QTY) OVER (PARTITION BY T.ITEM_CODE, T.LOT_NO ORDER BY T.LINE_NO ROWS UNBOUNDED PRECEDING) AS END_QTY
+      FROM DOCUMENT_DETAIL T
+      WHERE T.COMPANY_ID = @COMPANY_ID
+        AND T.DOCUMENT_NO = @DOCUMENT_NO
+     ) A
+        INNER JOIN (
+                    SELECT T.RECEIPT_NO
+                         , T.RECEIPT_LINE
+                         , T.RECEIPT_DT
+                         , T.ITEM_CODE
+                         , T.LOT_NO
+                         , SUM(T.QTY - ISNULL(T1.QTY, 0)) OVER (PARTITION BY T.ITEM_CODE, T.LOT_NO
+                                                                ORDER BY T.RECEIPT_DT, T.RECEIPT_NO, T.RECEIPT_LINE
+                                                                ROWS UNBOUNDED PRECEDING) - (T.QTY - ISNULL(T1.QTY, 0)) AS START_QTY
+                         , SUM(T.QTY - ISNULL(T1.QTY, 0)) OVER (PARTITION BY T.ITEM_CODE, T.LOT_NO
+                                                                ORDER BY T.RECEIPT_DT, T.RECEIPT_NO, T.RECEIPT_LINE
+                                                                ROWS UNBOUNDED PRECEDING) AS END_QTY
+                    FROM STOCK_RECEIPT T
+                            LEFT OUTER JOIN (
+                                             SELECT T.RECEIPT_NO
+                                                  , T.RECEIPT_LINE
+                                                  , SUM(T.QTY) AS QTY
+                                             FROM STOCK_ISSUE T
+                                             WHERE T.COMPANY_ID = @COMPANY_ID
+                                             GROUP BY T.RECEIPT_NO, T.RECEIPT_LINE
+                                            ) T1
+                                            ON T.RECEIPT_NO = T1.RECEIPT_NO
+                                            AND T.RECEIPT_LINE = T1.RECEIPT_LINE
+                    WHERE T.COMPANY_ID = @COMPANY_ID
+                      AND T.QTY > ISNULL(T1.QTY, 0)
+                   ) B
+                   ON A.ITEM_CODE = B.ITEM_CODE
+                   AND A.LOT_NO = B.LOT_NO
+                   AND A.START_QTY < B.END_QTY
+                   AND B.START_QTY < A.END_QTY
+
+IF EXISTS (
+           SELECT 1
+           FROM DOCUMENT_DETAIL A
+                   LEFT OUTER JOIN (
+                                    SELECT T.LINE_NO
+                                         , SUM(T.QTY) AS QTY
+                                    FROM STOCK_ISSUE T
+                                    WHERE T.COMPANY_ID = @COMPANY_ID
+                                      AND T.DOCUMENT_NO = @DOCUMENT_NO
+                                    GROUP BY T.LINE_NO
+                                   ) B
+                                   ON A.LINE_NO = B.LINE_NO
+           WHERE A.COMPANY_ID = @COMPANY_ID
+             AND A.DOCUMENT_NO = @DOCUMENT_NO
+             AND A.QTY <> ISNULL(B.QTY, 0)
+          )
+BEGIN
+    RAISERROR('The stock is not enough for the requested quantity.', 16, 1);
+    RETURN;
+END
+```
+
+재고가 모자라면 배분 합계가 요청보다 작아 뒤의 검증이 실패하고 CATCH가 롤백한다. EDIT에서 다시 배분할 행만 쓰려면 A에 그 행의 업무 키 조건(이미 출고가 없는 행 등)을 더한다. 같은 키의 요청 2행, 재고 여러 행에 걸친 배분, 재고 부족, 다른 회사의 같은 LOT을 확인한다.
 
 ## Parsed rows and NEW
 
