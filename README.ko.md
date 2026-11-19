@@ -65,7 +65,7 @@ KH 자체에 AI 모델, 에이전트 실행기 또는 API 크레딧이 들어 �
 | [rule-audit](skills/rule-audit/SKILL.md) | 적용 규칙 준수 감사, 위반 부분만 수정·재검사 |
 | [systematic-debugging](skills/systematic-debugging/SKILL.md) | 오류 재현과 실제 실행 경로의 원인 분석 |
 | [artifact-checks](skills/artifact-checks/SKILL.md) | 전달물 내용·파일 구조·렌더링 확인 |
-| [context-handoff](skills/context-handoff/SKILL.md) | 작업 복원과 명시적으로 저장한 영구 프로젝트 메모리 |
+| [context-handoff](skills/context-handoff/SKILL.md) | 작업 복원, 명시적으로 저장한 영구 프로젝트 메모리와 근거가 있는 프로젝트 교훈(compound) |
 | [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH 패키지·검사기·프로필·요청한 소스 로그 감사 |
 
 ## 작업 방식

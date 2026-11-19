@@ -208,3 +208,17 @@ class AgentLinkageTests(unittest.TestCase):
                 controls, _deps, problems = observed_control_sources(state, target)
                 self.assertEqual([], controls)
                 self.assertEqual([], problems)
+
+
+class AuditorRestrictionTests(unittest.TestCase):
+    def test_independent_auditor_cannot_edit_on_either_host(self):
+        from pathlib import Path
+        import tomllib
+        from src.maintenance.agents import agent_definitions
+        root = Path(__file__).resolve().parents[2]
+        header = (root / 'agents/kh-rule-auditor.md').read_text(encoding='utf-8').split('---')[1]
+        denied = next(line for line in header.splitlines() if line.startswith('disallowedTools:'))
+        self.assertTrue({'Edit', 'Write', 'NotebookEdit'} <= {item.strip() for item in denied.split(':', 1)[1].split(',')})
+        definitions = {name: tomllib.loads(body) for name, body in agent_definitions(root).items()}
+        self.assertEqual('read-only', definitions['kh-rule-auditor']['sandbox_mode'])
+        self.assertNotIn('sandbox_mode', definitions['kh-sql-worker'])

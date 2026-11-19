@@ -7,7 +7,7 @@ description: Audit explicit skill/user-rule compliance requests or repair a know
 
 Use for an explicit compliance review or confirmed rule violation. Ordinary conversation, planning, handoff and a completed compliant code review do not trigger another audit merely because they used a skill. Stop/cancellation overrides inspection and repair.
 
-For SQL/PB/C# project code, use the single [source-style cycle](../work-execution/references/source-style-cycle.md). Review its applicable rules and evidence at the current stage; do not restart a completed cycle, recursively audit this skill or reload the catalog. Include domain guidance omitted as responsibilities changed.
+For SQL/PB/C# project code, use the single [source-style cycle](../work-execution/references/source-style-cycle.md), including its [scenario table](../work-execution/references/source-style-cycle.md#시나리오-표): a change verified only for included rows/states is not compliant until excluded and boundary cases are checked or reported unverified. Review its applicable rules and evidence at the current stage; do not restart a completed cycle, recursively audit this skill or reload the catalog. Include domain guidance omitted as responsibilities changed.
 
 For other skill-guided work, compare the latest user requirements, applicable instructions and actual result. Distinguish verified, violated and unverified rules. Findings need a rule source, affected location, observed mismatch and correction. Examples, a source read, intention, test counts and prior claimed passes do not establish compliance. Retrieve missing/truncated evidence and preserve unrelated user work.
 

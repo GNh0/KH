@@ -121,6 +121,21 @@ class ScreenContractTests(unittest.TestCase):
         removed = self.check(store=STORE.replace('SELECT A.Id', 'EXEC sp_xml_removedocument @h; SELECT A.Id'))
         self.assertIn('openxml_path_unresolved', [i.code for i in removed.issues])
 
+    def test_xml_handle_survives_nested_blocks_but_not_their_exit(self):
+        # The common SAVE shape prepares once, then reads inside mode/TRY blocks.
+        guarded = STORE.replace(" SELECT A.Id", " IF @key > 0\n BEGIN TRY\n  BEGIN TRAN\n  SELECT CASE WHEN 1 = 1 THEN 1 END,\n A.Id").replace(
+            "WITH (Id int) A\n", "WITH (Id int) A\n  COMMIT TRAN\n END TRY\n BEGIN CATCH\n  ROLLBACK TRAN\n END CATCH\n")
+        self.assertNotIn('openxml_path_unresolved', [i.code for i in self.check(store=guarded).issues])
+        wrong = self.check(store=guarded.replace('/ROOT/Line', '/ROOT/Other'))
+        self.assertIn('xml_row_name_mismatch', [i.code for i in wrong.issues])
+        # A handle prepared only inside an earlier block is not established afterwards.
+        scoped = STORE.replace(' EXEC sp_xml_preparedocument @h OUTPUT, @doc\n',
+                               ' IF @key > 0\n BEGIN\n  EXEC sp_xml_preparedocument @h OUTPUT, @doc\n END\n')
+        self.assertIn('openxml_path_unresolved', [i.code for i in self.check(store=scoped).issues])
+        # Removal inside a block also invalidates the enclosing handle.
+        removed = STORE.replace(' SELECT A.Id', ' IF @key > 0\n BEGIN\n  EXEC sp_xml_removedocument @h\n END\n SELECT A.Id')
+        self.assertIn('openxml_path_unresolved', [i.code for i in self.check(store=removed).issues])
+
     def test_literals_comments_and_unrelated_helpers_are_not_calls(self):
         caller = CALLER.replace('var ds = Query(Choice.Detail);', '''
             // db.ExecSP("Other", new DbParameter("@junk", 1));

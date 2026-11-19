@@ -47,7 +47,7 @@ def validate_designer_renames(model: DesignerModel, renames: Mapping[str, str]) 
 def compare_existing_properties(model: DesignerModel, baseline: DesignerModel,
                                 allowed_changes: Sequence[str] = ()) -> CheckResult:
     result = CheckResult(checked=['retained Designer type and explicit property assignments'],
-                         not_checked=['removed/new controls, resource contents, collection calls, initialization order and indirect/runtime property values'])
+                         not_checked=['why members were removed or added, resource contents, collection calls, initialization order and indirect/runtime property values'])
     matched = set(model.controls) & set(baseline.controls)
     changed = 0
     exclusions = set(allowed_changes)
@@ -70,6 +70,17 @@ def compare_existing_properties(model: DesignerModel, baseline: DesignerModel,
             result.issues.append(Issue('designer_existing_properties_changed', 'warning',
                 'Retained source properties were changed, added or removed. Reconcile each delta with the requested migration; do not rebuild defaults.',
                 details={'member': name, 'properties': differences}))
+    missing = sorted(set(baseline.controls) - set(model.controls))
+    if matched:
+        added = set(model.controls) - set(baseline.controls)
+        for name in missing:
+            if name + '.member' in exclusions:
+                continue
+            same_type = sorted(n for n in added if model.controls[n].type_name == baseline.controls[name].type_name)
+            result.issues.append(Issue('designer_original_member_missing', 'warning',
+                'An original Designer member is absent. Confirm the user requested its removal, or declare the rename '
+                'with --member-rename so its properties are compared.',
+                details={'member': name, 'type': baseline.controls[name].type_name, 'possible_renames': same_type}))
     if baseline.controls and model.controls and not matched:
         result.incomplete = True
         result.issues.append(Issue('designer_baseline_unmatched', 'warning',
