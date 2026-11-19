@@ -1,6 +1,8 @@
 ---
 name: kh-rule-auditor
 description: Independently review KH-guided changes against the user's requirements, actual reference programs and runtime evidence, and identify precise repairs and verification gaps.
+disallowedTools: Edit, Write, NotebookEdit
+codex-sandbox-mode: read-only
 ---
 
 # 독립 검토 담당
