@@ -7,7 +7,7 @@
 - 선행 쉼표 표기를 따른다. SELECT 목록, UPDATE SET, SP 인자 순서와 기본값을 맞춘다. 별칭 AS와 출력 열 AS를 구별한다.
 - 일반 JOIN의 ON과 그 조건의 AND는 JOIN의 I 열에 맞춘다. 파생 FROM/JOIN은 여는 괄호와 닫는 괄호를 맞추고 안쪽 절은 한 칸 더 들인다. 파생 JOIN의 ON·AND·OR는 여는 괄호 열에 둔다. 중첩·UNION은 각 괄호를 기준으로 한다.
 - EXISTS 괄호는 같은 열, 내부 SQL은 다음 줄에서 한 칸 더 들인다. 짧은 GROUP BY·ORDER BY는 한 줄, CASE 괄호는 해당 작성 예시와 맞춘다. BETWEEN의 AND는 해당 식 안에 둔다.
-- INSERT 열과 SELECT/VALUES 값은 순서·줄 그룹·실제 시작 열을 대응시킨다. 두 목록에서 가장 긴 표현에 맞춰 공백으로 정렬한다. UPDATE SET은 세로 목록으로 쓴다.
+- INSERT 열과 SELECT/VALUES 값은 순서·줄 그룹·실제 시작 열을 대응시킨다. 같은 순번의 열과 값은 같은 시작 위치에 두고, 각 칸은 그 칸의 열·값 중 긴 쪽에 맞춰 공백을 둔다. **30자 이상인 긴 값(식·CASE·ROW_NUMBER 등)이 그 줄의 마지막 항목이 아니면, 그 값부터 다음 줄로 넘긴다.** INSERT 열 목록도 같은 위치에서 줄을 넘긴다. 긴 값 하나에 맞추려고 다른 줄의 열을 수십 칸씩 띄우지 않는다([INSERT 열 대응 예시](#insert-열-대응-예시)). UPDATE SET은 세로 목록으로 쓴다.
 - JOIN 종류·순서·조건, 출력 타입·필드, 리터럴·한글·기존 주석을 보존한다. 주석 처리 요청은 원문을 남긴다. 필요한 JOIN·IF EXISTS·업무 함수와 상수는 실제 의미를 지킨다.
 - JOIN으로 변경할 때는 전체 키·NULL·중복·집계 단위, 함수 원본·실행 의미를 확인한다. 다중 결과는 각 결과의 기간·필터·집계 키·UNION·비율을 맞춘다.
 - 요청이 UPDATE 하나면 해당 UPDATE FROM/CROSS APPLY를 완성한다. DB 변경은 지정한 연결·DB·키, 트랜잭션과 변경/제외 행을 확인한다. 중간 테이블은 [필요성 기준](../../work-execution/references/preferences.md)을 따른다.
@@ -127,4 +127,26 @@ FROM ORDERS A
     FROM SOURCE A
 ```
 
-기존의 넉넉한 열 간격은 유지한다. 여러 줄 표현·주석이 있으면 최종 문자열에서 열/값의 의미와 시작 열을 직접 확인한다.
+긴 값은 줄 끝에 둔다. 아래에서 `ISNULL(C.SEQ, 0) + ROW_NUMBER() …`는 그 줄의 마지막 항목이고, 다음 열 `ITEMCD`는 다음 줄에서 시작한다. 긴 값이 줄 중간에 오는 형태는 쓰지 않는다.
+
+```sql
+    INSERT INTO TARGET
+    (
+           ORGDIV   , DOCNO  , SEQ
+         , ITEMCD   , QTY    , UNITWGT
+         , TOTWGT
+    )
+    SELECT @ORGDIV  , @DOCNO , ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (ORDER BY A.SEQ)
+         , A.ITEMCD , A.QTY  , A.UNITWGT
+         , A.QTY * A.UNITWGT * (CASE WHEN A.WGTUNIT = 'G' THEN 0.001 ELSE 1 END)
+    FROM SOURCE A
+```
+
+쓰지 않는 형태: 긴 값이 줄 중간에 있어서 다른 줄의 같은 칸이 수십 칸씩 벌어진다.
+
+```sql
+    SELECT @ORGDIV , @DOCNO    , ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (ORDER BY A.SEQ) , A.ITEMCD
+         , A.QTY   , A.UNITWGT , A.QTY * A.UNITWGT                                      , GETDATE()
+```
+
+긴 값 때문에 이미 벌어진 간격은 위처럼 줄을 넘겨 없앤다. 여러 줄 표현·주석이 있으면 최종 문자열에서 열/값의 의미와 시작 열을 직접 확인한다.

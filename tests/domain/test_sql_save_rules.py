@@ -8,7 +8,8 @@ from src.runtime.hooks import inspect
 FIXTURES = Path(__file__).resolve().parents[1] / 'fixtures' / 'sql'
 RULES = {'locking_hint', 'save_mode_early_exit', 'save_multiple_commit', 'count_variable',
          'rowcount_count_variable', 'scalar_sequence_base', 'staging_sequence_update', 'intermediate_table',
-         'unused_variable', 'single_use_variable', 'row_by_row_loop', 'duplicated_mode_code'}
+         'unused_variable', 'single_use_variable', 'row_by_row_loop', 'duplicated_mode_code',
+         'insert_long_value_not_last'}
 
 
 def findings(candidate: str, original: str | None = None, **options) -> list[tuple[str, str]]:
@@ -284,6 +285,47 @@ END
         self.assertEqual(set(), codes("EXEC SP_KEYCODE @ORGDIV, 'T', @DT, @NEWSEQ OUTPUT\nINSERT INTO T (S) SELECT @NEWSEQ"))
 
 
+class LongInsertValueTests(unittest.TestCase):
+    """2026-11-19: "너무 길고 그 줄의 마지막 컬럼이 아닐 경우 다음 줄로 넘어가야 하는 건데"."""
+    PADDED = """INSERT INTO TARGET
+(
+       ORGDIV   , DOCNO    , SEQ                                                   , ITEMCD
+     , QTY      , UNITWGT  , TOTWGT                                                , REGDT
+)
+SELECT @ORGDIV  , @DOCNO   , ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (ORDER BY A.SEQ) , A.ITEMCD
+     , A.QTY    , A.UNITWGT, A.QTY * A.UNITWGT                                     , GETDATE()
+FROM SOURCE A
+"""
+    WRAPPED = """INSERT INTO TARGET
+(
+       ORGDIV   , DOCNO  , SEQ
+     , ITEMCD   , QTY    , UNITWGT
+     , TOTWGT   , REGDT
+)
+SELECT @ORGDIV  , @DOCNO , ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (ORDER BY A.SEQ)
+     , A.ITEMCD , A.QTY  , A.UNITWGT
+     , A.QTY * A.UNITWGT * (CASE WHEN A.WGTUNIT = 'G' THEN 0.001 ELSE 1 END)
+     , GETDATE()
+FROM SOURCE A
+"""
+
+    def test_long_value_in_the_middle_of_a_line(self):
+        result = check_sql(self.PADDED, check_style=False)
+        found = [i for i in result.issues if i.code == 'insert_long_value_not_last']
+        self.assertEqual([(6, 'error')], [(i.line, i.severity) for i in found])
+        self.assertEqual(53, found[0].details['width'])
+        formatting = check_sql(self.PADDED, original=self.PADDED)
+        self.assertIn(('insert_long_value_not_last', 'error'), {(i.code, i.severity) for i in formatting.issues})
+
+    def test_long_value_at_the_end_of_its_line_or_short_values(self):
+        self.assertNotIn('insert_long_value_not_last', codes(self.WRAPPED))
+        short = self.PADDED.replace('ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (ORDER BY A.SEQ)', 'ISNULL(C.SEQ, 0) + B.RN_29CHA')
+        self.assertEqual(29, len('ISNULL(C.SEQ, 0) + B.RN_29CHA'))
+        self.assertNotIn('insert_long_value_not_last', codes(short))
+        self.assertEqual([], [i for i in check_sql(self.PADDED, check_style=False, check_preferences=False).issues
+                              if i.code == 'insert_long_value_not_last'])
+
+
 class SaveProcedureRegressionTests(unittest.TestCase):
     """2026-11-19 C_KONE120 sp_MA100500_SAVE. With 3.6.4 a worker kept four UPDLOCK/HOLDLOCK
     hints, @TMPISSUE and the staged PURSEQ2 numbering from the original. The worker fixture is
@@ -302,7 +344,7 @@ class SaveProcedureRegressionTests(unittest.TestCase):
         self.assertEqual({'locking_hint': 8, 'save_mode_early_exit': 1, 'save_multiple_commit': 1, 'count_variable': 3,
                           'rowcount_count_variable': 3, 'scalar_sequence_base': 1, 'staging_sequence_update': 1,
                           'intermediate_table': 1, 'unused_variable': 0, 'single_use_variable': 0,
-                          'row_by_row_loop': 0, 'duplicated_mode_code': 0}, counts)
+                          'row_by_row_loop': 0, 'duplicated_mode_code': 0, 'insert_long_value_not_last': 0}, counts)
         self.assertFalse(found.success)
 
     def test_keeping_the_original_hints_in_a_logic_change_fails(self):
@@ -316,10 +358,12 @@ class SaveProcedureRegressionTests(unittest.TestCase):
     def test_unprompted_worker_result_passes_the_rules(self):
         result = check_sql(self.worker, original=self.original, review_sp_changes=True, compare_original=False,
                            require_procedure_header=True)
-        self.assertEqual([], [(i.code, i.line) for i in result.issues if i.code in RULES or i.severity == 'error'])
+        # The worker ran before the long-value rule; its one mid-line ROW_NUMBER value is the known gap.
+        self.assertEqual([('insert_long_value_not_last', 453)],
+                         [(i.code, i.line) for i in result.issues if i.code in RULES or i.severity == 'error'])
         self.assertEqual([], [i.details for i in result.issues if i.code == 'sp_operation_change_review'])
         alone = check_sql(self.worker)
-        self.assertEqual([], [(i.code, i.line) for i in alone.issues if i.code in RULES])
+        self.assertEqual([('insert_long_value_not_last', 453)], [(i.code, i.line) for i in alone.issues if i.code in RULES])
 
     def test_row_by_row_database_version_is_reported(self):
         found = check_sql(self.db_1540, check_style=False)
@@ -327,10 +371,11 @@ class SaveProcedureRegressionTests(unittest.TestCase):
         self.assertEqual(2, counts['row_by_row_loop'])
         self.assertEqual(1, counts['duplicated_mode_code'])
         self.assertEqual(3, counts['intermediate_table'])
+        self.assertEqual([322, 330, 615, 623], [i.line for i in found.issues if i.code == 'insert_long_value_not_last'])
         self.assertFalse(found.success)
         loop = next(i for i in found.issues if i.code == 'row_by_row_loop')
         self.assertGreaterEqual(len(loop.details['loop_variables']), 8)
-        self.assertEqual([], [i.code for i in check_sql(self.worker).issues if i.code in RULES])
+        self.assertEqual(['insert_long_value_not_last'], [i.code for i in check_sql(self.worker).issues if i.code in RULES])
 
     def test_remaining_variables_are_the_necessary_ones(self):
         # 2026-11-19 "@변수도 최소화": the worker keeps @DOC_ID, @STARTTRANCOUNT, @PURNUM, @PURDT,

@@ -99,9 +99,11 @@ BEGIN
 
     INSERT INTO DOCUMENT_DETAIL
     (
-           COMPANY_ID  , DOCUMENT_NO  , LINE_NO                                                     , ITEM_CODE
+           COMPANY_ID  , DOCUMENT_NO  , LINE_NO
+         , ITEM_CODE
     )
-    SELECT @COMPANY_ID , @DOCUMENT_NO , ISNULL(C.LINE_NO, 0) + ROW_NUMBER() OVER (ORDER BY A.SEQ) , A.ITEM_CODE
+    SELECT @COMPANY_ID , @DOCUMENT_NO , ISNULL(C.LINE_NO, 0) + ROW_NUMBER() OVER (ORDER BY A.SEQ)
+         , A.ITEM_CODE
     FROM @TMP_DETAIL A
             LEFT OUTER JOIN (
                              SELECT T.COMPANY_ID
