@@ -172,16 +172,21 @@ INNER JOIN OPENXML(@OTHER, '/ROOT/KEY', 1) WITH (ID INT) B ON A.ID=B.ID;"""
         self.assertTrue(any(i.code == 'review_full_replace' for i in check_sql(bad, check_delta=True).issues))
         self.assertFalse(any(i.code == 'review_full_replace' for i in check_sql(good, check_delta=True).issues))
 
-    def test_new_locking_hints_are_reviewed_without_becoming_errors(self):
+    def test_locking_hints_are_errors_even_when_kept_from_the_original(self):
         source = 'SELECT MAX(A.SEQ) FROM TARGET A WITH (UPDLOCK, HOLDLOCK)'
         result = check_sql(source, check_style=False)
-        self.assertTrue(result.success)
-        self.assertEqual({'UPDLOCK', 'HOLDLOCK'}, {i.details['hint'] for i in result.issues if i.code == 'locking_hint_review'})
-        self.assertNotIn('locking_hint_review', {i.code for i in check_sql(source, original=source).issues})
+        self.assertFalse(result.success)
+        self.assertEqual({'UPDLOCK', 'HOLDLOCK'}, {i.details['hint'] for i in result.issues if i.code == 'locking_hint'})
+        changed = check_sql(source + ' WHERE 1 = 1', original=source, review_sp_changes=True, compare_original=False)
+        self.assertEqual({'error'}, {i.severity for i in changed.issues if i.code == 'locking_hint'})
+        formatting = check_sql(source, original=source)
+        self.assertEqual({'info'}, {i.severity for i in formatting.issues if i.code == 'locking_hint'})
+        requested = check_sql(source, check_style=False, allow_locking_hints=True)
+        self.assertTrue(requested.success)
 
     def test_literal_or_commented_hints_are_not_executable_hints(self):
         source = "SELECT 'WITH (UPDLOCK, HOLDLOCK)' FROM TARGET A /* WITH (UPDLOCK) */"
-        self.assertNotIn('locking_hint_review', {i.code for i in check_sql(source, check_style=False).issues})
+        self.assertNotIn('locking_hint', {i.code for i in check_sql(source, check_style=False).issues})
 
     def test_typed_empty_result_placeholders_are_reviewed_without_a_blanket_cast_rule(self):
         source = "SELECT CAST('' AS VARCHAR(30)) AS OLD_FIELD, CAST(NULL AS DATE) AS OLD_DATE FROM TARGET A"

@@ -9,6 +9,11 @@ from .lexer import _identifier_value, _is_identifier_token, _scan_sql_tokens, _S
 from .procedure_authorship import procedure_headers, table_writes
 
 
+# (parameter, compared literals, negated). A negated label is an ELSE arm or the
+# code that follows a mode block ending in RETURN.
+_Label = tuple[str, frozenset[str], bool]
+
+
 @dataclass(frozen=True)
 class Observation:
     kind: str
@@ -18,6 +23,83 @@ class Observation:
 
     def key(self) -> tuple:
         return self.kind, self.name, self.guards
+
+
+@dataclass(frozen=True)
+class _RawObservation:
+    kind: str
+    name: str
+    scope: tuple[_Label, ...]
+    offset: int
+    excluded: frozenset[str] = frozenset()
+
+
+def _effective(scope: tuple[_Label, ...], domains: dict[str, frozenset[str]]) -> tuple[str, ...]:
+    """Resolve nested and ELSE/early-return mode labels to the modes that reach a statement.
+
+    A negation is resolved only against a mode set the procedure itself closes
+    (for example IF ISNULL(@MODE, '') NOT IN (...) RETURN); otherwise it stays
+    an ELSE label, so an unlisted mode is never assumed away.
+    """
+    positive: dict[str, frozenset[str]] = {}
+    negative: dict[str, frozenset[str]] = {}
+    for parameter, values, negated in scope:
+        if negated:
+            negative[parameter] = negative.get(parameter, frozenset()) | values
+        else:
+            positive[parameter] = positive[parameter] & values if parameter in positive else values
+    result = []
+    for parameter in sorted(set(positive) | set(negative)):
+        excluded = negative.get(parameter, frozenset())
+        allowed = positive.get(parameter, domains.get(parameter))
+        if allowed is not None:
+            result.append(parameter + ' IN (' + ', '.join(sorted(allowed - excluded)) + ')')
+        else:
+            result.append('ELSE (' + parameter + ' IN (' + ', '.join(sorted(excluded)) + '))')
+    return tuple(result)
+
+
+def _closed_domains(code: list[_SqlToken], parameters: set[str]) -> dict[str, frozenset[str]]:
+    """Mode sets closed by IF [ISNULL(]@P[, '')] NOT IN (...) followed by an error/return block."""
+    found: dict[str, frozenset[str]] = {}
+    for i, token in enumerate(code):
+        if token.normalized != 'IF':
+            continue
+        cursor = i + 1
+        wrapped = cursor + 1 < len(code) and code[cursor].normalized in {'ISNULL', 'COALESCE'} and code[cursor + 1].text == '('
+        if wrapped:
+            cursor += 2
+        if cursor >= len(code) or code[cursor].normalized not in parameters:
+            continue
+        parameter = code[cursor].normalized
+        cursor += 1
+        if wrapped:
+            while cursor < len(code) and code[cursor].text != ')':
+                cursor += 1
+            cursor += 1
+        if (cursor + 2 >= len(code) or code[cursor].normalized != 'NOT' or code[cursor + 1].normalized != 'IN'
+                or code[cursor + 2].text != '('):
+            continue
+        cursor += 3
+        values: set[str] = set()
+        while cursor < len(code) and code[cursor].text != ')':
+            if code[cursor].kind in {'string', 'unicode_string', 'number'}:
+                values.add(code[cursor].normalized)
+            elif code[cursor].text != ',':
+                values = set()
+                break
+            cursor += 1
+        rejects = any(t.normalized in {'RETURN', 'RAISERROR', 'THROW'} for t in code[cursor + 1:cursor + 12])
+        if values and rejects:
+            found[parameter] = found.get(parameter, frozenset()) | frozenset(values)
+    return found
+
+
+def _ends_with_return(code: list[_SqlToken], end: int) -> bool:
+    before = end - 1
+    if before >= 0 and code[before].text == ';':
+        before -= 1
+    return before >= 0 and code[before].normalized == 'RETURN'
 
 
 def _statement_end(code: list[_SqlToken], start: int) -> int:
@@ -61,65 +143,93 @@ def _statement_end(code: list[_SqlToken], start: int) -> int:
     return len(code)
 
 
-def _operations(tokens: list[_SqlToken], parameters: set[str]) -> tuple[list[Observation], dict[int, tuple[str, ...]]]:
+def _operations(tokens: list[_SqlToken], parameters: set[str]) -> tuple[
+        list[_RawObservation], dict[int, tuple[_Label, ...]], dict[str, frozenset[str]]]:
     writes = {token.start: (token.normalized, table) for token, table in table_writes(tokens)}
     code = [t for t in tokens if t.kind not in {'line_comment', 'block_comment'}]
-    pending = {}
-    single_arms: dict[int, list[tuple[int, str]]] = {}
-    active_arms: list[tuple[int, str]] = []
-    stack: list[str] = []
-    found = []
-    contexts = {}
+    pending: dict[int, _Label] = {}
+    single_arms: dict[int, list[tuple[int, _Label]]] = {}
+    active_arms: list[tuple[int, _Label]] = []
+    stack: list[_Label | None] = []
+    implied: list[list[_Label]] = [[]]  # Labels implied by an earlier mode block ending in RETURN.
+    found: list[_RawObservation] = []
+    contexts: dict[int, tuple[_Label, ...]] = {}
+
+    def enclosing() -> tuple[_Label, ...]:
+        return tuple(label for label in stack if label) + tuple(label for frame in implied for label in frame)
+
     for i, t in enumerate(code):
         word = t.normalized
         following = code[i + 1].normalized if i + 1 < len(code) else ''
         active_arms = [arm for arm in active_arms if i < arm[0]]
         active_arms.extend(single_arms.pop(i, ()))
-        scope = tuple(filter(None, stack)) + tuple(label for _end, label in active_arms)
+        scope = enclosing() + tuple(label for _end, label in active_arms)
         contexts[t.start] = scope
         if word == 'IF' and (parsed := _guard(code, i, allow_statement=True)):
             start, guard = parsed
             parameter, _operator, values = guard.signature
             if parameter.upper() not in parameters:
                 continue
-            labels = [literal for _kind, literal in values]
-            for label in labels:
-                found.append(Observation('branch', parameter.upper() + ' = ' + label, scope, t.start))
-            label = parameter.upper() + ' IN (' + ', '.join(sorted(labels)) + ')'
+            literals = [literal for _kind, literal in values]
+            for literal in literals:
+                found.append(_RawObservation('branch', parameter.upper() + ' = ' + literal, scope, t.start))
+            label: _Label = (parameter.upper(), frozenset(literals), False)
             if code[start].normalized == 'BEGIN':
                 pending[start] = label
             else:
                 end = _statement_end(code, start)
                 single_arms.setdefault(start, []).append((end, label))
                 if end + 1 < len(code) and code[end].normalized == 'ELSE' and code[end + 1].normalized != 'IF':
-                    single_arms.setdefault(end + 1, []).append((_statement_end(code, end + 1), 'ELSE (' + label + ')'))
+                    single_arms.setdefault(end + 1, []).append((_statement_end(code, end + 1), (label[0], label[1], True)))
         elif word == 'CASE' or (word == 'BEGIN' and following not in _NON_BLOCK_BEGIN):
-            stack.append(pending.get(i, ''))
+            stack.append(pending.get(i))
+            implied.append([])
         elif word == 'END' and following != 'CONVERSATION' and stack:
             ended = stack.pop()
+            implied.pop()
             if ended and following == 'ELSE' and i + 2 < len(code):
+                other: _Label = (ended[0], ended[1], not ended[2])
                 if code[i + 2].normalized == 'BEGIN':
-                    pending[i + 2] = 'ELSE (' + ended + ')'
+                    pending[i + 2] = other
                 elif code[i + 2].normalized != 'IF':
-                    single_arms.setdefault(i + 2, []).append((_statement_end(code, i + 2), 'ELSE (' + ended + ')'))
+                    single_arms.setdefault(i + 2, []).append((_statement_end(code, i + 2), other))
+            elif ended and _ends_with_return(code, i):
+                # The rest of the enclosing block runs only for the other modes.
+                found.append(_RawObservation('implied-branch', ended[0], enclosing(), t.start,
+                                             frozenset() if ended[2] else ended[1]))
+                implied[-1].append((ended[0], ended[1], not ended[2]))
         elif t.start in writes:
             op, table = writes[t.start]
-            found.append(Observation('write', op + ' ' + table, scope, t.start))
+            found.append(_RawObservation('write', op + ' ' + table, scope, t.start))
         elif word == 'INTO' and not t.depth:
             # A SELECT INTO creates a table. INSERT/MERGE INTO already has its own event.
             command = next((c.normalized for c in reversed(code[:i]) if c.depth == 0 and c.normalized in
                             {'SELECT', 'INSERT', 'MERGE', 'UPDATE', 'DELETE', 'OUTPUT', 'FETCH', 'EXEC', ';'}), '')
             name, _last = _identifier_path_at(code, i + 1, len(code))
             if command == 'SELECT' and name and not name.split('.')[-1].startswith(('#', '@')):
-                found.append(Observation('write', 'SELECT INTO ' + name, scope, t.start))
+                found.append(_RawObservation('write', 'SELECT INTO ' + name, scope, t.start))
         elif word in {'EXEC', 'EXECUTE'}:
             pos = i + 1
             if pos + 1 < len(code) and code[pos].text.startswith('@') and code[pos + 1].text == '=':
                 pos += 2
             name, _last = _identifier_path_at(code, pos, len(code))
             if name and not name.startswith('@'):
-                found.append(Observation('call', name, scope, t.start))
-    return found, contexts
+                found.append(_RawObservation('call', name, scope, t.start))
+    return found, contexts, _closed_domains(code, parameters)
+
+
+def _resolve(raw: list[_RawObservation], domains: dict[str, frozenset[str]]) -> list[Observation]:
+    """Express observations by the modes that reach them, so moving the code after an
+    early-return mode block into the matching ELSE IF arm is not a changed operation."""
+    result = []
+    for item in raw:
+        guards = _effective(item.scope, domains)
+        if item.kind != 'implied-branch':
+            result.append(Observation(item.kind, item.name, guards, item.offset))
+        elif item.name in domains and item.excluded:
+            for literal in sorted(domains[item.name] - item.excluded):
+                result.append(Observation('branch', item.name + ' = ' + literal, guards, item.offset))
+    return result
 
 
 def _projections(tokens: list[_SqlToken]) -> list[tuple]:
@@ -184,8 +294,13 @@ def review_changes(original: str, candidate: str, *, explicit_pair: bool = False
             continue
         old_tokens = _scan_sql_tokens(old_body)[0]
         new_tokens = _scan_sql_tokens(body)[0]
-        old_ops, old_scopes = _operations(old_tokens, old_params)
-        new_ops, new_scopes = _operations(new_tokens, params)
+        old_raw, old_contexts, old_domains = _operations(old_tokens, old_params)
+        new_raw, new_contexts, new_domains = _operations(new_tokens, params)
+        domains = {name: old_domains.get(name, frozenset()) | new_domains.get(name, frozenset())
+                   for name in set(old_domains) | set(new_domains)}
+        old_ops, new_ops = _resolve(old_raw, domains), _resolve(new_raw, domains)
+        old_scopes = {offset: _effective(scope, domains) for offset, scope in old_contexts.items()}
+        new_scopes = {offset: _effective(scope, domains) for offset, scope in new_contexts.items()}
         counts = Counter(op.key() for op in old_ops)
         for op in new_ops:
             if counts[op.key()]:
