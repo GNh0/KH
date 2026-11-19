@@ -12,9 +12,20 @@
 | `IF @WORKTYPE = 'DELETE' BEGIN … COMMIT … RETURN END` 뒤에 나머지 모드를 조건 없이 이어 쓰기, 여러 곳의 COMMIT | 아래 골격의 IF/ELSE IF 분기, 끝에서 COMMIT 한 번 |
 | `@NEWCOUNT`·`@MODCOUNT`·`@DELCOUNT` 같은 건수 변수, `IF @@ROWCOUNT <> @변수`, `IF @CNT > 0` | 쓰기 전 `IF EXISTS` / `IF NOT EXISTS` 검증(전체 키, LEFT OUTER JOIN … IS NULL, 중복 키 GROUP BY HAVING) |
 | `SELECT @LASTSEQ = ISNULL(MAX(…), 0)` 뒤 `@LASTSEQ + RN`, 스테이징에 순번을 먼저 `UPDATE` | INSERT 안에서 `ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (ORDER BY …)`와 파생 MAX JOIN. 뒤 단계는 쓴 대상 행을 업무 키로 JOIN한다. |
+| 한 번 대입하고 한 번 읽는 변수, 선언만 하거나 대입만 하고 읽지 않는 변수, 헤더 테이블 변수 값을 복사한 변수 | 그 자리에서 식을 쓰거나 테이블 변수·대상 행을 JOIN해 읽는다. |
 | `INSERT INTO @TMPISSUE … SELECT … FROM 실제 테이블`처럼 중간 결과를 테이블 변수·임시 테이블에 담았다가 다시 읽기 | 최종 INSERT/UPDATE/DELETE 안의 JOIN·파생 테이블로 바로 계산한다. 테이블 변수는 XML 파싱(`FROM OPENXML`)에만 쓴다. |
 
-문서 채번 프로시저의 OUTPUT(`@NEWSEQ`), 그 값으로 만든 문서번호, `@OUTPUT`처럼 실제로 필요한 단일 값 변수는 유지한다.
+`@변수`는 최소화한다. 남기는 변수는 T-SQL이 변수를 요구하는 경우뿐이다.
+
+| 남기는 변수 | 이유 |
+| --- | --- |
+| `@DOC_ID` | `SP_XML_PREPAREDOCUMENT`의 OUTPUT 핸들 |
+| `@NEWSEQ`, `@OUTSEQ` | 채번 프로시저의 OUTPUT 인자 |
+| `@PURDT` 같은 채번 기준일 | EXEC 인자에는 식·하위 쿼리를 쓸 수 없다 |
+| `@PURNUM` 같은 문서번호 | NEW에서 생성해 여러 문장에서 쓴다 |
+| `@STARTTRANCOUNT` | 시작 시점의 `@@TRANCOUNT`를 저장한다 |
+
+Codex 산출물 폴더를 거치지 않은 근호 작성 SAVE(`sp_MA000100_SAVE`의 `@REQNUM`·`@REQDT`·`@NEWSEQ`, `sp_QC100100_SAVE`의 `@QCNUM`)도 이 범위다. 그 밖의 헤더 값은 `@TMP_HEADER`를 JOIN해 읽는다.
 
 ```sql
 IF @STARTTRANCOUNT = 0
@@ -111,7 +122,7 @@ BEGIN
 END
 ```
 
-검증 실패는 분기 안에서 `RAISERROR … RETURN`으로 끝내고 CATCH가 롤백한다. 쓰기 뒤에 건수를 다시 세지 않는다. 같은 업무의 모드 조건을 준비·검증·쓰기마다 반복하지 않는다. 검사기는 잠금 힌트(`locking_hint`), 쓰기 후 RETURN하는 모드 블록(`save_mode_early_exit`), 여러 COMMIT(`save_multiple_commit`), 건수 변수(`count_variable`, `rowcount_count_variable`), MAX 순번 변수(`scalar_sequence_base`), 순번 스테이징 UPDATE(`staging_sequence_update`), 중간 결과 테이블(`intermediate_table`)을 원본에 있던 것까지 오류로 보고한다. 참고 SP에 같은 형태가 있어도 근거가 아니다.
+검증 실패는 분기 안에서 `RAISERROR … RETURN`으로 끝내고 CATCH가 롤백한다. 쓰기 뒤에 건수를 다시 세지 않는다. 같은 업무의 모드 조건을 준비·검증·쓰기마다 반복하지 않는다. 검사기는 잠금 힌트(`locking_hint`), 쓰기 후 RETURN하는 모드 블록(`save_mode_early_exit`), 여러 COMMIT(`save_multiple_commit`), 건수 변수(`count_variable`, `rowcount_count_variable`), MAX 순번 변수(`scalar_sequence_base`), 순번 스테이징 UPDATE(`staging_sequence_update`), 중간 결과 테이블(`intermediate_table`), 읽지 않는 변수(`unused_variable`), 한 번만 쓰는 변수(`single_use_variable`)를 원본에 있던 것까지 오류로 보고한다. 참고 SP에 같은 형태가 있어도 근거가 아니다.
 
 ## Parsed rows and NEW
 

@@ -8,11 +8,14 @@
   variable used as the base of per-row numbering.
 - Intermediate results stored in a table variable/temp table (other than parsed XML)
   and staging-table UPDATEs that assign sequence numbers.
+- Variables beyond the necessary ones: never read, or assigned once and read once
+  outside an EXEC/RAISERROR argument.
 
 These are lexical observations, not a T-SQL control-flow parser. They do not decide
 which validation replaces a removed count check.
 """
 from collections import Counter
+from dataclasses import dataclass, field
 
 from src.common.results import Issue, Severity
 from .dispatch import _guard, _NON_BLOCK_BEGIN
@@ -53,6 +56,13 @@ _MESSAGES = {
         'Do not number rows by updating a staging table first. Assign the sequence in the INSERT itself '
         '(ISNULL(C.SEQ, 0) + ROW_NUMBER() OVER (...) with a derived MAX JOIN); later steps read the generated key '
         'from the written target rows by their business key.'),
+    'unused_variable': (
+        'This variable is declared or assigned but never read. Remove it.'),
+    'single_use_variable': (
+        'This variable is assigned once and read once. Use the expression, or JOIN the staging/target row it was read '
+        'from, at that place. Keep variables only where T-SQL needs one: an OUTPUT argument (key procedure, XML '
+        'handle), an EXEC/RAISERROR argument, a value captured at one moment (@@TRANCOUNT), or a value such as a '
+        'generated document number that several statements use.'),
 }
 
 
@@ -230,6 +240,83 @@ def _staging(code: list[_SqlToken]) -> list[tuple[str, int, dict]]:
     return found
 
 
+_STATEMENT_STARTS = frozenset({'SELECT', 'SET', 'IF', 'BEGIN', 'END', 'EXEC', 'EXECUTE', 'INSERT', 'UPDATE', 'DELETE',
+                               'MERGE', 'DECLARE', 'WHILE', 'RETURN', 'RAISERROR', 'THROW', 'PRINT', 'WITH', ';'})
+_CAPTURES = frozenset({'@@ROWCOUNT', '@@TRANCOUNT', '@@ERROR', '@@IDENTITY', '@@PROCID', 'SCOPE_IDENTITY',
+                       'ERROR_MESSAGE', 'ERROR_NUMBER', 'ERROR_SEVERITY', 'ERROR_STATE', 'GETDATE', 'SYSDATETIME', 'NEWID'})
+
+
+@dataclass
+class _Usage:
+    declared: int
+    reads: list[int] = field(default_factory=list)
+    writes: list[str] = field(default_factory=list)  # 'value', 'output' or 'capture'
+    fixed_reads: int = 0  # Reads where T-SQL needs a variable or literal (EXEC/RAISERROR arguments).
+
+
+def _write_kind(code: list[_SqlToken], index: int) -> str:
+    """'value' for SET/SELECT/DECLARE assignment; 'capture' when the value is a moment-dependent function."""
+    cursor = index + 2
+    while cursor < len(code) and (code[cursor].text == '(' or code[cursor].normalized == 'SELECT'):
+        cursor += 1
+    return 'capture' if cursor < len(code) and code[cursor].normalized in _CAPTURES else 'value'
+
+
+def _variable_usage(code: list[_SqlToken]) -> dict[str, _Usage]:
+    usage: dict[str, _Usage] = {}
+    declaring = False
+    fixed_args = False  # EXEC/RAISERROR/THROW arguments accept a variable or literal, not an expression.
+    for index, token in enumerate(code):
+        word = token.normalized if token.kind == 'word' else token.text
+        if token.depth == 0 and word in _STATEMENT_STARTS:
+            declaring = word == 'DECLARE'
+            fixed_args = word in {'EXEC', 'EXECUTE', 'RAISERROR', 'THROW'}
+        if token.kind != 'word' or not token.text.startswith('@') or token.text.startswith('@@'):
+            continue
+        name = token.text.upper()
+        previous = code[index - 1].normalized if index else ''
+        following = code[index + 1].normalized if index + 1 < len(code) else ''
+        if declaring and previous in {'DECLARE', ','} and token.depth == 0:
+            if following in {'TABLE', 'CURSOR', 'AS'}:
+                declaring = following != 'TABLE' and declaring
+                continue
+            usage[name] = _Usage(token.start)
+            cursor = index + 1  # DECLARE @V TYPE[(n)] = value
+            while cursor < len(code) and not (code[cursor].depth == token.depth and code[cursor].text in {'=', ','})                     and code[cursor].normalized not in _STATEMENT_STARTS:
+                cursor += 1
+            if cursor < len(code) and code[cursor].text == '=':
+                usage[name].writes.append(_write_kind(code, cursor - 1))
+            continue
+        item = usage.get(name)
+        if item is None:
+            continue  # Parameters and undeclared names.
+        if following in {'OUTPUT', 'OUT'} or (previous in {'EXEC', 'EXECUTE'} and following == '=') or previous == 'INTO':
+            item.writes.append('output')
+        elif following in {'=', '+=', '-=', '*=', '/='} and previous in {'SET', 'SELECT', ','}:
+            item.writes.append(_write_kind(code, index))
+            if following != '=':
+                item.reads.append(token.start)
+        else:
+            item.reads.append(token.start)
+            if fixed_args:
+                item.fixed_reads += 1
+    return usage
+
+
+def _minimal_variables(code: list[_SqlToken], reported: set[str]) -> list[tuple[str, int, dict]]:
+    found: list[tuple[str, int, dict]] = []
+    loops = any(t.normalized in {'WHILE', 'CURSOR', 'GOTO'} for t in code if t.kind == 'word')  # Re-reads.
+    for name, item in _variable_usage(code).items():
+        if name in reported:
+            continue
+        if not item.reads:
+            if not item.writes or 'output' not in item.writes:  # A callee's OUTPUT argument needs a variable.
+                found.append(('unused_variable', item.declared, {'variable': name}))
+        elif (not loops and len(item.reads) == 1 and item.writes == ['value'] and not item.fixed_reads):
+            found.append(('single_use_variable', item.declared, {'variable': name, 'use_offset': item.reads[0]}))
+    return found
+
+
 def review_save_rules(candidate: str, original: str | None = None, *, enforce: bool = True,
                       allow_locking_hints: bool = False, personal_rules: bool = True) -> list[Issue]:
     """Report every occurrence in the candidate, including ones carried over from the original.
@@ -256,7 +343,10 @@ def review_save_rules(candidate: str, original: str | None = None, *, enforce: b
     if not personal_rules:
         return issues
     severity = 'error' if enforce else 'info'
-    for code_name, offset, details in sorted(_mode_flow(code) + _variables(code) + _staging(code), key=lambda item: item[1]):
+    variables = _variables(code)
+    reported = {details['variable'] for _, _, details in variables if 'variable' in details}
+    for code_name, offset, details in sorted(_mode_flow(code) + variables + _staging(code) + _minimal_variables(code, reported),
+                                             key=lambda item: item[1]):
         if 'use_offset' in details:
             details = {key: value for key, value in details.items() if key != 'use_offset'} | {
                 'use_line': _line(candidate, details['use_offset'])}
