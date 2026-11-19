@@ -29,6 +29,8 @@ Claude Code 대화에서 다음 명령을 실행합니다.
 
 Claude Code 터미널과 Desktop의 로컬 Code 세션은 사용자 범위의 플러그인 설정을 공유합니다. 다른 Claude 화면은 사용할 수 있는 플러그인 구성요소가 다르며, Python/PB 검사기는 로컬 파일을 실행할 수 있는 환경이 필요합니다. 화면·요금제별 조건은 [Anthropic 공식 문서](https://code.claude.com/docs/en/plugins)를 참고하세요.
 
+번들 hook은 `python` 명령으로 실행됩니다(Codex의 macOS/Linux는 `python3`). 설치 전에 새 터미널에서 `python --version`이 3.11 이상을 출력하는지 확인합니다. Windows에서 Microsoft Store 안내가 열리면 python.org 설치본을 PATH에 추가하거나 **설정 → 앱 → 앱 실행 별칭**에서 `python.exe` 별칭을 끕니다. Python이 없으면 스킬은 동작하지만 hook 검사와 컨텍스트 복원은 실행되지 않습니다.
+
 ### Codex
 
 기존 저장소 marketplace를 등록합니다.

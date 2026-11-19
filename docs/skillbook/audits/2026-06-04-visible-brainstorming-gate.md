@@ -4,7 +4,7 @@
 
 Blind subagent retest `019e9089-86c7-7230-af78-43f86fb59a4f` received an ordinary request without KH/UAF/skill wording:
 
-`C:\Users\KONEIT\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_E folder: build an inventory inbound/outbound dashboard.`
+`%USERPROFILE%\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_E folder: build an inventory inbound/outbound dashboard.`
 
 The subagent did not implement immediately, but its first brainstorming response was still too shallow. It only reported the missing target folder, listed three inventory models, gave basic fields, and asked for approval.
 

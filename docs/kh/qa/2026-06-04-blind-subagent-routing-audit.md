@@ -7,7 +7,7 @@ Verify that a fresh subagent can route an ordinary user request through the inst
 ## Blind Prompt
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_A 폴더에서 재고 입출고 관리 대시보드 개발해줘.
+%USERPROFILE%\Desktop\Jang\SKillsTest\RetestAutoRoute_20260604_A 폴더에서 재고 입출고 관리 대시보드 개발해줘.
 ```
 
 This prompt intentionally did not mention KH, UAF, front-door, skills, harnesses, plugin, audit, memory, or brainstorming.
@@ -15,7 +15,7 @@ This prompt intentionally did not mention KH, UAF, front-door, skills, harnesses
 ## Evidence
 
 - Subagent id: `019e8fea-06ea-7510-802f-48427f9a1f36`
-- Session log: `C:\Users\KONEIT\.codex\sessions\2026\06\04\rollout-2026-06-04T08-55-39-019e8fea-06ea-7510-802f-48427f9a1f36.jsonl`
+- Session log: `%USERPROFILE%\.codex\sessions\2026\06\04\rollout-2026-06-04T08-55-39-019e8fea-06ea-7510-802f-48427f9a1f36.jsonl`
 - Installed cache at test time: `2.9.48`
 - Package version after this patch: `2.9.49`
 
@@ -36,7 +36,7 @@ No `index.html`, `styles.css`, `app.js`, `.kh`, `.uaf`, or generated artifacts w
 Command:
 
 ```powershell
-python -B -m src.orchestration.session_skill_audit --summary "C:\Users\KONEIT\.codex\sessions\2026\06\04\rollout-2026-06-04T08-55-39-019e8fea-06ea-7510-802f-48427f9a1f36.jsonl"
+python -B -m src.orchestration.session_skill_audit --summary "%USERPROFILE%\.codex\sessions\2026\06\04\rollout-2026-06-04T08-55-39-019e8fea-06ea-7510-802f-48427f9a1f36.jsonl"
 ```
 
 Result:
@@ -81,7 +81,7 @@ python -B -m unittest tests.test_session_skill_audit.SessionSkillAuditTests.test
 python -B -m unittest discover -s tests
 python -B -m src.skills.uaf_skill_catalog --check
 python -B -m src.skills.uaf_skill_quality --summary
-python -B -m src.orchestration.session_skill_audit --summary "C:\Users\KONEIT\.codex\sessions\2026\06\04\rollout-2026-06-04T08-55-39-019e8fea-06ea-7510-802f-48427f9a1f36.jsonl"
+python -B -m src.orchestration.session_skill_audit --summary "%USERPROFILE%\.codex\sessions\2026\06\04\rollout-2026-06-04T08-55-39-019e8fea-06ea-7510-802f-48427f9a1f36.jsonl"
 ```
 
 Observed results:

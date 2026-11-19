@@ -7,13 +7,13 @@ This audit records the live post-upgrade check for KH UAF `2.9.43` before the fo
 The test target was:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\AutoRouteClean_20260602_I
+%USERPROFILE%\Desktop\Jang\SKillsTest\AutoRouteClean_20260602_I
 ```
 
 The blind first prompt sent to a fresh subagent did not mention KH, UAF, skills, harnesses, audit, or plugin internals:
 
 ```text
-C:\Users\KONEIT\Desktop\Jang\SKillsTest\AutoRouteClean_20260602_I 폴더에서 창고 재고 입출고 업무 프로세스 방향 잡아줘
+%USERPROFILE%\Desktop\Jang\SKillsTest\AutoRouteClean_20260602_I 폴더에서 창고 재고 입출고 업무 프로세스 방향 잡아줘
 ```
 
 The follow-up approval prompt also did not mention KH:
@@ -24,7 +24,7 @@ A안으로 확정. 이제 그 방향으로 폴더 안에 업무정의서랑 처�
 
 ## Live Results
 
-- Installed cache used by the subagent: `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.43`.
+- Installed cache used by the subagent: `%USERPROFILE%\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.43`.
 - First turn classification: medium operations direction-setting.
 - Front-door ran from the installed plugin cache before target folder inspection.
 - The exact target folder was checked and found empty.
@@ -36,10 +36,10 @@ A안으로 확정. 이제 그 방향으로 폴더 안에 업무정의서랑 처�
 
 ## Verification Evidence
 
-Commands run from `C:\Users\KONEIT\Desktop\Jang\KH`:
+Commands run from `%USERPROFILE%\Desktop\Jang\KH`:
 
 ```text
-python -B -m src.orchestration.session_skill_audit --summary "C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T14-48-31-019e86e0-5bc6-70f1-9b22-30912c865dec.jsonl"
+python -B -m src.orchestration.session_skill_audit --summary "%USERPROFILE%\.codex\sessions\2026\06\02\rollout-2026-06-02T14-48-31-019e86e0-5bc6-70f1-9b22-30912c865dec.jsonl"
 Result after fix: issue_count=0, required_missing_evidence=0, required_unaccepted=0
 
 python -B -m unittest tests.test_session_skill_audit -v
@@ -49,7 +49,7 @@ Result: 33 tests OK
 Generated test-folder file check:
 
 ```text
-Get-ChildItem C:\Users\KONEIT\Desktop\Jang\SKillsTest\AutoRouteClean_20260602_I -Recurse
+Get-ChildItem %USERPROFILE%\Desktop\Jang\SKillsTest\AutoRouteClean_20260602_I -Recurse
 Result: 2 Markdown files, 0 code files
 ```
 

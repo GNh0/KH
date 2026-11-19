@@ -21,6 +21,7 @@ from src.runtime.workflows import (CYCLE, SCOPE_VERSION, application_hint, appli
                                    binding, guidance_paths, new_epoch, required_paths)
 from src.runtime.workflows import routing_problem
 from src.runtime.guidance import document, location
+from src.runtime.readonly_guard import readonly_violation
 from src.runtime.source_evidence import control_work, observe_references, reference_problem, owned_source, successful_read_paths
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -713,6 +714,9 @@ def handle(event: dict, host: str) -> dict:
         return {}
     if name not in HOOK_EVENTS.get(host, frozenset()):
         return {}
+    if name == 'PreToolUse' and (violation := readonly_violation(event)):
+        # Enforced even in advisory mode: the role's read-only contract is not a KH style check.
+        return {'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': violation}}
     store = Store(data_root(), event['cwd'])
     key = session_key(event, host)
     paths, unresolved = write_paths(event) if name in {'PreToolUse', 'PostToolUse', 'PostToolUseFailure'} else ([], [])
@@ -845,28 +849,17 @@ def handle(event: dict, host: str) -> dict:
             required = set().union(*(prerequisites_for(state, path) for path in paths))
             missing = sorted(required - set(state.get('skills_seen', [])))
             # No attempt counter: retrying the same write is not evidence that prerequisites were read.
+            # Collect every blocking reason so one retry can address all of them.
+            reasons = []
             if missing:
-                reason = 'Before editing, retrieve the complete current KH prerequisites: ' + ', '.join(location(ROOT, item) for item in missing) + '. Returned complete required sections are needed; this does not replace actual reference-program inspection.'
-                if mode == 'enforce':
-                    output = {'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
-                else:
-                    output = context(name, reason)
+                reasons.append('Before editing, retrieve the complete current KH prerequisites: ' + ', '.join(location(ROOT, item) for item in missing) + '. Returned complete required sections are needed; this does not replace actual reference-program inspection.')
             if any(binding(state, path) is None for path in paths):
-                reason = 'KH preserved previous write intent and originals. Apply the actual file responsibilities with the current scoped helper before continuing this legacy work.'
-                output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
-                          if mode == 'enforce' else context(name, reason))
+                reasons.append('KH preserved previous write intent and originals. Apply the actual file responsibilities with the current scoped helper before continuing this legacy work.')
             application_errors = [state.get('application_errors', {}).get(
                 (binding(state, path) or {}).get('target', str(path)), '') for path in paths]
             if any(application_errors):
-                reason = 'KH application originals are unverified: ' + '; '.join(error for error in application_errors if error)
-                output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
-                          if mode == 'enforce' else context(name, reason))
-            reference_errors = [problem for path in paths if (problem := reference_problem(state, path))]
-            if reference_errors:
-                prior_reason = output.get('hookSpecificOutput', {}).get('permissionDecisionReason', '')
-                reason = ' '.join([prior_reason, *reference_errors]).strip()
-                output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
-                          if mode == 'enforce' else context(name, reason))
+                reasons.append('KH application originals are unverified: ' + '; '.join(error for error in application_errors if error))
+            reasons.extend(problem for path in paths if (problem := reference_problem(state, path)))
             for path in paths:
                 if path.suffix.casefold() != '.sql':
                     continue
@@ -876,17 +869,17 @@ def handle(event: dict, host: str) -> dict:
                 except (OSError, ValueError, UnicodeError, RuntimeError):
                     problem = 'KH could not establish the registered SQL responsibility from the current source.'
                 if problem:
-                    output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': problem}}
-                              if mode == 'enforce' else context(name, problem))
+                    reasons.append(problem)
             if unresolved:
-                reason = ('The source-write destination is not statically established: ' + '; '.join(unresolved[:3]) +
-                          '. Use a typed source edit or an explicitly resolvable destination; no program was executed to guess a path.')
+                reasons.append('The source-write destination is not statically established: ' + '; '.join(unresolved[:3]) +
+                               '. Use a typed source edit or an explicitly resolvable destination; no program was executed to guess a path.')
+            if state.get('paused'):
+                # A stop request supersedes repair guidance: nothing else should be acted on.
+                reasons = ['KH task remains paused. Honor the stop request. Only after explicit user resumption, run ' + str(ROOT / 'scripts/kh_context.py') + ' resume with exact scope: ' + json.dumps({key: event.get(key) for key in ('cwd', 'session_id', 'transcript_path', 'agent_id')}, ensure_ascii=False) + '; host=' + host]
+            if reasons:
+                reason = ' '.join(dict.fromkeys(reasons))
                 output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}
                           if mode == 'enforce' else context(name, reason))
-            if state.get('paused'):
-                reason = 'KH task remains paused. Honor the stop request. Only after explicit user resumption, run ' + str(ROOT / 'scripts/kh_context.py') + ' resume with exact scope: ' + json.dumps({key: event.get(key) for key in ('cwd', 'session_id', 'transcript_path', 'agent_id')}, ensure_ascii=False) + '; host=' + host
-                output = ({'hookSpecificOutput': {'hookEventName': name, 'permissionDecision': 'deny',
-                           'permissionDecisionReason': reason}} if mode == 'enforce' else context(name, reason))
             if not state.get('paused') and (not output or output.get('hookSpecificOutput', {}).get('permissionDecision') != 'deny'):
                 state['completion_status'] = 'in_progress_audit_unverified'
                 state['semantic_audit_verified'] = False

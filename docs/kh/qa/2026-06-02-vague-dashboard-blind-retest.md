@@ -4,7 +4,7 @@
 
 - Installed cache observed before retest: `2.9.45`.
 - Blind subagent prompt did not mention KH, UAF, skills, or harnesses:
-  `C:\Users\KONEIT\Desktop\Jang\SKillsTest\RetestAutoRoute_20260602_J 폴더에서 재고 입출고 관리 대시보드 개발해줘.`
+  `%USERPROFILE%\Desktop\Jang\SKillsTest\RetestAutoRoute_20260602_J 폴더에서 재고 입출고 관리 대시보드 개발해줘.`
 - Expected behavior: front-door should route the vague new dashboard/app request through `brainstorming-harness` and stop before implementation until the direction is approved.
 
 ## Observed Failure

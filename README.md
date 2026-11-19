@@ -29,6 +29,8 @@ For local development, clone this repository and launch `claude --plugin-dir /ab
 
 Claude Code in the terminal and its local Desktop Code sessions share user-level plugin settings. Other Claude surfaces load different plugin components; this repository's optional Python/PB helpers need an environment that can execute their local files. See [Anthropic's plugin documentation](https://code.claude.com/docs/en/plugins) for the current surface and plan requirements.
 
+The bundled hooks run the `python` command (`python3` for Codex on macOS/Linux). Before installing, confirm that `python --version` prints 3.11 or later in a new terminal. If Windows opens a Microsoft Store prompt instead, add a python.org installation to PATH or turn off the `python.exe` alias under **Settings → Apps → App execution aliases**. Without Python the skills still work, but hook checks and context recovery do not run.
+
 ### Codex
 
 Register the existing repository marketplace:

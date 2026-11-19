@@ -49,7 +49,7 @@
             "timeout": 10
           }
         ],
-        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|Read|read_file|PowerShell"
+        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|PowerShell"
       }
     ],
     "PostToolUse": [

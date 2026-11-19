@@ -4,7 +4,7 @@ Date: 2026-07-10
 
 ## Repository State
 
-- Worktree: `C:\Users\KONEIT\Desktop\Jang\KH\.worktrees\sol-sql-harness-redesign`
+- Worktree: `%USERPROFILE%\Desktop\Jang\KH\.worktrees\sol-sql-harness-redesign`
 - Branch: `codex-runtime-sol-audit`
 - Base branch: `codex-runtime`
 - Base HEAD / merge-base: `a5a9f4d0a57e7fd18730ac7e67883b2ee92bc5eb`
