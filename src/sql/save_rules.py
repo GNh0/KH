@@ -66,6 +66,10 @@ _MESSAGES = {
     'duplicated_mode_code': (
         'The same statements appear in two mode branches. Put the shared NEW/EDIT steps once after the mode-specific '
         'parts, inside ELSE IF @WORKTYPE IN (\'NEW\', \'EDIT\').'),
+    'insert_long_value_not_last': (
+        'This long INSERT column or SELECT value is not the last item on its line, so every other row of the column '
+        'is padded to its width. Break the line before it: put it at the end of its line or on its own line, and break '
+        'the INSERT column list at the same position. Do not pad the other columns to a long value.'),
     'unused_variable': (
         'This variable is declared or assigned but never read. Remove it.'),
     'single_use_variable': (
@@ -425,6 +429,27 @@ def _duplicated_branches(code: list[_SqlToken], size: int = 200) -> list[tuple[s
     return found
 
 
+LONG_INSERT_VALUE = 30
+
+
+def _long_insert_values(sql: str) -> list[tuple[str, int, dict]]:
+    """An INSERT column or SELECT/VALUES value of LONG_INSERT_VALUE+ columns that is not the last item
+    on its line forces every other row of that column to be padded; it belongs at the end of a line."""
+    from .layout import _extract_insert_select_ranges
+    from .insert_alignment import _cells, _rows, _text_columns
+    found: list[tuple[str, int, dict]] = []
+    for target_start, target_end, select_start, select_end in _extract_insert_select_ranges(sql):
+        for start, end, select in ((target_start, target_end, False), (select_start, select_end, True)):
+            cells, _prefix, _reason = _cells(sql, start, end, select=select)
+            for row in _rows(sql, cells):
+                for cell in row[:-1]:
+                    text = sql[cell.start:cell.end]
+                    width = max(_text_columns(line) for line in text.split('\n'))
+                    if width >= LONG_INSERT_VALUE:
+                        found.append(('insert_long_value_not_last', cell.start, {'width': width, 'value': text[:80]}))
+    return found
+
+
 def review_save_rules(candidate: str, original: str | None = None, *, enforce: bool = True,
                       allow_locking_hints: bool = False, personal_rules: bool = True) -> list[Issue]:
     """Report every occurrence in the candidate, including ones carried over from the original.
@@ -463,4 +488,8 @@ def review_save_rules(candidate: str, original: str | None = None, *, enforce: b
                 details = {name: value for name, value in details.items() if name != key} | {
                     key.replace('_offset', '_line'): _line(candidate, details[key])}
         issues.append(Issue(code_name, severity, _MESSAGES[code_name], line=_line(candidate, offset), details=details))
+    # Layout only: a formatting request must fix it too.
+    layout = candidate.replace('\r\n', '\n')
+    for code_name, offset, details in _long_insert_values(layout):
+        issues.append(Issue(code_name, 'error', _MESSAGES[code_name], line=_line(layout, offset), details=details))
     return issues
