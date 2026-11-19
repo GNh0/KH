@@ -7,7 +7,8 @@ from src.runtime.hooks import inspect
 
 FIXTURES = Path(__file__).resolve().parents[1] / 'fixtures' / 'sql'
 RULES = {'locking_hint', 'save_mode_early_exit', 'save_multiple_commit', 'count_variable',
-         'rowcount_count_variable', 'scalar_sequence_base', 'staging_sequence_update', 'intermediate_table'}
+         'rowcount_count_variable', 'scalar_sequence_base', 'staging_sequence_update', 'intermediate_table',
+         'unused_variable', 'single_use_variable'}
 
 
 def findings(candidate: str, original: str | None = None, **options) -> list[tuple[str, str]]:
@@ -192,6 +193,44 @@ FROM @TMPDETAIL A INNER JOIN (SELECT T.ID, ROW_NUMBER() OVER (ORDER BY T.ID) AS 
             self.assertEqual(set(), codes(text), text)
 
 
+class MinimalVariableTests(unittest.TestCase):
+    def test_unused_and_single_use_variables(self):
+        source = """DECLARE @DOC_ID INT
+      , @UNUSED INT
+      , @WRITEONLY VARCHAR(8)
+      , @CUSTCD VARCHAR(20)
+      , @TODAY VARCHAR(8) = CONVERT(VARCHAR(8), GETDATE(), 112)
+SET @WRITEONLY = '20261119'
+SELECT @CUSTCD = A.CUSTCD FROM @TMPMA100T A
+UPDATE A SET A.CUSTCD = @CUSTCD, A.MODDT = @TODAY FROM MA100T A
+"""
+        self.assertEqual([('unused_variable', '@DOC_ID'), ('unused_variable', '@UNUSED'), ('unused_variable', '@WRITEONLY'),
+                          ('single_use_variable', '@CUSTCD'), ('single_use_variable', '@TODAY')],
+                         [(i.code, i.details['variable']) for i in check_sql(source, check_style=False).issues
+                          if i.code in {'unused_variable', 'single_use_variable'}])
+
+    def test_variables_that_tsql_needs(self):
+        source = """DECLARE @DOC_ID INT
+      , @STARTTRANCOUNT INT = @@TRANCOUNT
+      , @PURNUM VARCHAR(20)
+      , @PURDT VARCHAR(8)
+      , @NEWSEQ INT
+      , @IGNORED INT
+      , @MSG VARCHAR(200)
+EXEC SP_XML_PREPAREDOCUMENT @DOC_ID OUTPUT, @XML
+SELECT @PURDT = A.PURDT FROM @TMPMA100T A
+EXEC SP_SYSTEM_BA100T_KEYCODE @ORGDIV, 'MA100T', @PURDT, @NEWSEQ OUTPUT
+EXEC SP_OTHER @OUTPUT = @IGNORED OUTPUT
+SET @PURNUM = @PURDT + '-' + CONVERT(VARCHAR(10), @NEWSEQ)
+SET @MSG = 'X' + @PURNUM
+RAISERROR(@MSG, 16, 1)
+INSERT INTO MA100T (PURNUM) SELECT @PURNUM
+IF @STARTTRANCOUNT = 0 BEGIN TRANSACTION
+EXEC SP_XML_REMOVEDOCUMENT @DOC_ID
+"""
+        self.assertEqual(set(), codes(source) & {'unused_variable', 'single_use_variable'})
+
+
 class SaveProcedureRegressionTests(unittest.TestCase):
     """2026-11-19 C_KONE120 sp_MA100500_SAVE. With 3.6.4 a worker kept four UPDLOCK/HOLDLOCK
     hints, @TMPISSUE and the staged PURSEQ2 numbering from the original. The worker fixture is
@@ -205,7 +244,7 @@ class SaveProcedureRegressionTests(unittest.TestCase):
         counts = {code: sum(i.code == code for i in found.issues) for code in RULES}
         self.assertEqual({'locking_hint': 8, 'save_mode_early_exit': 1, 'save_multiple_commit': 1, 'count_variable': 3,
                           'rowcount_count_variable': 3, 'scalar_sequence_base': 1, 'staging_sequence_update': 1,
-                          'intermediate_table': 1}, counts)
+                          'intermediate_table': 1, 'unused_variable': 0, 'single_use_variable': 0}, counts)
         self.assertFalse(found.success)
 
     def test_keeping_the_original_hints_in_a_logic_change_fails(self):
@@ -223,6 +262,15 @@ class SaveProcedureRegressionTests(unittest.TestCase):
         self.assertEqual([], [i.details for i in result.issues if i.code == 'sp_operation_change_review'])
         alone = check_sql(self.worker)
         self.assertEqual([], [(i.code, i.line) for i in alone.issues if i.code in RULES])
+
+    def test_remaining_variables_are_the_necessary_ones(self):
+        # 2026-11-19 "@변수도 최소화": the worker keeps @DOC_ID, @STARTTRANCOUNT, @PURNUM, @PURDT,
+        # @NEWSEQ and @OUTSEQ (XML handle, transaction capture, generated number, EXEC arguments/OUTPUT).
+        for source in (self.original, self.worker):
+            self.assertEqual([], [i.details for i in check_sql(source).issues
+                                  if i.code in {'unused_variable', 'single_use_variable'}])
+        extra = self.worker.replace('          , @OUTSEQ', '          , @CUSTCD         VARCHAR(20)\n          , @OUTSEQ', 1)
+        self.assertIn('unused_variable', {i.code for i in check_sql(extra).issues})
 
 
 if __name__ == '__main__':
