@@ -1,7 +1,9 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -15,8 +17,8 @@ from src.csharp.designer import check_designer
 from src.sql.checks import check_sql
 
 ROOT = Path(__file__).resolve().parents[2]
-STYLE_PATH = ROOT / 'company/plugins/company-dev/scripts/company_style.py'
-SPEC = importlib.util.spec_from_file_location('company_style', STYLE_PATH)
+STYLE_PATH = ROOT / 'company/plugins/kone-dev/scripts/kone_style.py'
+SPEC = importlib.util.spec_from_file_location('kone_style', STYLE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 STYLE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(STYLE)
@@ -49,10 +51,10 @@ class CompanyStyleTests(unittest.TestCase):
 
     def test_absolute_environment_directory_and_codex_home_are_respected(self):
         with tempfile.TemporaryDirectory() as folder:
-            with patch.dict(os.environ, {'COMPANY_DEV_STYLE_HOME': folder, 'CODEX_HOME': 'ignored'}, clear=True):
+            with patch.dict(os.environ, {'KONE_DEV_STYLE_HOME': folder, 'CODEX_HOME': 'ignored'}, clear=True):
                 self.assertEqual(Path(folder).resolve(), STYLE.style_directory())
             with patch.dict(os.environ, {'CODEX_HOME': folder}, clear=True):
-                self.assertEqual(Path(folder).resolve() / 'company-dev-style', STYLE.style_directory())
+                self.assertEqual(Path(folder).resolve() / 'kone-dev-style', STYLE.style_directory())
             with self.assertRaises(ValueError):
                 STYLE.style_directory('relative-source-folder')
             with self.assertRaises(ValueError):
@@ -61,6 +63,26 @@ class CompanyStyleTests(unittest.TestCase):
     def test_topic_cannot_traverse_to_another_file(self):
         with self.assertRaises(ValueError):
             STYLE.read_style(Path(tempfile.gettempdir()), '../secret')
+
+    def test_brand_rename_preserves_existing_style_location(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            legacy = home / 'company-dev-style'
+            legacy.mkdir()
+            personal = legacy / 'sql.md'
+            personal.write_text('Use approved project examples.', encoding='utf-8')
+            with patch.dict(os.environ, {'CODEX_HOME': folder}, clear=True):
+                self.assertEqual(legacy.resolve(), STYLE.style_directory())
+                STYLE.initialize(STYLE.style_directory())
+                self.assertEqual('Use approved project examples.', personal.read_text(encoding='utf-8'))
+                current = home / 'kone-dev-style'
+                current.mkdir()
+                self.assertEqual(current.resolve(), STYLE.style_directory())
+            with patch.dict(os.environ, {'COMPANY_DEV_STYLE_HOME': str(legacy)}, clear=True):
+                self.assertEqual(legacy.resolve(), STYLE.style_directory())
+            with patch.dict(os.environ, {'KONE_DEV_STYLE_HOME': str(current),
+                                         'COMPANY_DEV_STYLE_HOME': str(legacy)}, clear=True):
+                self.assertEqual(current.resolve(), STYLE.style_directory())
 
 
 class CompanyCheckTests(unittest.TestCase):
@@ -138,16 +160,16 @@ class CompanyBundleTests(unittest.TestCase):
                            cwd=checkout, capture_output=True, check=True)
             (checkout/'src/audit_private_untracked.py').write_text(
                 'PRIVATE_MARKER = "employee-internal-note"', encoding='utf-8')
-            (checkout/'company/plugins/company-dev/references/private-note.md').write_text(
+            (checkout/'company/plugins/kone-dev/references/private-note.md').write_text(
                 'employee-internal-note', encoding='utf-8')
             archive = root/'company.zip'
             build = subprocess.run([sys.executable, '-B', str(checkout/'scripts/build_company_bundle.py'),
                 '--output', str(archive)], cwd=checkout, capture_output=True, text=True, encoding='utf-8')
             self.assertEqual(0, build.returncode, build.stdout + build.stderr)
             with zipfile.ZipFile(archive) as bundle:
-                self.assertFalse('plugins/company-dev/src/audit_private_untracked.py' in bundle.namelist(),
+                self.assertFalse('plugins/kone-dev/src/audit_private_untracked.py' in bundle.namelist(),
                                  'untracked Python source was distributed')
-                self.assertFalse('plugins/company-dev/references/private-note.md' in bundle.namelist(),
+                self.assertFalse('plugins/kone-dev/references/private-note.md' in bundle.namelist(),
                                  'untracked template note was distributed')
 
     def test_zip_is_local_and_excludes_private_and_untracked_material(self):
@@ -160,25 +182,53 @@ class CompanyBundleTests(unittest.TestCase):
                 names = bundle.namelist()
                 marketplace = json.loads(bundle.read('.agents/plugins/marketplace.json'))
                 self.assertEqual('local', marketplace['plugins'][0]['source']['source'])
-                self.assertEqual('./plugins/company-dev', marketplace['plugins'][0]['source']['path'])
+                self.assertEqual('./plugins/kone-dev', marketplace['plugins'][0]['source']['path'])
                 self.assertEqual(11, len([n for n in names if n.endswith('/SKILL.md')]))
-                self.assertIn('plugins/company-dev/skills/runtime-cleanup/SKILL.md', names)
-                self.assertIn('plugins/company-dev/skills/rule-audit/SKILL.md', names)
-                self.assertIn('plugins/company-dev/scripts/kh_runtime.py', names)
-                self.assertIn('plugins/company-dev/src/runtime/windows_job.py', names)
-                self.assertIn('plugins/company-dev/src/csharp/project.py', names)
-                self.assertIn('plugins/company-dev/skills/csharp-designer-style-harness/references/reports.md', names)
-                exporter_root = 'plugins/company-dev/skills/pb-to-csharp-migration-harness/scripts/'
+                self.assertIn('plugins/kone-dev/skills/runtime-cleanup/SKILL.md', names)
+                self.assertIn('plugins/kone-dev/skills/rule-audit/SKILL.md', names)
+                for role in ('kone-sql-worker', 'kone-csharp-worker',
+                             'kone-pb-worker', 'kone-rule-auditor'):
+                    self.assertIn('plugins/kone-dev/agents/' + role + '.md', names)
+                self.assertIn('plugins/kone-dev/skills/work-execution/references/delegation.md', names)
+                self.assertNotIn('plugins/kone-dev/skills/sql-formatting/references/select-patterns.md', names)
+                self.assertNotIn('plugins/kone-dev/skills/sql-formatting/references/save-patterns.md', names)
+                self.assertIn('plugins/kone-dev/scripts/kone_runtime.py', names)
+                self.assertIn('plugins/kone-dev/scripts/kone_check_core.py', names)
+                self.assertEqual('kone-dev-marketplace', marketplace['name'])
+                self.assertEqual('KONE Development', marketplace['interface']['displayName'])
+                plugin_manifest = json.loads(bundle.read('plugins/kone-dev/.codex-plugin/plugin.json'))
+                self.assertEqual('kone-dev', plugin_manifest['name'])
+                self.assertEqual('1.4.1', plugin_manifest['version'])
+                for name in names:
+                    self.assertIsNone(re.search(r'(?i)(?<![a-z0-9])kh(?![a-z0-9])', name), name)
+                    if name.endswith(('.py', '.md', '.json', '.yaml', '.ps1')):
+                        self.assertIsNone(re.search(r'(?i)(?<![a-z0-9])kh(?![a-z0-9])',
+                                                    bundle.read(name).decode('utf-8-sig')), name)
+                exporter = 'plugins/kone-dev/skills/pb-to-csharp-migration-harness/scripts/pbl-exporter/'
+                exporter_manifest = json.loads(bundle.read(exporter + 'bundle.json'))
+                for name, digest in exporter_manifest['sha256'].items():
+                    self.assertEqual(digest, hashlib.sha256(bundle.read(exporter + name)).hexdigest())
+                self.assertIn('plugins/kone-dev/src/runtime/windows_job.py', names)
+                self.assertIn('plugins/kone-dev/src/csharp/project.py', names)
+                self.assertIn('plugins/kone-dev/skills/csharp-designer-style-harness/references/reports.md', names)
+                exporter_root = 'plugins/kone-dev/skills/pb-to-csharp-migration-harness/scripts/'
                 for name in ('export_pbl.py', 'pbl-exporter/Export-PBL.ps1',
                              'pbl-exporter/PblExporter.exe', 'pbl-exporter/bundle.json'):
                     self.assertIn(exporter_root + name, names)
                 self.assertFalse(any('kh-maintenance' in n or '.git/' in n or 'temp_output' in n or '__pycache__' in n or 'docs/kh' in n for n in names))
                 self.assertTrue(all(b'GNh0' not in bundle.read(n) and b'KONEIT' not in bundle.read(n) for n in names))
                 bundle.extractall(Path(folder) / 'installed-source')
-            plugin = Path(folder) / 'installed-source/plugins/company-dev'
+            plugin = Path(folder) / 'installed-source/plugins/kone-dev'
+            package = subprocess.run([sys.executable, '-B', str(plugin / 'scripts/kone_check.py'),
+                                      'package', str(plugin)], cwd=folder, capture_output=True,
+                                     text=True, encoding='utf-8')
+            self.assertEqual(0, package.returncode, package.stdout + package.stderr)
+            package_result = json.loads(package.stdout)
+            self.assertEqual(11, package_result['skill_count'])
+            self.assertEqual(4, package_result['agent_count'])
             sample = Path(folder) / 'sample.cs'
             sample.write_text('class Screen { string Show(int n) => n.ToString("N0"); }', encoding='utf-8')
-            runtime = subprocess.run([sys.executable, '-B', str(plugin / 'scripts/company_check.py'), 'csharp', str(sample)],
+            runtime = subprocess.run([sys.executable, '-B', str(plugin / 'scripts/kone_check.py'), 'csharp', str(sample)],
                                      cwd=folder, capture_output=True, text=True, encoding='utf-8')
             self.assertEqual(0, runtime.returncode, runtime.stdout + runtime.stderr)
             result = json.loads(runtime.stdout)
@@ -186,7 +236,7 @@ class CompanyBundleTests(unittest.TestCase):
             self.assertNotIn('expression_body_preference', {i['code'] for i in result['issues']})
             project = Path(folder)/'sample.csproj'
             project.write_text('<Project><ItemGroup><Compile Include="sample.cs"/></ItemGroup></Project>', encoding='utf-8')
-            integrated = subprocess.run([sys.executable, '-B', str(plugin/'scripts/company_check.py'),
+            integrated = subprocess.run([sys.executable, '-B', str(plugin/'scripts/kone_check.py'),
                 'csharp', str(sample), '--project-file', str(project), '--required-reference', 'Charts.UI'],
                 cwd=folder, capture_output=True, text=True, encoding='utf-8')
             self.assertEqual(1, integrated.returncode, integrated.stdout + integrated.stderr)

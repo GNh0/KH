@@ -1,0 +1,14 @@
+{
+  "name": "kone-dev",
+  "version": "1.4.1",
+  "description": "Shared SQL, PowerBuilder and C# development skills with separate personal style settings.",
+  "author": { "name": "KONE" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "KONE Development",
+    "shortDescription": "SQL, PB, C# and practical development workflows.",
+    "longDescription": "Eleven development skills and four optional specialist/reviewer role instructions. The main agent handles work by default. Shared source/contract checks and rule audits preserve actual project behavior; employees keep personal style files outside the plugin. Local-marketplace distribution requires no personal GitHub connection.",
+    "developerName": "KONE",
+    "category": "Productivity"
+  }
+}

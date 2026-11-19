@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,28 @@ DISPLAY = {
     'runtime-cleanup': ('Runtime cleanup', 'Release finished task-owned processes and runtime resources'),
     'rule-audit': ('Rule audit', 'Audit applied rules and repair confirmed violations'),
 }
+ROLES = {'kone-sql-worker', 'kone-csharp-worker', 'kone-pb-worker', 'kone-rule-auditor'}
+
+
+def brand_shared_payload(stage: Path, plugin: Path) -> None:
+    """Adapt copied shared modules for KONE without editing the personal plugin."""
+    exporter = plugin / 'skills/pb-to-csharp-migration-harness/scripts/pbl-exporter'
+    manifest_path = exporter / 'bundle.json'
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    for name in ('Export-PBL.ps1', 'PblExporter.exe'):
+        if hashlib.sha256((exporter / name).read_bytes()).hexdigest() != manifest['sha256'][name]:
+            raise ValueError('bundled PB exporter source hash mismatch: ' + name)
+    for path in stage.rglob('*'):
+        if not path.is_file() or path.suffix not in {'.py', '.md', '.json', '.yaml', '.ps1'}:
+            continue
+        original = path.read_text(encoding='utf-8-sig')
+        branded = original.replace('scripts.kh_check', 'scripts.kone_check_core')
+        branded = re.sub(r'(?<![A-Za-z0-9])KH(?![A-Za-z0-9])', 'KONE', branded)
+        branded = re.sub(r'(?<![A-Za-z0-9])kh(?![A-Za-z0-9])', 'kone', branded)
+        if branded != original:
+            path.write_text(branded, encoding='utf-8', newline='\n')
+    manifest['sha256']['Export-PBL.ps1'] = hashlib.sha256((exporter / 'Export-PBL.ps1').read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 
 
 def copy_file(source: Path, target: Path) -> None:
@@ -60,7 +83,7 @@ def build_bundle(output: Path) -> dict:
             raise ValueError('bundle input is not a tracked in-repository source: ' + str(relative))
         copy_file(source, target)
 
-    with tempfile.TemporaryDirectory(prefix='company-dev-bundle-') as folder:
+    with tempfile.TemporaryDirectory(prefix='kone-dev-bundle-') as folder:
         stage = Path(folder) / 'marketplace'
         template = ROOT / 'company'
         for relative in sorted(inventory):
@@ -69,13 +92,13 @@ def build_bundle(output: Path) -> dict:
                 if not source.resolve().is_relative_to(template.resolve()):
                     raise ValueError('company template points outside its source root')
                 copy_source(relative, stage / source.relative_to(template))
-        plugin = stage / 'plugins/company-dev'
+        plugin = stage / 'plugins/kone-dev'
         for relative in sorted(path for path in inventory if path.is_relative_to(Path('src')) and path.suffix == '.py'):
             if relative.parts[1] == 'maintenance' and relative.name not in {'__init__.py', 'package_check.py', 'agents.py'}:
                 continue
             copy_source(relative, plugin / relative)
-        copy_source(Path('scripts/kh_check.py'), plugin / 'scripts/kh_check.py')
-        copy_source(Path('scripts/kh_runtime.py'), plugin / 'scripts/kh_runtime.py')
+        copy_source(Path('scripts/kh_check.py'), plugin / 'scripts/kone_check_core.py')
+        copy_source(Path('scripts/kh_runtime.py'), plugin / 'scripts/kone_runtime.py')
         for shared_skill in ('runtime-cleanup', 'rule-audit'):
             for relative in sorted(inventory):
                 if relative.is_relative_to(Path('skills') / shared_skill) and relative.suffix in {'.md', '.yaml'}:
@@ -97,21 +120,25 @@ def build_bundle(output: Path) -> dict:
                               '  display_name: ' + json.dumps(display_name) + '\n'
                               '  short_description: ' + json.dumps(description) + '\n'
                               '  default_prompt: ' + json.dumps('Use $' + name + ' for this task.') + '\n', encoding='utf-8')
+        brand_shared_payload(stage, plugin)
         names = {entry.parent.name for entry in (plugin / 'skills').glob('*/SKILL.md')}
         if names != set(DISPLAY):
             raise ValueError('employee bundle must contain the selected shared skills')
-        validation = subprocess.run([sys.executable, '-B', str(plugin / 'scripts/company_check.py'),
+        validation = subprocess.run([sys.executable, '-B', str(plugin / 'scripts/kone_check.py'),
                                      'package', str(plugin)], cwd=folder, capture_output=True,
                                     text=True, encoding='utf-8')
         if validation.returncode:
             raise ValueError('generated package validation failed: ' + validation.stdout + validation.stderr)
+        package_result = json.loads(validation.stdout)
+        if set(package_result.get('agent_names', [])) != ROLES:
+            raise ValueError('employee bundle must contain the selected specialist/reviewer role instructions')
         files = sorted(path for path in stage.rglob('*') if path.is_file())
         for path in files:
             data = path.read_bytes()
             if any(name.encode(encoding) in data for name in ('GNh0', 'KONEIT')
                    for encoding in ('utf-8', 'utf-16-le')):
                 raise ValueError('personal account/path leaked into company package: ' + str(path.relative_to(stage)))
-        archive = Path(folder) / 'company-dev.zip'
+        archive = Path(folder) / 'kone-dev.zip'
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
             for path in files:
                 bundle.write(path, path.relative_to(stage).as_posix())
@@ -119,7 +146,8 @@ def build_bundle(output: Path) -> dict:
         copy_file(archive, output)
     return {'output': str(output), 'size_bytes': output.stat().st_size,
             'sha256': hashlib.sha256(output.read_bytes()).hexdigest(), 'skill_count': len(DISPLAY),
-            'version': json.loads((ROOT / 'company/plugins/company-dev/.codex-plugin/plugin.json').read_text(encoding='utf-8'))['version'],
+            'agent_count': len(package_result['agent_names']),
+            'version': json.loads((ROOT / 'company/plugins/kone-dev/.codex-plugin/plugin.json').read_text(encoding='utf-8'))['version'],
             'checks': 'generated package references, Python imports and CLI execution',
             'installed_in_codex': False}
 

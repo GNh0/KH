@@ -1,10 +1,10 @@
 {
-  "name": "company-dev-marketplace",
-  "interface": { "displayName": "Company Development" },
+  "name": "kone-dev-marketplace",
+  "interface": { "displayName": "KONE Development" },
   "plugins": [
     {
-      "name": "company-dev",
-      "source": { "source": "local", "path": "./plugins/company-dev" },
+      "name": "kone-dev",
+      "source": { "source": "local", "path": "./plugins/kone-dev" },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
       "category": "Productivity"
     }
