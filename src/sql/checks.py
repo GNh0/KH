@@ -1,7 +1,7 @@
 """Distinguish SQL preservation errors from scoped style preferences."""
 from collections import Counter
 import re
-from src.common.results import CheckResult, HarnessResult, Issue
+from src.common.results import CheckResult, HarnessResult, Issue, Severity
 from .compare import compare_sql
 from .lexer import (
     _SqlToken, _analyze_sql_integrity, _identifier_value, _is_identifier_token,
@@ -494,7 +494,7 @@ def _review_generation_choices(candidate: str, original: str | None) -> list[Iss
         'backup_procedure_call': 'This new call executes a backup (_BAK) procedure. Call the active procedure, or confirm that the user explicitly requested the backup copy.',
         'redundant_numeric_convert_review': 'This conversion directly wraps another conversion to the same NUMERIC/DECIMAL type. Remove the redundant wrapper unless the actual type contract differs.',
     }
-    severities = {'backup_procedure_call': 'error'}
+    severities: dict[str, Severity] = {'backup_procedure_call': 'error'}
     issues: list[Issue] = []
     for code, identity, offset, details in _generation_choices(candidate):
         if previous[(code, identity)]:
