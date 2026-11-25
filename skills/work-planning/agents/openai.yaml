@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work planning"
+  short_description: "Design a practical plan for substantial work"
+  default_prompt: "Use $work-planning to help with this task."

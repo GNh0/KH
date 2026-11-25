@@ -1,0 +1,4 @@
+interface:
+  display_name: "KH maintenance"
+  short_description: "Maintain KH skills, domain checks and realistic scenarios"
+  default_prompt: "Use $kh-maintenance to help with this task."

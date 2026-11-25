@@ -1,0 +1,15 @@
+# PB extraction and comparison
+
+The ZIP includes PblScripter's export script and x86 helper. Python 3.11+, Windows PowerShell and a compatible installed licensed PB/ORCA runtime are required for extraction. No separate PblScripter installation is needed. Use `python -B <skill-root>/scripts/export_pbl.py convert --pbl <absolute-pbl> --output-directory <absolute-temp-output>` from any directory. Normally omit the version: installed PB 7.0/10.5/12.5 candidates are tried in descending order with temporary input/output, and only successful native extraction selects a runtime. Failed outputs are discarded. `probe` reads installed capabilities without executing ORCA. PBL headers alone do not identify the original authoring version.
+
+Check the exact PBL, chosen DLL, bitness, dependencies, child-process PATH and license. `--version 70|105|125` optionally pins a runtime; `--orca-dll` and repeated `--runtime-directory` handle custom paths, and `--tool-root` overrides the bundled exporter. Source/binary hashes make packaged helpers independent of archive timestamps. `--compile-helper` rebuilds an absent/mismatched helper only when necessary, in system temporary storage. Vendor PB DLLs are not redistributed. Continue from supplied exports if extraction is unavailable and identify missing evidence.
+
+Exit zero alone is insufficient: inspect error text and actual newly created nonempty exports. Session-open, bad-library, SySAM/license failures and missing output cannot be reported as completed extraction. Helper builds follow the current task's instructions and concrete necessity.
+
+Internal staging/helper-build folders are cleaned automatically. Successful `--output-directory` files remain caller-owned: remove analysis-only exports after reading them, while retaining requested final exports and still-needed continuation evidence. Use a scoped temporary output directory and follow [workspace files](../../work-execution/references/workspace-files.md).
+
+`python -B <plugin-root>/scripts/company_check.py pb <absolute-export> --encoding cp949` inspects supported export structure. Choose the actual source encoding. `sp-call <absolute-caller.cs> <absolute-procedure.sql>` compares a selected call and actual signature. Neither command executes a PBL or database.
+
+For a migration plan, connect actual screens, events, DataWindows, tables, inputs/outputs, keys, row states and implementation dependencies only to the detail the request needs. Compare query/edit/protection/save/requery and reports using the same inputs.
+
+`src.pb.equivalence.compare_observations` accepts two observation objects: `parameters` (object), `database` (nonempty string), `schema` (ordered array), `ordered` (boolean), and `rows` (array). Duplicate rows are retained, nested types are compared and ordered results require matching row order. Timing uses finite nonnegative samples in `elapsed_ms`; optional `query_count` and `logical_reads` are nonnegative integers. Provenance is supplied evidence, not automatically authenticated execution. Performance claims need comparable context, results and measurements.

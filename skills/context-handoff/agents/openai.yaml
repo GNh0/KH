@@ -1,0 +1,4 @@
+interface:
+  display_name: "Context recovery and memory"
+  short_description: "Restore tasks and manage explicit persistent project memory"
+  default_prompt: "Use $context-handoff to help with this task."

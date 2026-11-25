@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {"event": "interaction.created", "kind": "status", "fields": {"status": ["interaction", "status"], "model": ["interaction", "model"], "job_id": ["interaction", "id"]}},
+    {"event": "interaction.status_update", "kind": "status", "fields": {"status": ["status"]}},
+    {"event": "step.start", "when": [{"path": ["step", "type"], "equals": "function_call"}], "kind": "tool_call", "fields": {"name": ["step", "name"], "arguments": ["step", "arguments"], "tool_id": ["step", "id"]}},
+    {"event": "step.start", "kind": "phase", "fields": {"phase": ["step", "type"], "step_index": ["index"]}},
+    {"event": "step.delta", "when": [{"path": ["delta", "type"], "equals": "thought_summary"}, {"path": ["delta", "content", "type"], "equals": "text"}], "kind": "summary_delta", "fields": {"text": ["delta", "content", "text"]}, "channel": ["index"]},
+    {"event": "step.delta", "when": [{"path": ["delta", "type"], "equals": "text"}], "kind": "text_delta", "fields": {"text": ["delta", "text"]}, "channel": ["index"]},
+    {"event": "step.stop", "kind": "phase", "fields": {"step_index": ["index"]}},
+    {"event": "interaction.completed", "kind": "completed", "fields": {"provider_status": ["interaction", "status"], "usage": ["interaction", "usage"], "model": ["interaction", "model"]}},
+    {"event": "error", "kind": "error", "fields": {"message": ["message"], "code": ["code"]}}
+  ]
+}

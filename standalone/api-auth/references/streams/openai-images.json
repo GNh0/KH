@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "event": "image_generation.partial_image",
+      "kind": "image_preview",
+      "fields": {"preview_index": ["partial_image_index"]},
+      "artifact": {"path": ["b64_json"], "format": "png"}
+    },
+    {
+      "event": "image_generation.completed",
+      "kind": "completed",
+      "fields": {"usage": ["usage"], "model": ["model"]},
+      "artifact": {"path": ["b64_json"], "format": "png"}
+    },
+    {"event": "error", "kind": "error", "fields": {"message": ["message"], "code": ["code"]}}
+  ]
+}

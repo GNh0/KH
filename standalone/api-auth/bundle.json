@@ -1,0 +1,24 @@
+{
+  "skill": "api-auth",
+  "version": "1.0.0",
+  "payload": [
+    "README.md",
+    "SKILL.md",
+    "references/streaming.md",
+    "references/streams/gemini-interactions.json",
+    "references/streams/openai-images.json",
+    "references/usage.md",
+    "scripts/api_auth.py",
+    "src/__init__.py",
+    "src/api_auth/__init__.py",
+    "src/api_auth/input.py",
+    "src/api_auth/manager.py",
+    "src/api_auth/output.py",
+    "src/api_auth/profile.py",
+    "src/api_auth/providers.py",
+    "src/api_auth/security.py",
+    "src/api_auth/store.py",
+    "src/api_auth/streaming.py",
+    "src/api_auth/transport.py"
+  ]
+}

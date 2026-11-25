@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+.snapshots/
+.uaf/
+.kh/
+.worktrees/
+.demo-output/
+test_cli_project/
+test_project/
+dist/

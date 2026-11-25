@@ -1,0 +1,218 @@
+"""Run optional KH checks from any working directory without installing a server."""
+from pathlib import Path
+import sys
+
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PLUGIN_ROOT))
+
+
+def main(argv=None):
+    import argparse
+    from src.common.files import read_file
+    parser = argparse.ArgumentParser(description="KH source and artifact checks; no agent orchestration or DB access")
+    commands = parser.add_subparsers(dest="command", required=True)
+    sql = commands.add_parser("sql", help="compare/inspect SQL or normalize supported layout")
+    sql.add_argument("input")
+    sql.add_argument("candidate", nargs="?")
+    sql.add_argument("--preserve-aliases", action="store_true")
+    sql.add_argument("--normalize-layout", action="store_true")
+    sql.add_argument("--check-delta", action="store_true")
+    sql.add_argument('--procedure-header', action='store_true', help='check mandatory SP header structure separately from formatting-only preservation')
+    sql.add_argument('--review-changes', action='store_true', help='review an existing SP against its baseline and report changes that need source justification')
+    sql.add_argument('--author', help='expected new-SP author when using --procedure-header')
+    sql.add_argument('--allow-locking-hints', action='store_true',
+                     help='the user explicitly requested the locking hints in this task; report them as info')
+    cs = commands.add_parser("csharp", help="inspect current C# and optional Designer/baseline")
+    cs.add_argument("input")
+    cs.add_argument("--original")
+    cs.add_argument("--designer")
+    cs.add_argument('--designer-original')
+    cs.add_argument('--style-reference-csharp', metavar='ABSOLUTE_COMPARISON_CS',
+                    help='actual approved comparison screen used to compare command phases and query/save transport')
+    cs.add_argument('--screen-command', action='append', choices=('search', 'new', 'edit', 'save', 'delete', 'clear', 'print'),
+                    help='explicitly allowed screen operation from the current request; repeat for each operation')
+    designer = commands.add_parser('designer', help='compare explicit Designer properties with a supplied baseline')
+    designer.add_argument('input')
+    designer.add_argument('--original')
+    designer.add_argument('--code-behind')
+    designer.add_argument('--preserve-property', action='append', default=[])
+    for command in (sql, cs, designer):
+        command.add_argument('--style-policy', choices=('kh', 'project'), default='kh',
+                             help='kh retains the personal KH preferences; project checks supplied source/contracts without imposing them')
+    for command in (cs, designer):
+        command.add_argument('--style-reference-designer', metavar='ABSOLUTE_COMPARISON_DESIGNER',
+                             help='actual approved comparison screen used to compare label/input heights, label presentation and editor buttons')
+        command.add_argument('--project-file', metavar='ACTUAL_CSPROJ',
+                             help='inspect selected source/resource registrations in the actual target project XML')
+        command.add_argument('--project-item', action='append', default=[], metavar='SELECTED_CS_OR_RESX',
+                             help='additional actual file to check for project registration; requires --project-file')
+        command.add_argument('--required-reference', action='append', default=[], metavar='ASSEMBLY_NAME',
+                             help='direct assembly reference required by verified target APIs; requires --project-file')
+        command.add_argument('--preserve-existing', action='store_true',
+                             help='compare retained Designer properties with the actual original; requires a Designer baseline')
+        command.add_argument('--member-rename', action='append', default=[], metavar='OLD=NEW',
+                             help='explicit original-to-current Designer member name; repeat for renamed members')
+        command.add_argument('--control-source', action='append', default=[], metavar='ABSOLUTE_CONTROL_CS',
+                             help='actual target user-control source; repeat to review types and direct constructor defaults')
+        command.add_argument('--numeric-column', action='append', default=[], metavar='COLUMN_MEMBER',
+                             help='actual numeric column member whose Spin repository binding must be checked')
+        command.add_argument('--column-mode', action='append', default=[], metavar='MEMBER=MODE',
+                             help='explicit column contract: read_only, action, or editable')
+        command.add_argument('--allow-property-change', action='append', default=[], metavar='MEMBER.PROPERTY',
+                             help='specific established requirement; records excluded default-style checks and does not authorize changes')
+    sp = commands.add_parser('sp-call', help='compare one selected C# call with one actual procedure definition')
+    sp.add_argument('input')
+    sp.add_argument('procedure')
+    contract = commands.add_parser('screen-contract', help='compare actual form calls and grid result bindings with named SQL definitions')
+    contract.add_argument('input', help='actual form code-behind')
+    contract.add_argument('procedures', nargs='+', help='one actual SP definition per file')
+    contract.add_argument('--designer', help='matching Designer.cs containing grid and column ownership')
+    contract.add_argument('--serializer', help='actual TableToXml helper source for XML root and emitted row names')
+    pb = commands.add_parser("pb", help="inspect a supplied PB export")
+    pb.add_argument("input")
+    pb.add_argument("--encoding", default="utf-8-sig")
+    artifact = commands.add_parser("artifact", help="check a file's structure, not its visual rendering")
+    artifact.add_argument("input")
+    package = commands.add_parser("package", help="validate local plugin files and imports")
+    package.add_argument("input")
+    args = parser.parse_args(argv)
+    try:
+        pairs = []
+        if args.command == 'sql' and args.candidate:
+            pairs.append((args.input, args.candidate))
+        elif args.command in {'csharp', 'designer'}:
+            if (args.project_item or args.required_reference) and not args.project_file:
+                raise ValueError('--project-item and --required-reference require --project-file')
+            if args.command == 'csharp' and args.style_reference_csharp:
+                pairs.append((args.style_reference_csharp, args.input))
+            if args.command == 'csharp' and args.style_reference_designer and not args.designer:
+                raise ValueError('--style-reference-designer with csharp requires --designer')
+            if args.style_reference_designer:
+                pairs.append((args.style_reference_designer,
+                              args.designer if args.command == 'csharp' else args.input))
+            if args.original:
+                pairs.append((args.original, args.input))
+            if args.command == 'csharp' and args.designer_original:
+                if not args.designer:
+                    raise ValueError('--designer-original requires --designer')
+                pairs.append((args.designer_original, args.designer))
+        for original_path, candidate_path in pairs:
+            if Path(original_path).samefile(candidate_path):
+                raise ValueError('comparison baseline and candidate are the same file; supply a separate original snapshot or run a single-file inspection')
+        member_renames = {}
+        for item in getattr(args, 'member_rename', []):
+            old, separator, new = item.partition('=')
+            if not separator or not old or not new or (old in member_renames and member_renames[old] != new):
+                raise ValueError('--member-rename requires one consistent OLD=NEW mapping per member')
+            member_renames[old] = new
+        control_sources = [read_file(path).text() for path in getattr(args, 'control_source', [])]
+        column_modes = {}
+        for item in getattr(args, 'column_mode', []):
+            name, separator, mode = item.partition('=')
+            if not separator or not name or mode not in {'read_only', 'action', 'editable'}:
+                raise ValueError('--column-mode requires MEMBER=read_only, MEMBER=action, or MEMBER=editable')
+            if name in column_modes and column_modes[name] != mode:
+                raise ValueError('Conflicting column modes for ' + name)
+            column_modes[name] = mode
+        if args.command == "sql":
+            from src.sql.checks import check_sql
+            from src.sql.layout import normalize_sql_join_layout
+            original = read_file(args.input).text()
+            if args.normalize_layout:
+                if args.review_changes:
+                    raise ValueError('--review-changes requires a comparison separate from --normalize-layout')
+                if args.style_policy != 'kh':
+                    raise ValueError('--normalize-layout implements KH layout; it is unavailable with project style policy')
+                if args.candidate:
+                    parser.error("--normalize-layout accepts one input")
+                print(normalize_sql_join_layout(original), end="")
+                return 0
+            candidate = read_file(args.candidate).text() if args.candidate else original
+            if args.author and not args.procedure_header:
+                raise ValueError('--author requires --procedure-header')
+            if args.review_changes and not args.candidate:
+                raise ValueError('--review-changes requires the original and candidate definitions')
+            result = check_sql(candidate, original=original if args.candidate else None,
+                               preserve_aliases=args.preserve_aliases, check_delta=args.check_delta,
+                               require_procedure_header=args.procedure_header, procedure_author=args.author,
+                               review_sp_changes=args.review_changes, compare_original=not args.review_changes,
+                               allow_locking_hints=args.allow_locking_hints,
+                               check_style=args.style_policy == 'kh', check_preferences=args.style_policy == 'kh')
+        elif args.command == "csharp":
+            from src.csharp.checks import check_csharp
+            result = check_csharp(read_file(args.input).text(),
+                                   original=read_file(args.original).text() if args.original else None,
+                                   designer=read_file(args.designer).text() if args.designer else None,
+                                   original_designer=read_file(args.designer_original).text() if args.designer_original else None,
+                                   style_reference_designer=read_file(args.style_reference_designer).text() if args.style_reference_designer else None,
+                                   style_reference_csharp=read_file(args.style_reference_csharp).text() if args.style_reference_csharp else None,
+                                   screen_commands=args.screen_command,
+                                   column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change,
+                                   control_sources=control_sources, numeric_columns=args.numeric_column,
+                                   preserve_existing=args.preserve_existing, member_renames=member_renames,
+                                   check_style=args.style_policy == 'kh')
+        elif args.command == 'designer':
+            from src.csharp.designer import check_designer
+            result = check_designer(read_file(args.input).text(),
+                original=read_file(args.original).text() if args.original else None,
+                style_reference=read_file(args.style_reference_designer).text() if args.style_reference_designer else None,
+                code_behind=read_file(args.code_behind).text() if args.code_behind else '',
+                preserved_properties=args.preserve_property, column_edit_modes=column_modes,
+                allowed_property_changes=args.allow_property_change, control_sources=control_sources, numeric_columns=args.numeric_column,
+                preserve_existing=args.preserve_existing, member_renames=member_renames,
+                check_style=args.style_policy == 'kh')
+        elif args.command == 'sp-call':
+            from src.pb.sql import check_sp_call
+            result = check_sp_call(read_file(args.input).text(), read_file(args.procedure).text())
+        elif args.command == 'screen-contract':
+            from src.csharp.screen_contract import check_screen_contract
+            result = check_screen_contract(read_file(args.input).text(),
+                read_file(args.designer).text() if args.designer else None,
+                {path: read_file(path).text() for path in args.procedures},
+                caller_path=args.input, designer_path=args.designer or 'designer',
+                serializer=read_file(args.serializer).text() if args.serializer else None,
+                serializer_path=args.serializer or 'serializer')
+        elif args.command == "pb":
+            from src.pb.checks import check_pb_export
+            result = check_pb_export(read_file(args.input).text(args.encoding), path=args.input)
+        elif args.command == "artifact":
+            from src.artifacts.checks import check_artifact
+            result = check_artifact(args.input)
+        else:
+            from src.maintenance.package_check import check_package
+            result = check_package(args.input)
+        if args.command in {'csharp', 'designer'}:
+            if args.project_file:
+                from src.csharp.project import check_project
+                files = [args.input, *args.project_item]
+                companion = args.designer if args.command == 'csharp' else args.code_behind
+                if companion:
+                    files.append(companion)
+                integration = check_project(args.project_file, files, args.required_reference)
+                result.issues.extend(integration.issues)
+                result.checked.extend(integration.checked)
+                result.not_checked.extend(integration.not_checked)
+                result.incomplete = result.incomplete or integration.incomplete
+                result.metadata.update(integration.metadata)
+                if integration.issues or integration.incomplete:
+                    result.metadata['review_status'] = 'needs_review'
+            else:
+                result.metadata['project_integration'] = {'status': 'unverified', 'project_file': None}
+                result.not_checked.append('Actual project source/resource registration and required assembly references; no --project-file supplied')
+        if args.command in {'sql', 'csharp', 'designer'}:
+            result.metadata['style_policy'] = args.style_policy
+            if args.style_policy == 'project':
+                result.not_checked.append('employee style instructions; inspect the selected personal style and actual project manually')
+        print(result.to_json())
+        return result.exit_code
+    except (OSError, ValueError, UnicodeError) as error:
+        from src.common.results import CheckResult, Issue
+        result = CheckResult(issues=[Issue("input_error", "error", str(error))])
+        print(result.to_json())
+        return result.exit_code
+
+
+if __name__ == "__main__":
+    from src.common.output import configure_utf8_streams
+    configure_utf8_streams()
+    raise SystemExit(main())

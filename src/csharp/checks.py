@@ -1,0 +1,257 @@
+"""Useful local C# comparisons without authentication/exception ledgers."""
+from collections import Counter
+from dataclasses import replace
+import re
+from typing import Mapping, Sequence
+from src.common.results import CheckResult, HarnessResult, Issue, from_legacy_issues
+from .lexer import _scan_csharp
+from .source import _call_count, _target_local_method_inventory, _designer_wired_event_handlers, _row_rewrite_loops, _transaction_invocation_drift_issues
+from .designer import check_designer, layout_comparisons
+from .designer_model import parse_designer_source, locate_issues, _normalized_csharp_value
+from .grid_style import check_grid_style, check_numeric_column_editors
+from .numeric_format import check_numeric_formats
+from .flow_review import check_project_flow
+from .command_flow import check_command_flow
+from .save_contract import check_save_contract, check_select_contract
+from .editor_display import check_editor_display
+from .view_appearance import check_view_appearance
+from .control_style import check_control_braces
+from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
+from .label_style import check_label_style
+from .syntax import linq_candidates, static_ui_sites
+from .source_preservation import remap_members
+from .subscriptions import check_duplicate_subscriptions
+
+
+def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
+                 allowed_changes: Mapping[str, Sequence[str]] | None = None,
+                 original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
+                 style_reference_designer: str | None = None, layout_references: Mapping[str, str] | None = None,
+                 style_reference_csharp: str | None = None, screen_commands: Sequence[str] | None = None,
+                 allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
+                 numeric_columns: Sequence[str] = (), preserve_existing: bool = False,
+                 member_renames: Mapping[str, str] | None = None, check_style: bool = True,
+                 style_references: Mapping[str, str] | None = None) -> CheckResult:
+    allowed = allowed_changes or {}
+    result = CheckResult(checked=["C# lexical source patterns"],
+                         not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
+    result.metadata['comparison_baselines'] = {'csharp': original is not None,
+        'designer': original_designer is not None}
+    layout, grid_layout = layout_comparisons(style_reference_designer, layout_references)
+    if layout is not None or grid_layout is not None:
+        result.metadata['comparison_baselines']['style_reference'] = True
+    if style_reference_csharp is not None:
+        result.metadata['comparison_baselines']['command_style_reference'] = True
+    if member_renames and (designer is None or original_designer is None):
+        raise ValueError('C# member renames require both Designer versions')
+    if (layout is not None or grid_layout is not None) and designer is None:
+        raise ValueError('A comparison Designer requires the candidate Designer')
+    if original is None:
+        result.not_checked.append('C# changes and source preservation; no original C# supplied')
+    if original is not None and member_renames:
+        original = remap_members(original, member_renames)
+    if preserve_existing and designer is None:
+        result.incomplete = True
+        result.issues.append(Issue('preservation_designer_missing', 'warning', 'Supply both Designer versions for existing-property preservation.'))
+    code, _ = _scan_csharp(candidate)
+    before, _ = _scan_csharp(original or "")
+    if check_style:
+        result.issues.extend(check_control_braces(candidate, original=original))
+        result.issues.extend(check_numeric_formats(candidate, original=original))
+        result.checked.extend(['new unbraced control bodies', 'literal numeric format choices at recognized C# format sites'])
+        result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
+    else:
+        result.not_checked.append('personal coding, naming, numeric-format and KH grid-layout preferences')
+    candidate_model = parse_designer_source(candidate)
+    baseline_model = parse_designer_source(original) if original is not None else None
+    if designer is not None:
+        types = parse_designer_source(designer).controls
+        candidate_model = replace(candidate_model, controls={name: replace(control, type_name=types[name].type_name)
+            if not control.type_name and name in types else control for name, control in candidate_model.controls.items()})
+        if baseline_model is not None:
+            original_types = parse_designer_source(remap_members(original_designer, member_renames or {})).controls if original_designer is not None else types
+            baseline_model = replace(baseline_model, controls={name: replace(control, type_name=original_types[name].type_name)
+                if not control.type_name and name in original_types else control for name, control in baseline_model.controls.items()})
+    defaults = read_control_defaults(control_sources)
+    flow_types = {name: control.type_name for name, control in parse_designer_source(designer or '').controls.items()}
+    flow_types.update({name: control.type_name for name, control in candidate_model.controls.items() if control.type_name})
+    result.issues.extend(check_project_flow(candidate, original=original,
+        control_types=flow_types,
+        control_sources=control_sources))
+    result.checked.append('recognizable UI/data helpers, entry queries, save gates, save-mode literals, original-row comparisons, input Tag values, action codes and focus-guard ordering')
+    result.not_checked.append('necessity of validation, dynamic edit-mode values, indirect event order, XML/SP field ownership and project-wide coding-style compliance')
+    references = style_references or {}
+    command_reference = references.get('csharp-code', references.get('csharp-data', style_reference_csharp))
+    data_reference = references.get('csharp-data', style_reference_csharp)
+    command_flow = check_command_flow(candidate, original=original,
+        style_reference=command_reference, allowed_commands=screen_commands,
+        designer=designer,
+        original_designer=remap_members(original_designer, member_renames or {}) if original_designer is not None else None)
+    result.issues.extend(command_flow.issues)
+    result.checked.extend(command_flow.checked)
+    result.not_checked.extend(command_flow.not_checked)
+    result.metadata.update(command_flow.metadata)
+    save_contract = check_save_contract(candidate, original=original, style_reference=data_reference)
+    result.issues.extend(save_contract.issues)
+    result.checked.extend(save_contract.checked)
+    result.not_checked.extend(save_contract.not_checked)
+    result.metadata.update(save_contract.metadata)
+    select_contract = check_select_contract(candidate, original=original, style_reference=data_reference)
+    result.issues.extend(select_contract.issues)
+    result.checked.extend(select_contract.checked)
+    result.not_checked.extend(select_contract.not_checked)
+    result.metadata.update(select_contract.metadata)
+    for call in ("PostEditor", "UpdateCurrentRow"):
+        if _call_count(code, call) > _call_count(before, call) and call not in allowed.get("new_calls", []):
+            result.issues.append(Issue("new_edit_commit_call", "warning", "Review this edit-commit call against the actual existing save/editor path before adding or retaining it.", details={"call": call}))
+    if original is not None:
+        for call in ("PostEditor", "CloseEditor", "UpdateCurrentRow"):
+            if _call_count(code, call) < _call_count(before, call) and call not in allowed.get("removed_calls", []):
+                result.issues.append(Issue("edit_commit_call_removed", "warning", "An existing grid edit-commit call was removed. Without it the value still being edited can be lost on save; confirm the actual save path commits edits another way.", details={"call": call, "before": _call_count(before, call), "after": _call_count(code, call)}))
+        result.checked.append('removed PostEditor/CloseEditor/UpdateCurrentRow calls against the original')
+    partials = [candidate] + ([designer] if designer is not None else [])
+    prior = ([original] if original is not None else []) + ([original_designer if original_designer is not None else designer] if designer is not None else [])
+    result.issues.extend(check_duplicate_subscriptions(partials, prior if original is not None else None))
+    result.checked.append('repeated named-handler subscriptions to one event across the supplied partials')
+    result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, reference=layout, defaults=defaults,
+                         allowed_property_changes=allowed_property_changes, check_declarations=designer is None, check_style=check_style))
+    if check_style:
+        labels = check_label_style(candidate_model, original=baseline_model,
+                                   reference=layout,
+                                   defaults=defaults, allowed_property_changes=allowed_property_changes,
+                                   explicit_only=designer is not None)
+        result.issues.extend(labels.issues)
+        result.checked.extend(labels.checked)
+        result.not_checked.extend(labels.not_checked)
+        result.incomplete |= labels.incomplete
+        result.metadata.update(labels.metadata)
+    result.issues.extend(check_grid_style(with_control_base_types(candidate_model, defaults),
+                         original=with_control_base_types(baseline_model, defaults) if baseline_model else None,
+                         reference=with_control_base_types(grid_layout, defaults) if grid_layout is not None else None,
+                         column_edit_modes=column_edit_modes if designer is None else None,
+                         allowed_property_changes=allowed_property_changes, check_required_defaults=False, check_style=check_style))
+    display_types = {name: control.type_name for name, control in
+                     with_control_base_types(parse_designer_source(designer or ''), defaults).controls.items()}
+    display_types.update({name: control.type_name for name, control in
+                          with_control_base_types(candidate_model, defaults).controls.items() if control.type_name})
+    display_original_designer = remap_members(original_designer, member_renames or {}) if original_designer is not None else None
+    old_display_types = {name: control.type_name for name, control in
+                         with_control_base_types(parse_designer_source(display_original_designer if display_original_designer is not None else designer or ''), defaults).controls.items()}
+    if baseline_model is not None:
+        old_display_types.update({name: control.type_name for name, control in
+                                  with_control_base_types(baseline_model, defaults).controls.items() if control.type_name})
+    appearance = check_view_appearance(candidate, original=original, control_types=display_types,
+        original_control_types=old_display_types, defaults=defaults, allowed_property_changes=allowed_property_changes)
+    result.issues.extend(appearance.issues)
+    result.checked.extend(appearance.checked)
+    result.not_checked.extend(appearance.not_checked)
+    result.metadata.update(appearance.metadata)
+    display = check_editor_display(candidate, original=original, designer=designer,
+        original_designer=display_original_designer,
+        control_types=display_types, original_control_types=old_display_types)
+    result.issues.extend(display.issues)
+    result.checked.extend(display.checked)
+    result.not_checked.extend(display.not_checked)
+    result.metadata.update(display.metadata)
+    if not code.strip():
+        result.incomplete = True
+        result.issues.append(Issue('csharp_code_missing', 'warning', 'No executable/declarative C# text is available for the requested source checks.'))
+    if original is not None:
+        result.checked += ["target method signatures", "transaction-named call changes", "new whole-table row rewrites"]
+        result.not_checked.append("transaction participation and wrapper equivalence; inspect actual call bodies/API contracts")
+        wired = _designer_wired_event_handlers(designer)
+        old_methods = Counter(x["signature"] for x in _target_local_method_inventory(before, wired_event_handlers=wired))
+        new_methods = Counter(x["signature"] for x in _target_local_method_inventory(code, wired_event_handlers=wired))
+        for signature, count in (old_methods - new_methods).items():
+            if signature not in allowed.get("removed_methods", []):
+                result.issues.append(Issue("target_method_removed", "warning", "Review removal of an established target-local method against the requested change.", details={"signature": signature, "count": count}))
+        for finding in _transaction_invocation_drift_issues(before, code):
+            if finding["code"] not in allowed.get("issue_codes", []):
+                result.issues += from_legacy_issues([finding])
+        old_loops = Counter(x["fingerprint"] for x in _row_rewrite_loops(original))
+        for loop in _row_rewrite_loops(candidate):
+            if old_loops[loop["fingerprint"]]:
+                old_loops[loop["fingerprint"]] -= 1
+            elif not set(loop["columns"]) <= set(allowed.get("whole_table_columns", [])):
+                result.issues.append(Issue("whole_table_row_rewrite", "warning", "Check XML/SP field ownership before propagating values across every row.", details=loop))
+    if check_style:
+        from .control_names import _PREFIXES, known_control_kind
+        known_ui = {name for name, kind in display_types.items() if known_control_kind(kind) in
+                    set(_PREFIXES) | {'Control', 'Form', 'UserControl', 'GridColumn', 'GridBand', 'TileView', 'XtraReport'} or
+                    kind.startswith('DevExpress.XtraReports.UI.XR')}
+        previous_properties = Counter((member, prop, _normalized_csharp_value(value), owner)
+            for member, prop, value, _line, owner, _offset in static_ui_sites(original or '', known_ui))
+        for member, prop, value, line, owner, _offset in static_ui_sites(candidate, known_ui):
+            if prop not in {'Location', 'Size', 'Font', 'Caption', 'FieldName'} and not prop.startswith('Appearance'):
+                continue
+            key = member, prop, _normalized_csharp_value(value), owner
+            if previous_properties[key]:
+                previous_properties[key] -= 1
+            else:
+                result.issues.append(Issue('static_ui_in_code_behind_review', 'warning',
+                    'This direct fixed-value setup may belong in Designer. Conditional branches and dynamic values are excluded; verify the actual event before changing it.',
+                    line=line, details={'member': member, 'property': f'{member}.{prop}', 'method': owner}))
+        result.not_checked.append('necessity of intermediate DataTables and conditional/dynamic UI setup; compare actual row-selection, binding, XML and report contracts')
+    patterns = {
+        "expression_body_preference": r"\b(?:public|protected|private|internal)\b[^;{}\n]*=>",
+    }
+    if check_style and len(linq_candidates(candidate)) > len(linq_candidates(original or '')):
+        result.issues.append(Issue('linq_preference', 'warning',
+            'Review a likely LINQ invocation against the existing project form. The lexer cannot resolve extension methods; verify the actual API. An exception needs difficult implementation without it or an extreme performance disadvantage.'))
+    for name, pattern in patterns.items():
+        if check_style and len(re.findall(pattern, code)) > len(re.findall(pattern, before)):
+            result.issues.append(Issue(name, "warning", "Prefer the established project form. A difficult implementation without this construct or an extreme performance disadvantage can justify an exception; convenience alone cannot."))
+    if designer is not None:
+        ui = check_designer(designer, code_behind=candidate, original=original_designer,
+                            style_reference=style_reference_designer, layout_references=layout_references,
+                            column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes,
+                            control_sources=control_sources, numeric_columns=numeric_columns,
+                            preserve_existing=preserve_existing, member_renames=member_renames, check_style=check_style)
+        result.issues.extend(ui.issues)
+        result.checked.extend(ui.checked)
+        result.not_checked.extend(ui.not_checked)
+        result.incomplete |= ui.incomplete
+        for key in ('designer_preservation', 'member_renames'):
+            if key in ui.metadata:
+                result.metadata[key] = ui.metadata[key]
+        if 'label_style' in ui.metadata:
+            result.metadata['label_style_designer'] = ui.metadata['label_style']
+        if 'view_appearance' in ui.metadata:
+            result.metadata['view_appearance_designer'] = ui.metadata['view_appearance']
+    elif control_sources:
+        result.checked.append('supplied user-control types and direct parameterless-constructor assignments')
+        result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')
+    else:
+        result.not_checked.append('available user-control selection and constructor-default overrides; no control sources supplied')
+    if allowed_property_changes:
+        result.metadata['style_exemptions'] = sorted(set(allowed_property_changes))
+        notice = 'default-style checks for supplied exempt properties; exemptions do not establish user authorization or necessity'
+        if notice not in result.not_checked:
+            result.not_checked.append(notice)
+    if numeric_columns:
+        combined = parse_designer_source(designer or '')
+        controls = dict(combined.controls)
+        for name, control in candidate_model.controls.items():
+            existing = controls.get(name)
+            controls[name] = replace(control, properties={
+                **(existing.properties if existing else {}), **control.properties,
+            })
+        combined = replace(combined, controls=controls)
+        for issue in check_numeric_column_editors(with_control_base_types(combined, defaults), numeric_columns):
+            if issue not in result.issues:
+                result.issues.append(issue)
+        result.checked.append('supplied numeric column bindings including explicit code-behind assignments')
+        result.not_checked.append('runtime paths, dynamic column recreation and unsupplied numeric data types')
+    result.metadata['review_status'] = 'needs_review' if any(i.severity != 'info' for i in result.issues) else 'static_checks_only'
+    result.metadata['project_style_verified'] = False
+    result.issues = locate_issues(candidate_model, result.issues, 'csharp')
+    return result
+
+
+def verify_csharp_edit_contract(original_source: str, candidate_source: str, *, evidence=None, designer_source=None) -> HarnessResult:
+    evidence = evidence or {}
+    allowed = {"removed_methods": evidence.get("allowed_removed_helpers", []),
+               "new_calls": evidence.get("allowed_new_calls", []),
+               "whole_table_columns": evidence.get("allowed_whole_table_row_rewrite_columns", [])}
+    result = check_csharp(candidate_source, original=original_source, designer=designer_source, allowed_changes=allowed)
+    return HarnessResult(success=result.success, stdout=result.to_json(), exit_code=result.exit_code, metadata=result.to_dict())

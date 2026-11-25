@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code review"
+  short_description: "Review real changes and verify the intended behavior"
+  default_prompt: "Use $code-review to help with this task."

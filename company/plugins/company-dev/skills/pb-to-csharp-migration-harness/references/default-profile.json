@@ -1,0 +1,6 @@
+{
+  "name": "company-pb-source-contracts",
+  "version": 1,
+  "scope": { "activation": "actual supplied PB source and requested target" },
+  "defaults": { "style": "selected personal style; otherwise approved project examples", "behavior": "actual supplied source" }
+}

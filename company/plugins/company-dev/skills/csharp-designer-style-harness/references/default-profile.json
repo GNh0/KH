@@ -1,0 +1,6 @@
+{
+  "name": "company-csharp-source-contracts",
+  "version": 1,
+  "scope": { "activation": "actual target project and current request" },
+  "defaults": { "style": "selected personal style; otherwise approved project examples", "apis": "actual target source" }
+}

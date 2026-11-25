@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work execution"
+  short_description: "Execute approved work with clear scope and progress"
+  default_prompt: "Use $work-execution to help with this task."
